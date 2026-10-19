@@ -54,7 +54,7 @@ EXPECTED_NAME = "ansible"
 
 
 def runner_hostname(site: str) -> str:
-    """Canonical LXC hostname is ansible-<owner_slug>, not ansimble-<site_id>.
+    """Canonical LXC hostname is ansible-<owner_slug>, independent of site_id.
 
     Owner slug comes from the validated <owner>-<type> site ID. The private
     Fleet metadata is independently verified before any guest creation.
@@ -804,7 +804,7 @@ def seed_semaphore(site, project_title):
 
 def creation_confirmed(answer: str, site: str) -> bool:
     """Only the exact reserved CTID or canonical runner name authorizes creation."""
-    return answer in {f"CREATE CT{CTID}", f"CREATE CT{CTID} ansimble-{site}"}
+    return answer in {f"CREATE CT{CTID}", f"CREATE CT{CTID} {runner_hostname(site)}"}
 
 
 def apply(args, template):
@@ -836,7 +836,7 @@ def apply(args, template):
         verify_site_escrow(checkout, args.site)
         # Ask only AFTER all acquisition/authentication, right before the first guest change.
         if args.resume_semaphore:
-            print(f"PLAN: finish verified running Semaphore in CT{CTID} ansimble-{args.site} at {args.runner_cidr}", flush=True)
+            print(f"PLAN: finish verified running Semaphore in CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
             confirm = input(f"Type COMPLETE SEMAPHORE CT{CTID} to continue: ")
             if confirm != f"COMPLETE SEMAPHORE CT{CTID}":
                 raise Blocked("Operator cancelled; existing guest unchanged")
@@ -846,17 +846,17 @@ def apply(args, template):
             if confirm != f"RESUME FRESH CT{CTID}":
                 raise Blocked("Fresh runner resume cancelled; guest unchanged")
         elif args.resume_ansible:
-            print(f"PLAN: continue existing Ansible-only CT{CTID} ansimble-{args.site} at {args.runner_cidr}", flush=True)
+            print(f"PLAN: continue existing Ansible-only CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
             confirm = input(f"Type RESUME ANSIBLE CT{CTID} to continue: ")
             if confirm != f"RESUME ANSIBLE CT{CTID}":
                 raise Blocked("Operator cancelled; existing guest unchanged")
         elif args.resume:
-            print(f"PLAN: resume verified existing CT{CTID} ansimble-{args.site} at {args.runner_cidr}", flush=True)
+            print(f"PLAN: resume verified existing CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
             confirm = input(f"Type RESUME CT{CTID} to continue: ")
             if confirm != f"RESUME CT{CTID}":
                 raise Blocked("Operator cancelled; existing guest unchanged")
         else:
-            print(f"PLAN: create CT{CTID} ansimble-{args.site} at {args.runner_cidr}", flush=True)
+            print(f"PLAN: create CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
             confirm = input(f"Type CREATE CT{CTID} to continue: ")
             if not creation_confirmed(confirm, args.site):
                 raise Blocked("Operator cancelled; no guest created")
