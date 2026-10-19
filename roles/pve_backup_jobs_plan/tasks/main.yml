@@ -1,0 +1,80 @@
+---
+- name: Initialize declarative PVE backup jobs plan
+  ansible.builtin.set_fact:
+    pve_backup_jobs_plan: []
+  changed_when: false
+
+- name: Compute bounded PVE backup job changes
+  ansible.builtin.set_fact:
+    pve_backup_jobs_plan: >-
+      {{ pve_backup_jobs_plan + [{
+        'id': item.id,
+        'action': (
+          'BLOCK' if (matches | length > 1 or
+                     (matches | length == 1 and
+                      not observed.get('comment', '').startswith('Managed by Ansimble-2:')))
+          else 'CREATE' if matches | length == 0
+          else 'NOOP' if current == desired else 'UPDATE'
+        ),
+        'desired': desired,
+        'changed_fields': (changed_fields | trim | from_yaml),
+        'current': current if (matches | length == 1) else {}
+      }] }}
+  vars:
+    matches: "{{ pve_backup_jobs_observed | selectattr('id', 'equalto', item.id) | list }}"
+    observed: "{{ matches[0] if matches | length == 1 else {} }}"
+    desired:
+      id: "{{ item.id }}"
+      all: 0
+      node: "{{ item.node }}"
+      storage: "{{ item.storage }}"
+      vmid: "{{ item.vmids | map('int') | sort | join(',') }}"
+      schedule: "{{ item.schedule }}"
+      mode: "{{ item.mode }}"
+      compress: "{{ item.compress }}"
+      prune-backups: "{{ item.prune_backups }}"
+      enabled: "{{ 1 if item.enabled else 0 }}"
+      comment: "{{ item.comment }}"
+    current:
+      id: "{{ observed.get('id', '') }}"
+      all: "{{ observed.get('all', 0) | int }}"
+      node: "{{ observed.get('node', '') }}"
+      storage: "{{ observed.get('storage', '') }}"
+      vmid: "{{ observed.get('vmid', '').split(',') | reject('equalto', '') | map('int') | sort | join(',') }}"
+      schedule: "{{ observed.get('schedule', '') }}"
+      mode: "{{ observed.get('mode', 'snapshot') }}"
+      compress: "{{ observed.get('compress', '0') }}"
+      prune-backups: >-
+        {{
+          (observed.get('prune-backups') | dictsort | map('join', '=') | join(','))
+          if observed.get('prune-backups') is mapping
+          else observed.get('prune-backups', 'keep-all=1')
+        }}
+      enabled: "{{ observed.get('enabled', 1) | int }}"
+      comment: "{{ observed.get('comment', '') }}"
+    changed_fields: >-
+      {% set ns = namespace(fields=[]) %}
+      {% for key in desired %}
+      {% if (matches | length == 0) or (desired[key] != current[key]) %}
+      {% set ns.fields = ns.fields + [key] %}
+      {% endif %}
+      {% endfor %}
+      {{ ns.fields }}
+  loop: "{{ pve.backup_jobs }}"
+  loop_control:
+    label: "{{ item.id }}"
+  changed_when: false
+
+- name: Refuse to overwrite unmanaged or ambiguous jobs
+  ansible.builtin.assert:
+    that:
+      - "'BLOCK' not in (pve_backup_jobs_plan | map(attribute='action') | list)"
+    fail_msg: "A configured backup job ID belongs to another owner or is ambiguous. No writes allowed."
+
+- name: Report sanitized backup job plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      revision: "{{ lookup('pipe', 'git rev-parse HEAD') }}"
+      entries: "{{ pve_backup_jobs_plan }}"
+      result: PASS

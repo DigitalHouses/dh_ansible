@@ -1,0 +1,92 @@
+---
+- name: Validate TrueNAS Cloud Sync audit contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas.auth.username | length > 0
+      - site_secrets.truenas.audit_api_key is defined
+      - site_secrets.truenas.audit_api_key | length > 0
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+      - truenas_provision.cloud_backup is mapping
+      - truenas_provision.cloud_backup.credential is mapping
+      - truenas_provision.cloud_backup.tasks is sequence
+    fail_msg: "TrueNAS Cloud Sync audit prerequisites are incomplete."
+  no_log: true
+
+- name: Initialize TrueNAS Cloud Sync directory probes
+  ansible.builtin.set_fact:
+    truenas_cloudsync_directory_probe_requests: []
+  changed_when: false
+
+- name: Build TrueNAS Cloud Sync directory probes
+  ansible.builtin.set_fact:
+    truenas_cloudsync_directory_probe_requests: >-
+      {{
+        truenas_cloudsync_directory_probe_requests
+        + [
+            {
+              'label': item.description ~ ':root-empty',
+              'credential_name': truenas_provision.cloud_backup.credential.name,
+              'bucket': item.bucket,
+              'folder': ''
+            },
+            {
+              'label': item.description ~ ':target-declared',
+              'credential_name': truenas_provision.cloud_backup.credential.name,
+              'bucket': item.bucket,
+              'folder': item.folder
+            },
+            {
+              'label': item.description ~ ':target-relative',
+              'credential_name': truenas_provision.cloud_backup.credential.name,
+              'bucket': item.bucket,
+              'folder': item.folder | regex_replace('^/+', '')
+            }
+          ]
+      }}
+  loop: "{{ truenas_provision.cloud_backup.tasks }}"
+  loop_control:
+    label: "{{ item.description }}"
+  changed_when: false
+
+- name: Observe sanitized TrueNAS Cloud Sync state
+  truenas_cloudsync_observe:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ site_secrets.truenas.audit_api_key }}"
+  register: truenas_cloudsync_observe_result
+  changed_when: false
+
+- name: Probe sanitized TrueNAS Cloud Sync remote directories with privileged read calls
+  truenas_cloudsync_observe:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    directory_probes: "{{ truenas_cloudsync_directory_probe_requests }}"
+  register: truenas_cloudsync_remote_probe_result
+  changed_when: false
+  no_log: true
+
+- name: Publish sanitized TrueNAS Cloud Sync observations
+  ansible.builtin.set_fact:
+    truenas_cloudsync_credentials: "{{ truenas_cloudsync_observe_result.credentials }}"
+    truenas_cloudsync_tasks: "{{ truenas_cloudsync_observe_result.tasks }}"
+    truenas_cloudsync_directory_probes: "{{ truenas_cloudsync_remote_probe_result.directory_probes }}"
+  changed_when: false
+
+- name: Report sanitized TrueNAS Cloud Sync audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_cloudsync_observe_result.result }}"
+      credentials: "{{ truenas_cloudsync_credentials }}"
+      tasks: "{{ truenas_cloudsync_tasks }}"
+      directory_probes: "{{ truenas_cloudsync_directory_probes }}"

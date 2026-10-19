@@ -1,0 +1,152 @@
+---
+- name: Validate PVE host-write recovery contract
+  ansible.builtin.assert:
+    that:
+      - pve_access is mapping
+      - pve_access.host is mapping
+      - pve_host_audit is mapping
+      - pve_host_audit.server_host_key_fingerprint is defined
+      - site_secrets is mapping
+      - site_secrets.pve is mapping
+      - site_secrets.pve.host_write_ssh_private_key is defined
+      - site_secrets.pve.host_write_ssh_private_key | length > 0
+    fail_msg: >-
+      PVE host-write transport cannot be restored from Git + Fleet Vault.
+
+- name: Ensure local SSH directory exists
+  ansible.builtin.file:
+    path: "{{ pve_access.host.identity_file | dirname }}"
+    state: directory
+    mode: "0700"
+
+- name: Materialize PVE host-write private key from Fleet Vault
+  ansible.builtin.copy:
+    dest: "{{ pve_access.host.identity_file }}"
+    content: "{{ site_secrets.pve.host_write_ssh_private_key | trim }}\n"
+    mode: "0600"
+  no_log: true
+
+- name: Read PVE host-write client key fingerprint
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -lf
+      - "{{ pve_access.host.identity_file }}"
+  register: pve_host_write_client_fingerprint
+  changed_when: false
+  no_log: true
+
+- name: Assert PVE host-write client key fingerprint
+  ansible.builtin.assert:
+    that:
+      - pve_access.host.client_key_fingerprint in pve_host_write_client_fingerprint.stdout
+    fail_msg: >-
+      Materialized PVE host-write private key fingerprint does not match
+      inventory.
+  no_log: true
+
+- name: Derive PVE host-write public key
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -y
+      - -f
+      - "{{ pve_access.host.identity_file }}"
+  register: pve_host_write_public_key
+  changed_when: false
+  no_log: true
+
+- name: Materialize PVE host-write public key
+  ansible.builtin.copy:
+    dest: "{{ pve_access.host.public_key_file }}"
+    content: "{{ pve_host_write_public_key.stdout | trim }}\n"
+    mode: "0644"
+  no_log: true
+
+- name: Read current PVE SSH ED25519 host key
+  ansible.builtin.command:
+    argv:
+      - ssh-keyscan
+      - -T
+      - "5"
+      - -p
+      - "{{ pve_host_audit.port | string }}"
+      - -t
+      - ed25519
+      - "{{ pve_host_audit.host }}"
+  register: pve_host_write_keyscan
+  changed_when: false
+
+- name: Require one scanned PVE SSH host key
+  ansible.builtin.assert:
+    that:
+      - pve_host_write_keyscan.rc == 0
+      - pve_host_write_keyscan.stdout | trim | length > 0
+    fail_msg: "Unable to read PVE SSH ED25519 host key."
+
+- name: Stage scanned PVE SSH host key
+  ansible.builtin.copy:
+    dest: "{{ pve_access.host.known_hosts_file }}.candidate"
+    content: "{{ pve_host_write_keyscan.stdout | trim }}\n"
+    mode: "0600"
+  changed_when: false
+
+- name: Read scanned PVE SSH host key fingerprint
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -lf
+      - "{{ pve_access.host.known_hosts_file }}.candidate"
+  register: pve_host_write_server_fingerprint
+  changed_when: false
+
+- name: Assert pinned PVE SSH host identity
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit.server_host_key_fingerprint in pve_host_write_server_fingerprint.stdout
+    fail_msg: >-
+      PVE SSH host fingerprint mismatch. Scanned key was not trusted.
+
+- name: Install verified PVE SSH known_hosts entry
+  ansible.builtin.copy:
+    dest: "{{ pve_access.host.known_hosts_file }}"
+    content: "{{ pve_host_write_keyscan.stdout | trim }}\n"
+    mode: "0600"
+
+- name: Remove staged PVE SSH host key
+  ansible.builtin.file:
+    path: "{{ pve_access.host.known_hosts_file }}.candidate"
+    state: absent
+  changed_when: false
+
+- name: Verify recovered PVE host-write SSH transport
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -T
+      - -o
+      - BatchMode=yes
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - "UserKnownHostsFile={{ pve_access.host.known_hosts_file }}"
+      - -o
+      - ConnectTimeout=5
+      - -i
+      - "{{ pve_access.host.identity_file }}"
+      - "{{ pve_access.host.user }}@{{ pve.host }}"
+      - sudo
+      - -n
+      - /usr/bin/id
+      - -u
+  register: pve_host_write_transport_verify
+  changed_when: false
+
+- name: Assert recovered PVE host-write sudo transport
+  ansible.builtin.assert:
+    that:
+      - pve_host_write_transport_verify.stdout | trim == "0"
+    fail_msg: >-
+      PVE host-write SSH transport or passwordless sudo verification failed.

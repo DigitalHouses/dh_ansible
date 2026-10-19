@@ -1,0 +1,28 @@
+---
+- name: Validate fleet-wide human administrator runtime secret contract
+  ansible.builtin.assert:
+    that:
+      - site_secrets is mapping
+      - site_secrets.truenas is mapping
+      - site_secrets.truenas.human_admin_password is defined
+      - site_secrets.truenas.human_admin_password | length >= 8
+    fail_msg: >-
+      Fleet-wide TrueNAS human administrator password is not available
+      in the selected site secret source.
+  no_log: true
+
+- name: Select effective human administrator password
+  ansible.builtin.set_fact:
+    truenas_human_admin_password_effective: >-
+      {{ site_secrets.truenas.human_admin_password }}
+  no_log: true
+  changed_when: false
+
+- name: Report human administrator secret source
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      changed: false
+      provider: fleet_shared_via_site_secret
+      secret_values_reported: false

@@ -1,0 +1,272 @@
+---
+# One-shot isolated restore drill. Never starts the restored CT and never
+# deletes guests, backup volumes, or source data.
+- name: Validate a PVE backup by isolated LXC restore
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Register existing pinned host write transport
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: pve_backup_jobs_audit
+    - role: pve_backup_jobs_plan
+
+  tasks:
+    - name: Select exactly one accepted single-guest source job
+      ansible.builtin.set_fact:
+        pve_restore_source_jobs: >-
+          {{ pve_backup_jobs_plan
+             | selectattr('id', 'equalto', pve.backup_acceptance.job_id)
+             | list }}
+      changed_when: false
+
+    - name: Enforce isolated restore boundaries before any write
+      ansible.builtin.assert:
+        that:
+          - pve_restore_source_jobs | length == 1
+          - pve_restore_source_jobs[0].action == 'NOOP'
+          - pve.backup_jobs | length == 1
+          - pve.backup_jobs[0].vmids | length == 1
+          - pve.backup_acceptance.restore_ctid | int >= 100
+          - pve.backup_acceptance.restore_ctid | int != pve.backup_jobs[0].vmids[0] | int
+          - >-
+            (pve_backup_jobs_guests.json.data
+             | selectattr('vmid', 'equalto', pve.backup_acceptance.restore_ctid | int)
+             | list | length) == 0
+          - pve.backup_acceptance.restore_storage | length > 0
+          - pve.backup_acceptance.restore_storage != pve.backup_storage.id
+        fail_msg: "Restore target exists, source is not accepted, or isolated scope is invalid."
+
+    - name: Confirm destination storage is active and local
+      ansible.builtin.assert:
+        that:
+          - pve_restore_target_storages | length == 1
+          - pve_restore_target_storages[0].type == 'lvmthin'
+          - pve_restore_target_storages[0].active | int == 1
+          - pve_restore_target_storages[0].enabled | int == 1
+          - pve_restore_target_storages[0].avail | int > 20000000000
+        fail_msg: "Isolated restore target must be local active LVM-thin with at least 20 GB available."
+      vars:
+        pve_restore_target_storages: >-
+          {{ pve_backup_jobs_node_storages.json.data
+             | selectattr('storage', 'equalto', pve.backup_acceptance.restore_storage)
+             | list }}
+
+    - name: Read native backup volumes using the existing pinned host API transport
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ pve.node }}/storage/{{ pve.backup_storage.id }}/content"
+          - --content
+          - backup
+          - --output-format
+          - json
+      delegate_to: pve_write_host
+      become: true
+      register: pve_restore_archive_inventory
+      changed_when: false
+      no_log: true
+
+    - name: Select only the source CT archive
+      ansible.builtin.set_fact:
+        pve_restore_candidate_archives: >-
+          {{ (pve_restore_archive_inventory.stdout | from_json)
+             | selectattr('vmid', 'equalto', pve.backup_jobs[0].vmids[0] | int)
+             | selectattr('format', 'equalto', 'tar.zst')
+             | list }}
+      changed_when: false
+
+    - name: Require exactly one available verified source archive
+      ansible.builtin.assert:
+        that:
+          - pve_restore_candidate_archives | length == 1
+          - pve_restore_candidate_archives[0].content == 'backup'
+          - pve_restore_candidate_archives[0].size | int > 0
+          - >-
+            pve_restore_candidate_archives[0].volid is match(
+            '^' ~ (pve.backup_storage.id | regex_escape) ~
+            ':backup/vzdump-lxc-' ~ (pve.backup_jobs[0].vmids[0] | string) ~
+            '-[0-9_:-]+\\.tar\\.zst$')
+        fail_msg: "The source archive is absent or ambiguous; no restore attempted."
+
+    - name: Record start of the one-shot restore request
+      ansible.builtin.set_fact:
+        pve_restore_started_epoch: "{{ now(utc=True).timestamp() | int }}"
+      changed_when: false
+
+    - name: Restore into the never-before-existing isolated test CT
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - create
+          - "/nodes/{{ pve.node }}/lxc"
+          - --vmid
+          - "{{ pve.backup_acceptance.restore_ctid | string }}"
+          - --ostemplate
+          - "{{ pve_restore_candidate_archives[0].volid }}"
+          - --restore
+          - "1"
+          - --force
+          - "0"
+          - --storage
+          - "{{ pve.backup_acceptance.restore_storage }}"
+          - --start
+          - "0"
+          - --onboot
+          - "0"
+          - --protection
+          - "1"
+          - --unique
+          - "1"
+          - --net0
+          - "name=eth0,bridge=vmbr0,link_down=1,ip=manual,type=veth"
+          - --hostname
+          - "dh-restore-{{ pve.backup_jobs[0].vmids[0] }}"
+          - --description
+          - "Managed by Ansimble-2: isolated restore verification of CT{{ pve.backup_jobs[0].vmids[0] }}"
+      delegate_to: pve_write_host
+      become: true
+      register: pve_restore_create_task
+      changed_when: true
+      no_log: true
+
+    - name: Independently list native Proxmox task results
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ pve.node }}/tasks"
+          - --limit
+          - "30"
+          - --output-format
+          - json
+      delegate_to: pve_write_host
+      become: true
+      register: pve_restore_tasks
+      changed_when: false
+      until: >-
+        (
+          (pve_restore_tasks.stdout | from_json)
+          | selectattr('type', 'equalto', 'vzrestore')
+          | selectattr('id', 'equalto', pve.backup_acceptance.restore_ctid | string)
+          | selectattr('starttime', 'ge', pve_restore_started_epoch | int)
+          | selectattr('status', 'equalto', 'OK')
+          | list | length
+        ) == 1
+      retries: 30
+      delay: 3
+      no_log: true
+
+    - name: Capture the exact independently observed restore task
+      ansible.builtin.set_fact:
+        pve_restore_task_matches: >-
+          {{ (pve_restore_tasks.stdout | from_json)
+             | selectattr('type', 'equalto', 'vzrestore')
+             | selectattr('id', 'equalto', pve.backup_acceptance.restore_ctid | string)
+             | selectattr('starttime', 'ge', pve_restore_started_epoch | int)
+             | selectattr('status', 'equalto', 'OK')
+             | list }}
+      changed_when: false
+
+    - name: Require the single observed restore to complete successfully
+      ansible.builtin.assert:
+        that:
+          - pve_restore_task_matches | length == 1
+        fail_msg: "Native restore task is UNKNOWN or failed; no retry is permitted."
+
+    - name: Reconcile restored container offline network isolation
+      ansible.builtin.include_role:
+        name: pve_backup_restore_isolation
+
+    - name: Read independently restored CT configuration
+      ansible.builtin.uri:
+        url: >-
+          https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+          }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/config
+        method: GET
+        headers:
+          Authorization: >-
+            PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+            site_secrets.pve.audit_token_secret }}
+        validate_certs: false
+        return_content: true
+        status_code: 200
+      register: pve_restore_config
+      changed_when: false
+      no_log: true
+
+    - name: Read isolated CT execution state
+      ansible.builtin.uri:
+        url: >-
+          https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+          }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/status/current
+        method: GET
+        headers:
+          Authorization: >-
+            PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+            site_secrets.pve.audit_token_secret }}
+        validate_certs: false
+        return_content: true
+        status_code: 200
+      register: pve_restore_status
+      changed_when: false
+      no_log: true
+
+    - name: Require isolated, stopped and offline restored container
+      ansible.builtin.assert:
+        that:
+          - pve_restore_status.json.data.status == 'stopped'
+          - pve_restore_config.json.data.onboot | default(0) | int == 0
+          - pve_restore_config.json.data.protection | default(0) | int == 1
+          - "'link_down=1' in pve_restore_config.json.data.net0"
+          - "'ip=manual' in pve_restore_config.json.data.net0"
+          - "(site_runner.network.ipv4.split('/')[0]) not in pve_restore_config.json.data.net0"
+          - >-
+            pve_restore_config.json.data.rootfs.startswith(
+            pve.backup_acceptance.restore_storage ~ ':')
+          - >-
+            pve_restore_config.json.data.hostname ==
+            'dh-restore-' ~ (pve.backup_jobs[0].vmids[0] | string)
+        fail_msg: "Isolated restored CT does not meet the mandatory offline safety contract."
+
+    - name: Report isolated restore acceptance without starting the guest
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          source_ctid: "{{ pve.backup_jobs[0].vmids[0] }}"
+          restored_ctid: "{{ pve.backup_acceptance.restore_ctid }}"
+          archive: "{{ pve_restore_candidate_archives[0].volid }}"
+          restore_task: "{{ pve_restore_task_matches[0].status }}"
+          guest_state: stopped
+          onboot: false
+          network: link_down
+          result: PASS

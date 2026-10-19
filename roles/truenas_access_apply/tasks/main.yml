@@ -1,0 +1,39 @@
+---
+- name: Validate TrueNAS access apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas_access_plan_result is defined
+      - truenas_access_plan_result.result == "PASS"
+      - truenas_access_plan_result.issues | length == 0
+      - truenas.auth.write_username is defined
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas is mapping
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+    fail_msg: >-
+      TrueNAS access apply prerequisites are incomplete. No ACL/share/service
+      writes are authorized until the immediate read-only plan is PASS and
+      the site-scoped write API key is available.
+  no_log: true
+
+- name: Reconcile TrueNAS ACL SMB NFS and service state
+  truenas_access_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    desired_access: "{{ truenas_provision.access }}"
+    plan: "{{ truenas_access_plan_result }}"
+  register: truenas_access_apply_result
+
+- name: Report TrueNAS access apply result
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_access_apply_result.result }}"
+      changed: "{{ truenas_access_apply_result.changed }}"
+      operations: "{{ truenas_access_apply_result.operations }}"

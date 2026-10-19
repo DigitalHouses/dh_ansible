@@ -1,0 +1,385 @@
+---
+# Explicit, non-idempotent disaster-recovery acceptance drill.
+# Never invoke from a routine reconciliation playbook.
+- name: Accept TrueNAS runtime persistence and PVE NFS identity mapping
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+    - name: Register pinned PVE host transport
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: truenas_runtime_audit
+    - role: truenas_runtime_plan
+    - role: pve_backup_storage_audit
+    - role: pve_backup_storage_plan
+
+  tasks:
+    - name: Derive expected NFS mapping from declared export and identities
+      ansible.builtin.set_fact:
+        acceptance_nfs_relative_path: >-
+          {{
+            pve.backup_storage.export
+            | regex_replace('^/mnt/' ~ truenas_provision.storage.pool.name ~ '/', '')
+          }}
+      changed_when: false
+
+    - name: Find exact managed PVE NFS export
+      ansible.builtin.set_fact:
+        acceptance_nfs_matches: >-
+          {{
+            truenas_provision.access.nfs.exports
+            | selectattr('relative_path', 'equalto', acceptance_nfs_relative_path)
+            | list
+          }}
+      changed_when: false
+
+    - name: Require preflight NOOP and exact single-host NFS ownership
+      ansible.builtin.assert:
+        that:
+          - truenas_runtime_plan.result == 'PASS'
+          - truenas_runtime_plan.memory_action == 'NOOP'
+          - truenas_runtime_plan.tmpfs_action == 'NOOP'
+          - truenas_runtime_plan.init_policy_action == 'NOOP'
+          - pve_backup_storage_plan.action == 'NOOP'
+          - pve_backup_storage_observed.runtime.active | int == 1
+          - acceptance_nfs_matches | length == 1
+          - acceptance_nfs_matches[0].hosts == [pve.host]
+          - acceptance_nfs_matches[0].networks | length == 0
+          - not (acceptance_nfs_matches[0].read_only | bool)
+        fail_msg: "Recovery acceptance preflight failed. No reboot or NFS writes attempted."
+
+    - name: Select exact expected mapall UID and GID
+      ansible.builtin.set_fact:
+        acceptance_nfs_uid_matches: >-
+          {{
+            truenas_provision.identity.users
+            | selectattr('username', 'equalto', acceptance_nfs_matches[0].mapall_user)
+            | list
+          }}
+        acceptance_nfs_gid_matches: >-
+          {{
+            truenas_provision.identity.groups
+            | selectattr('name', 'equalto', acceptance_nfs_matches[0].mapall_group)
+            | list
+          }}
+      changed_when: false
+
+    - name: Require unique declared service identity
+      ansible.builtin.assert:
+        that:
+          - acceptance_nfs_uid_matches | length == 1
+          - acceptance_nfs_gid_matches | length == 1
+          - acceptance_nfs_uid_matches[0].uid | int > 0
+          - acceptance_nfs_gid_matches[0].gid | int > 0
+
+    - name: Read initial TrueNAS boot identifier from QEMU guest agent
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ truenas_provision.vm.vmid | string }}"
+          - --
+          - /bin/cat
+          - /proc/sys/kernel/random/boot_id
+      delegate_to: pve_write_host
+      become: true
+      register: acceptance_boot_before_raw
+      changed_when: false
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Decode initial boot identifier
+      ansible.builtin.set_fact:
+        acceptance_boot_before: >-
+          {{ (acceptance_boot_before_raw.stdout | from_json)['out-data'] | trim }}
+      changed_when: false
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Require valid boot identity
+      ansible.builtin.assert:
+        that:
+          - acceptance_boot_before is match('^[a-f0-9-]{36}$')
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Gracefully shut down TrueNAS for PREINIT persistence drill
+      ansible.builtin.command:
+        argv:
+          - qm
+          - shutdown
+          - "{{ truenas_provision.vm.vmid | string }}"
+          - --timeout
+          - "120"
+      delegate_to: pve_write_host
+      become: true
+      changed_when: true
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Wait for guest shutdown to finish without forced stop
+      ansible.builtin.command:
+        argv:
+          - qm
+          - status
+          - "{{ truenas_provision.vm.vmid | string }}"
+      delegate_to: pve_write_host
+      become: true
+      register: acceptance_stop
+      changed_when: false
+      retries: 40
+      delay: 3
+      until: "'status: stopped' in acceptance_stop.stdout"
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Start existing TrueNAS VM without modifying its configuration or disks
+      ansible.builtin.command:
+        argv:
+          - qm
+          - start
+          - "{{ truenas_provision.vm.vmid | string }}"
+      delegate_to: pve_write_host
+      become: true
+      changed_when: true
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Wait for TrueNAS HTTPS listener
+      ansible.builtin.wait_for:
+        host: "{{ truenas.host }}"
+        port: "{{ truenas.port }}"
+        state: started
+        timeout: 600
+        delay: 3
+        sleep: 5
+
+    - name: Wait for TrueNAS QEMU guest agent
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - cmd
+          - "{{ truenas_provision.vm.vmid | string }}"
+          - ping
+      delegate_to: pve_write_host
+      become: true
+      changed_when: false
+      register: acceptance_qga
+      retries: 60
+      delay: 5
+      until: acceptance_qga.rc == 0
+
+    - name: Wait for TrueNAS API authentication and catalog readiness
+      truenas_initshutdown_reconcile:
+        host: "{{ truenas.host }}"
+        port: "{{ truenas.port }}"
+        endpoint: "{{ truenas.endpoint }}"
+        tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+        username: "{{ truenas.auth.write_username }}"
+        api_key: "{{ site_secrets.truenas.write_api_key }}"
+        desired:
+          type: COMMAND
+          command: "mount -o remount,size={{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}M /run"
+          script: ""
+          when: PREINIT
+          enabled: true
+          timeout: 10
+          comment: "{{ truenas_provision.vm.runtime.run_tmpfs.init_comment }}"
+        apply: false
+        sync_catalog_if_needed: true
+      register: acceptance_catalog
+      no_log: true
+      retries: 30
+      delay: 10
+      until: >-
+        acceptance_catalog is succeeded
+        and acceptance_catalog.catalog_synced | default(false) | bool
+        and acceptance_catalog.action | default('') == 'NOOP'
+
+    - name: Read TrueNAS boot identifier after restart
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ truenas_provision.vm.vmid | string }}"
+          - --
+          - /bin/cat
+          - /proc/sys/kernel/random/boot_id
+      delegate_to: pve_write_host
+      become: true
+      register: acceptance_boot_after_raw
+      changed_when: false
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Confirm a real OS reboot occurred
+      ansible.builtin.assert:
+        that:
+          - (acceptance_boot_after_raw.stdout | from_json)['out-data'] | trim != acceptance_boot_before
+        fail_msg: "Guest boot ID did not change; PREINIT persistence cannot be accepted."
+      when: not (truenas_recovery_verify_only | default(false) | bool)
+
+    - name: Re-audit runtime after a distinct TrueNAS boot
+      ansible.builtin.include_role:
+        name: truenas_runtime_audit
+        allow_duplicates: true
+
+    - name: Re-plan runtime after reboot without changing anything
+      ansible.builtin.include_role:
+        name: truenas_runtime_plan
+        allow_duplicates: true
+
+    - name: Accept persisted PREINIT, memory and /run use
+      ansible.builtin.assert:
+        that:
+          - truenas_runtime_plan.result == 'PASS'
+          - truenas_runtime_plan.memory_action == 'NOOP'
+          - truenas_runtime_plan.tmpfs_action == 'NOOP'
+          - truenas_runtime_plan.init_policy_action == 'NOOP'
+          - truenas_runtime_observed.run_tmpfs.usage_percent | int < truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int
+          - acceptance_catalog.catalog_synced | bool
+        fail_msg: "TrueNAS runtime did not persist after the reboot."
+
+    - name: Wait for NFS storage to become active after TrueNAS reboot
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - status
+          - --storage
+          - "{{ pve.backup_storage.id }}"
+      delegate_to: pve_write_host
+      become: true
+      register: acceptance_storage_status
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: >-
+        acceptance_storage_status.rc == 0
+        and 'active' in acceptance_storage_status.stdout
+
+    - name: Verify exact PVE NFS mount source before writing a test file
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output
+          - SOURCE,FSTYPE
+          - --target
+          - "/mnt/pve/{{ pve.backup_storage.id }}"
+      delegate_to: pve_write_host
+      become: true
+      register: acceptance_nfs_mount
+      changed_when: false
+
+    - name: Report observed and declared NFS mount sources
+      ansible.builtin.debug:
+        msg:
+          observed_mount: "{{ acceptance_nfs_mount.stdout }}"
+          expected_source: "{{ pve.backup_storage.server ~ ':' ~ pve.backup_storage.export }}"
+          storage_plan_action: "{{ pve_backup_storage_plan.action }}"
+
+    - name: Require exact TrueNAS NFS export mount
+      ansible.builtin.assert:
+        that:
+          - acceptance_nfs_mount.stdout.split() | length == 2
+          - acceptance_nfs_mount.stdout.split()[0] == pve.backup_storage.server ~ ':' ~ pve.backup_storage.export
+          - acceptance_nfs_mount.stdout.split()[1] in ['nfs4', 'nfs']
+        fail_msg: "NFS mount does not match the managed TrueNAS export."
+
+    - name: Create and inspect a disposable NFS file (always remove it)
+      block:
+        - name: Create unique disposable file on the managed PVE NFS mount
+          ansible.builtin.tempfile:
+            state: file
+            path: "/mnt/pve/{{ pve.backup_storage.id }}"
+            prefix: ".ansimble-acceptance-"
+          delegate_to: pve_write_host
+          become: true
+          register: acceptance_nfs_tempfile
+
+        - name: Read server-side owner through TrueNAS guest agent
+          ansible.builtin.command:
+            argv:
+              - qm
+              - guest
+              - exec
+              - "{{ truenas_provision.vm.vmid | string }}"
+              - --
+              - /usr/bin/stat
+              - -c
+              - "%u:%g"
+              - "{{ pve.backup_storage.export }}/{{ acceptance_nfs_tempfile.path | basename }}"
+          delegate_to: pve_write_host
+          become: true
+          register: acceptance_nfs_owner_raw
+          changed_when: false
+
+        - name: Assert real NFS mapall ownership matches the inventory
+          ansible.builtin.assert:
+            that:
+              - (acceptance_nfs_owner_raw.stdout | from_json).exitcode | int == 0
+              - >-
+                (acceptance_nfs_owner_raw.stdout | from_json)['out-data'] | trim
+                ==
+                ((acceptance_nfs_uid_matches[0].uid | string)
+                ~ ':' ~ (acceptance_nfs_gid_matches[0].gid | string))
+            fail_msg: "NFS write returned unexpected server-side UID:GID."
+
+      always:
+        - name: Remove only this acceptance test file from PVE NFS
+          ansible.builtin.file:
+            path: "{{ acceptance_nfs_tempfile.path }}"
+            state: absent
+          delegate_to: pve_write_host
+          become: true
+          when:
+            - acceptance_nfs_tempfile is defined
+            - acceptance_nfs_tempfile.path is defined
+            - (acceptance_nfs_tempfile.path | dirname) == '/mnt/pve/' ~ pve.backup_storage.id
+            - (acceptance_nfs_tempfile.path | basename).startswith('.ansimble-acceptance-')
+
+    - name: Final acceptance summary
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          site: "{{ site.id }}"
+          persistence: PASS
+          boot_changed_in_this_run: "{{ not (truenas_recovery_verify_only | default(false) | bool) }}"
+          memory_mb: "{{ truenas_runtime_observed.memory_mb | int }}"
+          balloon_mb: "{{ truenas_runtime_observed.balloon_mb | int }}"
+          run_tmpfs_size_bytes: "{{ truenas_runtime_observed.run_tmpfs.size_bytes | int }}"
+          run_tmpfs_usage_percent: "{{ truenas_runtime_observed.run_tmpfs.usage_percent | int }}"
+          catalog_synced: "{{ acceptance_catalog.catalog_synced | bool }}"
+          nfs_mapping: PASS
+          nfs_uid: "{{ acceptance_nfs_uid_matches[0].uid | int }}"
+          nfs_gid: "{{ acceptance_nfs_gid_matches[0].gid | int }}"
+          test_file_cleanup: PASS
+          no_pool_or_disk_changes: true

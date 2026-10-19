@@ -1,0 +1,21 @@
+---
+- name: Audit PVE TrueNAS backup storage
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_backup_storage_audit

@@ -1,0 +1,131 @@
+---
+- name: Validate PVE lifecycle plan contract
+  ansible.builtin.assert:
+    that:
+      - pve_lifecycle is mapping
+      - pve_lifecycle.managed_guests is sequence
+      - pve_lifecycle.managed_guests | length > 0
+      - >-
+        (pve_lifecycle.managed_guests | map(attribute='vmid') | list | unique | length)
+        ==
+        (pve_lifecycle.managed_guests | length)
+      - pve_lifecycle_entries is defined
+      - pve_lifecycle_entries is sequence
+    fail_msg: "PVE lifecycle plan contract is incomplete or ambiguous."
+
+- name: Build observed PVE lifecycle map
+  ansible.builtin.set_fact:
+    pve_lifecycle_observed_by_vmid: >-
+      {{
+        (pve_lifecycle_observed_by_vmid | default({}))
+        | combine({(item.vmid | string): item})
+      }}
+  loop: "{{ pve_lifecycle_entries }}"
+  loop_control:
+    label: "{{ item.vmid }}"
+  changed_when: false
+  no_log: true
+
+- name: Initialize PVE lifecycle plan
+  ansible.builtin.set_fact:
+    pve_lifecycle_plan_entries: []
+  changed_when: false
+
+- name: Build PVE lifecycle plan
+  ansible.builtin.set_fact:
+    pve_lifecycle_plan_entries: >-
+      {{
+        pve_lifecycle_plan_entries
+        +
+        [
+          {
+            'vmid': item.vmid | int,
+            'type': item.type,
+            'name': item.name,
+            'action': (
+              'BLOCK'
+              if (
+                observed == {}
+                or observed.type != item.type
+                or observed.name != item.name
+                or (
+                  item.qemu_agent_required | default(false) | bool
+                  and 'enabled=1' not in (observed.qemu_agent | default(''))
+                )
+              )
+              else (
+                'UPDATE'
+                if (
+                  observed.onboot | int != item.onboot | int
+                  or observed.startup != item.startup
+                )
+                else 'NOOP'
+              )
+            ),
+            'changed_fields': (
+              (['onboot'] if (observed != {} and observed.onboot | int != item.onboot | int) else [])
+              +
+              (['startup'] if (observed != {} and observed.startup != item.startup) else [])
+            ),
+            'current': (
+              {
+                'onboot': observed.onboot,
+                'startup': observed.startup
+              }
+              if observed != {}
+              else {}
+            ),
+            'desired': {
+              'onboot': item.onboot | int,
+              'startup': item.startup
+            },
+            'identity_ok': (
+              observed != {}
+              and observed.type == item.type
+              and observed.name == item.name
+            ),
+            'qemu_agent_ok': (
+              not (item.qemu_agent_required | default(false) | bool)
+              or (
+                observed != {}
+                and 'enabled=1' in (observed.qemu_agent | default(''))
+              )
+            )
+          }
+        ]
+      }}
+  vars:
+    observed: "{{ pve_lifecycle_observed_by_vmid.get(item.vmid | string, {}) }}"
+  loop: "{{ pve_lifecycle.managed_guests }}"
+  loop_control:
+    label: "{{ item.vmid }}"
+  changed_when: false
+
+- name: Assert lifecycle plan has no identity or prerequisite blocks
+  ansible.builtin.assert:
+    that:
+      - pve_lifecycle_plan_entries | selectattr('action', 'equalto', 'BLOCK') | list | length == 0
+    fail_msg: >-
+      PVE lifecycle plan is BLOCKED by a missing guest, identity mismatch,
+      or unmet QEMU Agent prerequisite.
+
+- name: Report exact PVE lifecycle plan
+  ansible.builtin.debug:
+    msg:
+      write_ready: "{{ pve_lifecycle.write_ready | bool }}"
+      plan_entries: "{{ pve_lifecycle_plan_entries }}"
+      updates: >-
+        {{
+          pve_lifecycle_plan_entries
+          | selectattr('action', 'equalto', 'UPDATE')
+          | list
+          | length
+        }}
+      noops: >-
+        {{
+          pve_lifecycle_plan_entries
+          | selectattr('action', 'equalto', 'NOOP')
+          | list
+          | length
+        }}
+      result: PASS

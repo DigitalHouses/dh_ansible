@@ -1,0 +1,137 @@
+---
+- name: Validate site identity for fleet secrets
+  ansible.builtin.assert:
+    that:
+      - site is mapping
+      - site.id is defined
+      - site.id | length > 0
+    fail_msg: "site.id is required before loading fleet secrets."
+
+- name: Select fleet secret source
+  ansible.builtin.set_fact:
+    fleet_runtime_secret_mode: >-
+      {{
+        fleet_runtime_secrets_file_override is defined
+        and fleet_runtime_secrets_file_override | length > 0
+      }}
+  changed_when: false
+
+- name: Load site runtime secrets
+  ansible.builtin.include_vars:
+    file: "{{ fleet_runtime_secrets_file_override }}"
+    name: fleet_runtime_secret_payload
+  no_log: true
+  when: fleet_runtime_secret_mode | bool
+
+- name: Validate site runtime secret envelope
+  ansible.builtin.assert:
+    that:
+      - fleet_runtime_secret_payload.runtime_secrets is mapping
+      - fleet_runtime_secret_payload.runtime_secrets.schema_version | int == 1
+      - fleet_runtime_secret_payload.runtime_secrets.site_id == site.id
+      - fleet_runtime_secret_payload.runtime_secrets.site_secrets is mapping
+    fail_msg: >-
+      Site runtime secret envelope is invalid or belongs to another site.
+  no_log: true
+  when: fleet_runtime_secret_mode | bool
+
+- name: Select runtime site secret namespace
+  ansible.builtin.set_fact:
+    site_secrets: "{{ fleet_runtime_secret_payload.runtime_secrets.site_secrets }}"
+    fleet_shared_secrets: {}
+  no_log: true
+  changed_when: false
+  when: fleet_runtime_secret_mode | bool
+
+- name: Load encrypted fleet secrets
+  ansible.builtin.include_vars:
+    file: "{{ fleet_vault_file_override | mandatory }}"
+  no_log: true
+  when: not fleet_runtime_secret_mode | bool
+
+- name: Validate new site passport envelope
+  ansible.builtin.assert:
+    that:
+      - site_passport is mapping
+      - site_passport.schema_version | int == 1
+      - site_passport.site_id == site.id
+      - site_passport.site_secrets is mapping
+      - site_passport.shared is mapping
+    fail_msg: "Encrypted passport schema or site ID mismatch."
+  no_log: true
+  when:
+    - not fleet_runtime_secret_mode | bool
+    - site_passport is defined
+
+- name: Select secret namespaces from site passport
+  ansible.builtin.set_fact:
+    site_secrets: "{{ site_passport.site_secrets }}"
+    fleet_shared_secrets: "{{ site_passport.shared }}"
+  no_log: true
+  changed_when: false
+  when:
+    - not fleet_runtime_secret_mode | bool
+    - site_passport is defined
+
+- name: Build legacy flat PVE secret namespace
+  ansible.builtin.set_fact:
+    fleet_secrets_compat_namespace:
+      pve:
+        audit_token_secret: "{{ vault_pve_audit_token_secret | default('') }}"
+        write_token_secret: "{{ vault_pve_write_token_secret | default('') }}"
+        host_write_ssh_private_key: >-
+          {{ vault_pve_host_write_ssh_private_key | default('') }}
+  no_log: true
+  changed_when: false
+  when:
+    - not fleet_runtime_secret_mode | bool
+    - site_passport is not defined
+
+- name: Select legacy site and shared secret namespaces
+  ansible.builtin.set_fact:
+    site_secrets: >-
+      {{
+        fleet_secrets_compat_namespace
+        | combine(
+            (
+              (fleet_secrets | default({}))
+              .get('sites', {})
+              .get(site.id, {})
+            ),
+            recursive=True
+          )
+      }}
+    fleet_shared_secrets: >-
+      {{
+        (fleet_secrets | default({}))
+        .get('shared', {})
+      }}
+  no_log: true
+  changed_when: false
+  when:
+    - not fleet_runtime_secret_mode | bool
+    - site_passport is not defined
+
+- name: Validate current site PVE secret namespace
+  ansible.builtin.assert:
+    that:
+      - site_secrets is mapping
+      - site_secrets.pve is mapping
+      - site_secrets.pve.audit_token_secret | length > 0
+      - site_secrets.pve.write_token_secret | length > 0
+    fail_msg: >-
+      Selected secret source does not contain usable PVE audit/write
+      credentials for this site.
+  no_log: true
+
+- name: Report fleet secret source
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      secret_source: >-
+        {{
+          'site_runtime'
+          if fleet_runtime_secret_mode | bool
+          else 'fleet_vault'
+        }}
+      secret_values_reported: false

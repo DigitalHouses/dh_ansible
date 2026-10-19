@@ -1,0 +1,74 @@
+name: Semaphore installer release
+on:
+  workflow_dispatch:
+    inputs:
+      fleet_commit:
+        description: "Immutable 40-character SHA of PRIVATE Fleet Detail main"
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Block unsafe current source and all reachable Git history
+        run: |
+          python3 bin/public-boundary-check.py
+          python3 bin/public-boundary-check.py --history
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Verify launcher unit tests
+        run: |
+          python -m pip install 'pytest>=8,<10'
+          python -m pytest -q tests/test_semaphore_launcher.py tests/test_semaphore_host_install.py tests/test_semaphore_guest_install.py tests/test_semaphore_project.py tests/test_fleet_master_gate.py
+          bash -n bootstrap/semaphore-launch.sh
+      - name: Test real Semaphore 2.19.16 HTTPS and project API
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          WORK=$(mktemp -d)
+          PID=""
+          trap 'rc=$?; if [[ $rc != 0 ]]; then cat "$WORK/server.log" 2>/dev/null || true; fi; if [[ -n "$PID" ]]; then kill "$PID" 2>/dev/null || true; fi; rm -rf "$WORK"; exit "$rc"' EXIT
+          curl -fsSL --max-time 90 -o "$WORK/semaphore.deb" https://github.com/semaphoreui/semaphore/releases/download/v2.19.16/semaphore_2.19.16_linux_amd64.deb
+          printf '%s  %s\n' 56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8 "$WORK/semaphore.deb" | sha256sum -c -
+          sudo dpkg -i "$WORK/semaphore.deb"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -subj "/CN=semaphore-ci" -addext "subjectAltName=IP:127.0.0.1"
+          python3 - "$WORK" <<'PY'
+          import base64,json,os,sys,pathlib
+          p=pathlib.Path(sys.argv[1])
+          key=lambda:base64.b64encode(os.urandom(32)).decode()
+          config={"dialect":"sqlite","sqlite":{"host":str(p/"database.sqlite")},"port":":3000","interface":"127.0.0.1","web_host":"https://127.0.0.1:3000","tmp_path":str(p/"tasks"),"cookie_hash":key(),"cookie_encryption":key(),"access_key_encryption":key(),"tls":{"enabled":True,"cert_file":str(p/"tls.crt"),"key_file":str(p/"tls.key")}}
+          (p/"tasks").mkdir()
+          (p/"config.json").write_text(json.dumps(config))
+          (p/"admin-password").write_text("ci-temporary-password")
+          PY
+          semaphore migrate --config "$WORK/config.json"
+          semaphore users add --config "$WORK/config.json" --admin --login admin --email ci@localhost --name "CI Admin" --password ci-temporary-password
+          semaphore server --config "$WORK/config.json" > "$WORK/server.log" 2>&1 &
+          PID=$!
+          for i in $(seq 1 25); do
+            if curl --silent --fail --cacert "$WORK/tls.crt" https://127.0.0.1:3000/api/ping >/dev/null; then break; fi
+            sleep 1
+          done
+          export CI_SEMAPHORE_CERT="$WORK/tls.crt"
+          export CI_SEMAPHORE_PASSWORD_FILE="$WORK/admin-password"
+          python3 .ci/semaphore_api_live.py
+      - name: Package immutable launcher
+        run: |
+          mkdir -p dist
+          python3 bootstrap/build-semaphore-launcher.py --commit "$GITHUB_SHA" --fleet-commit "${{ inputs.fleet_commit }}" --output dist/dh-install.sh
+          sha256sum dist/dh-install.sh | tee dist/SHA256SUMS
+          bash -n dist/dh-install.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dh-semaphore-installer
+          path: |
+            dist/dh-install.sh
+            dist/SHA256SUMS
+          retention-days: 30
+          if-no-files-found: error

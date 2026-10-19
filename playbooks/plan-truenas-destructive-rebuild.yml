@@ -1,0 +1,19 @@
+---
+- import_playbook: plan-truenas-provision.yml
+  vars:
+    truenas_controlled_rebuild: true
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+- import_playbook: plan-truenas-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+- import_playbook: plan-truenas-cloudsync.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: plan-pve-backup-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true

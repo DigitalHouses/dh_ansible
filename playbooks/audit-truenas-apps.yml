@@ -1,0 +1,36 @@
+---
+# Read-only Apps audit via the already pinned PVE SSH transport and QEMU Agent.
+# Does not require the fleet Vault, and never writes to TrueNAS.
+- name: Audit site TrueNAS Apps
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps.yml"
+    - name: Register PVE host through existing pinned transport
+      ansible.builtin.add_host:
+        name: pve_apps_host
+        groups: pve_apps_targets
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+  roles:
+    - role: truenas_apps_audit

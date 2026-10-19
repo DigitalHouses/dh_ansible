@@ -1,0 +1,168 @@
+---
+- name: Validate declarative restore-quarantine scope
+  ansible.builtin.assert:
+    that:
+      - pve.backup_jobs | length == 1
+      - pve.backup_jobs[0].id == pve.backup_acceptance.job_id
+      - pve.backup_jobs[0].vmids | length == 1
+      - pve.backup_acceptance.restore_ctid | int != pve.backup_jobs[0].vmids[0] | int
+      - pve.backup_acceptance.restore_storage | length > 0
+    fail_msg: "Restore quarantine requires exactly one declared source and distinct restore CTID."
+
+- name: Read isolated restored LXC configuration
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/config
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+        site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_restore_quarantine_config_before
+  changed_when: false
+  no_log: true
+
+- name: Read isolated restored LXC runtime state
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/status/current
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+        site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_restore_quarantine_status_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse to touch guests without exact isolated restore ownership
+  ansible.builtin.assert:
+    that:
+      - pve_restore_quarantine_status_before.json.data.status == 'stopped'
+      - >-
+        (pve_restore_quarantine_config_before.json.data.description | default('') | trim)
+        == 'Managed by Ansimble-2: isolated restore verification of CT' ~
+        (pve.backup_jobs[0].vmids[0] | string)
+      - >-
+        pve_restore_quarantine_config_before.json.data.hostname
+        == 'dh-restore-' ~ (pve.backup_jobs[0].vmids[0] | string)
+      - >-
+        pve_restore_quarantine_config_before.json.data.rootfs.startswith(
+        pve.backup_acceptance.restore_storage ~ ':')
+      - pve_restore_quarantine_config_before.json.data.protection | default(0) | int == 1
+      - pve_restore_quarantine_config_before.json.data.onboot | default(0) | int == 0
+      - pve_restore_quarantine_config_before.json.data.unprivileged | default(0) | int == 1
+    fail_msg: "Restore target does not match exact authorized stopped/protected identity. BLOCK."
+
+- name: Plan isolated restore network reconciliation
+  ansible.builtin.set_fact:
+    pve_restore_quarantine_plan:
+      target: "{{ pve.backup_acceptance.restore_ctid }}"
+      network: "name=eth0,bridge=vmbr0,link_down=1,ip=manual,type=veth"
+      action: >-
+        {{
+          'NOOP'
+          if (
+            'link_down=1' in (pve_restore_quarantine_config_before.json.data.net0 | default(''))
+            and 'ip=manual' in (pve_restore_quarantine_config_before.json.data.net0 | default(''))
+            and 'gw=' not in (pve_restore_quarantine_config_before.json.data.net0 | default(''))
+            and (site_runner.network.ipv4.split('/')[0]) not in (pve_restore_quarantine_config_before.json.data.net0 | default(''))
+          )
+          else 'UPDATE'
+        }}
+  changed_when: false
+
+- name: Report bounded restore network plan
+  ansible.builtin.debug:
+    msg:
+      restore_ctid: "{{ pve_restore_quarantine_plan.target }}"
+      action: "{{ pve_restore_quarantine_plan.action }}"
+      desired_network: offline
+      guest_state: stopped
+      result: PASS
+
+- name: Quarantine only the declared stopped restore test guest
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - set
+      - "/nodes/{{ pve.node }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/config"
+      - --net0
+      - "{{ pve_restore_quarantine_plan.network }}"
+  delegate_to: pve_write_host
+  become: true
+  register: pve_restore_quarantine_write
+  when: pve_restore_quarantine_plan.action == 'UPDATE'
+  changed_when: true
+  no_log: true
+
+- name: Independently re-read isolated LXC configuration
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/config
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+        site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_restore_quarantine_config_after
+  changed_when: false
+  no_log: true
+
+- name: Independently verify restored LXC is still stopped
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/lxc/{{ pve.backup_acceptance.restore_ctid }}/status/current
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{
+        site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_restore_quarantine_status_after
+  changed_when: false
+  no_log: true
+
+- name: Require exact offline restore postconditions
+  ansible.builtin.assert:
+    that:
+      - pve_restore_quarantine_status_after.json.data.status == 'stopped'
+      - pve_restore_quarantine_config_after.json.data.onboot | default(0) | int == 0
+      - pve_restore_quarantine_config_after.json.data.protection | default(0) | int == 1
+      - "'link_down=1' in pve_restore_quarantine_config_after.json.data.net0"
+      - "'ip=manual' in pve_restore_quarantine_config_after.json.data.net0"
+      - "'gw=' not in pve_restore_quarantine_config_after.json.data.net0"
+      - >-
+        (pve.backup_jobs[0].vmids[0] | string) !=
+        (pve.backup_acceptance.restore_ctid | string)
+      - >-
+        pve_restore_quarantine_config_after.json.data.rootfs.startswith(
+        pve.backup_acceptance.restore_storage ~ ':')
+    fail_msg: "Restored test CT is not safely isolated. Do not start the CT."
+
+- name: Report accepted restore network isolation
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      restore_ctid: "{{ pve.backup_acceptance.restore_ctid }}"
+      network: offline
+      onboot: false
+      protection: true
+      guest_state: stopped
+      action: "{{ pve_restore_quarantine_plan.action }}"
+      result: PASS

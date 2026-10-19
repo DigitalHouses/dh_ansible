@@ -1,0 +1,86 @@
+---
+- name: Register temporary PVE bootstrap target
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  pre_tasks:
+    - name: Require bootstrap inputs
+      ansible.builtin.assert:
+        that:
+          - site_id is defined
+          - site_id | length > 0
+          - pve_bootstrap_private_key_file is defined
+          - pve_bootstrap_private_key_file | length > 0
+        fail_msg: "Pass site_id and the temporary PVE bootstrap private key path."
+
+    - name: Load site PVE bootstrap facts
+      ansible.builtin.include_vars:
+        file: "../inventories/{{ site_id }}/pve_host.yml"
+
+    - name: Check temporary bootstrap key and pinned PVE host key
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ pve_bootstrap_private_key_file }}"
+        - "{{ pve_host_audit.known_hosts_file }}"
+      register: pve_bootstrap_controller_files
+      changed_when: false
+
+    - name: Assert bootstrap controller files exist
+      ansible.builtin.assert:
+        that:
+          - pve_bootstrap_controller_files.results | map(attribute='stat.exists') | min
+        fail_msg: "Temporary bootstrap key or pinned known_hosts file is missing."
+
+    - name: Register PVE host for this bootstrap run
+      ansible.builtin.add_host:
+        name: pve_bootstrap_target
+        groups: pve_bootstrap_targets
+        ansible_host: "{{ pve_host_audit.host }}"
+        ansible_port: "{{ pve_host_audit.port }}"
+        ansible_user: "{{ pve_bootstrap_user | default('root') }}"
+        ansible_become: "{{ (pve_bootstrap_user | default('root')) != 'root' }}"
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: "{{ pve_bootstrap_private_key_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_host_audit.known_hosts_file }}
+          -o ConnectTimeout=5
+      changed_when: false
+
+- name: Apply standard PVE NUT baseline through temporary bootstrap transport
+  hosts: pve_bootstrap_targets
+  gather_facts: true
+  serial: 1
+
+  pre_tasks:
+    - name: Load site PVE identity facts
+      ansible.builtin.include_vars:
+        file: "../inventories/{{ site_id }}/pve_host.yml"
+
+    - name: Load site UPS variables
+      ansible.builtin.include_vars:
+        file: "../inventories/{{ site_id }}/ups.yml"
+
+    - name: Read PVE machine id
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/cat
+          - /etc/machine-id
+      register: pve_bootstrap_machine_id
+      changed_when: false
+
+    - name: Require exact PVE bootstrap identity
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['user_uid'] | int == 0
+          - ansible_host == pve_host_audit.host
+          - pve_bootstrap_machine_id.stdout | trim == pve_host_audit.expected.machine_id
+        fail_msg: "PVE bootstrap target identity mismatch; refusing host writes."
+
+  roles:
+    - pve_nut_baseline

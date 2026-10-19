@@ -1,0 +1,206 @@
+---
+- name: Require root inside the runner for package and systemd installation
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: remote_commander_uid
+  changed_when: false
+  check_mode: false
+
+- name: Validate local installation identity
+  ansible.builtin.assert:
+    that:
+      - remote_commander_uid.stdout == "0"
+      - remote_commander_package_version != "latest"
+      - remote_commander_service_name == "digitalhouses-remote-commander.service"
+    fail_msg: "Run this playbook as root inside the Ansimble LXC."
+
+- name: Read runner architecture
+  ansible.builtin.command:
+    argv: [uname, -m]
+  register: remote_commander_arch
+  changed_when: false
+  check_mode: false
+
+- name: Validate supported Node.js architecture
+  ansible.builtin.assert:
+    that:
+      - remote_commander_arch.stdout in remote_commander_node_checksums
+    fail_msg: "No pinned Node.js download for this architecture."
+
+- name: Check whether the managed Remote Commander service is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ remote_commander_service_name }}"]
+  register: remote_commander_service_before
+  failed_when: false
+  changed_when: false
+  check_mode: false
+
+- name: Detect an interactive Remote Commander session
+  ansible.builtin.command:
+    argv:
+      - pgrep
+      - -f
+      - "^node /opt/dh-node/bin/desktop-commander remote$"
+  register: remote_commander_manual_session
+  failed_when: remote_commander_manual_session.rc not in [0, 1]
+  changed_when: false
+  check_mode: false
+
+- name: Avoid taking over an interactive session unexpectedly
+  ansible.builtin.assert:
+    that:
+      - remote_commander_service_before.stdout == "active" or remote_commander_manual_session.rc == 1
+    fail_msg: >-
+      Desktop Commander is running interactively. End its foreground session
+      (Ctrl+C) before applying the managed systemd service, then rerun.
+
+- name: Install minimal Node.js extraction prerequisites
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - xz-utils
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Inspect pinned Node.js binary
+  ansible.builtin.stat:
+    path: "{{ remote_commander_node_dir }}/bin/node"
+  register: remote_commander_installed_node
+
+- name: Ensure Node.js download cache directory
+  ansible.builtin.file:
+    path: /var/cache/ansimble
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not remote_commander_installed_node.stat.exists
+
+- name: Fetch verified pinned Node.js LTS archive
+  ansible.builtin.get_url:
+    url: "https://nodejs.org/dist/{{ remote_commander_node_version }}/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
+    dest: "/var/cache/ansimble/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
+    checksum: "sha256:{{ remote_commander_node_checksums[remote_commander_arch.stdout] }}"
+    owner: root
+    group: root
+    mode: "0644"
+  when: not remote_commander_installed_node.stat.exists
+
+- name: Create pinned Node.js installation directory
+  ansible.builtin.file:
+    path: "{{ remote_commander_node_dir }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: not remote_commander_installed_node.stat.exists
+
+- name: Extract pinned Node.js distribution
+  ansible.builtin.unarchive:
+    src: "/var/cache/ansimble/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
+    dest: "{{ remote_commander_node_dir }}"
+    remote_src: true
+    extra_opts:
+      - --strip-components=1
+    creates: "{{ remote_commander_node_dir }}/bin/node"
+  when: not remote_commander_installed_node.stat.exists
+
+- name: Provide stable Node.js path
+  ansible.builtin.file:
+    src: "{{ remote_commander_node_dir }}"
+    dest: /opt/dh-node
+    state: link
+    force: true
+
+- name: Read installed Node.js version
+  ansible.builtin.command:
+    argv: [/opt/dh-node/bin/node, --version]
+  register: remote_commander_node_actual
+  changed_when: false
+  check_mode: false
+
+- name: Verify pinned Node.js version
+  ansible.builtin.assert:
+    that:
+      - remote_commander_node_actual.stdout == remote_commander_node_version
+    fail_msg: "Installed Node.js binary does not match the pinned release."
+
+- name: Read installed Desktop Commander package version
+  ansible.builtin.command:
+    argv:
+      - /opt/dh-node/bin/node
+      - -e
+      - "try { process.stdout.write(require('/opt/dh-node/lib/node_modules/@wonderwhy-er/desktop-commander/package.json').version) } catch (error) { process.stdout.write('missing') }"
+  register: remote_commander_package_actual
+  changed_when: false
+  check_mode: false
+
+- name: Install exactly the approved Desktop Commander release
+  ansible.builtin.command:
+    argv:
+      - /opt/dh-node/bin/npm
+      - install
+      - --global
+      - --prefix
+      - /opt/dh-node
+      - --no-audit
+      - --no-fund
+      - "@wonderwhy-er/desktop-commander@{{ remote_commander_package_version }}"
+  environment:
+    HOME: /root
+    PATH: "/opt/dh-node/bin:/usr/bin:/bin"
+  when: remote_commander_package_actual.stdout != remote_commander_package_version
+
+- name: Verify installed Remote Commander CLI exists
+  ansible.builtin.stat:
+    path: /opt/dh-node/bin/desktop-commander
+    follow: true
+  register: remote_commander_cli
+
+- name: Require runnable Remote Commander CLI
+  ansible.builtin.assert:
+    that:
+      - remote_commander_cli.stat.exists
+      - remote_commander_cli.stat.executable | default(false)
+    fail_msg: "Desktop Commander CLI is missing or not executable."
+
+- name: Install managed Remote Commander unit
+  ansible.builtin.template:
+    src: digitalhouses-remote-commander.service.j2
+    dest: "/etc/systemd/system/{{ remote_commander_service_name }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart Remote Commander
+
+- name: Enable and start managed Remote Commander
+  ansible.builtin.systemd_service:
+    name: "{{ remote_commander_service_name }}"
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Apply any pending Remote Commander unit update
+  ansible.builtin.meta: flush_handlers
+
+- name: Check managed Remote Commander service state
+  ansible.builtin.command:
+    argv: [systemctl, is-active, "{{ remote_commander_service_name }}"]
+  register: remote_commander_active
+  changed_when: false
+  check_mode: false
+
+- name: Check Remote Commander autostart state
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, "{{ remote_commander_service_name }}"]
+  register: remote_commander_enabled
+  changed_when: false
+  check_mode: false
+
+- name: Accept managed service and autostart
+  ansible.builtin.assert:
+    that:
+      - remote_commander_active.stdout == "active"
+      - remote_commander_enabled.stdout == "enabled"
+    fail_msg: "Remote Commander service installation is not accepted."

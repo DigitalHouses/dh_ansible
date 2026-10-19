@@ -1,0 +1,63 @@
+---
+- name: Plan TrueNAS Apps adoption and installation
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps.yml"
+    - name: Register pinned PVE Apps audit transport
+      ansible.builtin.add_host:
+        name: pve_apps_host
+        groups: pve_apps_targets
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+  roles:
+    - role: truenas_apps_audit
+  tasks:
+    - name: Derive installed Apps names
+      ansible.builtin.set_fact:
+        truenas_apps_installed_names: "{{ truenas_apps_observed.installed | map(attribute='name') | list }}"
+      changed_when: false
+
+    - name: Compute non-destructive installation plan
+      ansible.builtin.set_fact:
+        truenas_apps_install_plan: "{{ (truenas_apps_install_plan | default([])) + [{'app': item.name, 'catalog_app': item.catalog_app, 'version': item.version, 'action': 'ADOPT_VERIFY' if item.name in truenas_apps_installed_names else 'CREATE', 'required_secrets': item.secret_fields.values() | list }] }}"
+      loop: "{{ truenas_apps.applications }}"
+      loop_control:
+        label: "{{ item.name }}"
+      changed_when: false
+
+    - name: Disallow changing an unexpected existing Apps pool
+      ansible.builtin.assert:
+        that:
+          - truenas_apps_observed.docker_config.pool in [none, truenas_apps.pool]
+        fail_msg: Unexpected Apps pool; refusing migration and pool replacement.
+
+    - name: Report sanitized Apps plan
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          docker_action: "{{ 'CONFIGURE' if truenas_apps_observed.docker_config.pool is none else 'NOOP' }}"
+          image_update_monitoring: "{{ truenas_apps.docker.enable_image_updates }}"
+          apps: "{{ truenas_apps_install_plan }}"
+          note: "Secret values are never stored in Git or stdout; plan does not install applications."
+          result: PASS

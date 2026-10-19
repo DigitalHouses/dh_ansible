@@ -1,0 +1,80 @@
+---
+- name: Validate TrueNAS Apps inventory identity
+  ansible.builtin.assert:
+    that:
+      - truenas_apps.enabled | bool
+      - truenas_apps.pool == truenas_provision.storage.pool.name
+      - truenas_provision.vm.vmid | int >= 2000
+      - truenas_apps.applications | length == 3
+      - truenas_apps.max_run_usage_percent | int <= 80
+    fail_msg: TrueNAS Apps audit inventory mismatch; refusing changes.
+
+- name: Read TrueNAS Docker and Apps state via QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - "{{ item }}"
+  delegate_to: pve_apps_host
+  become: true
+  loop:
+    - docker.status
+    - docker.config
+    - app.query
+  register: truenas_apps_read_raw
+  changed_when: false
+  no_log: true
+
+- name: Decode read-only TrueNAS Apps responses
+  ansible.builtin.set_fact:
+    truenas_apps_observed:
+      docker_status: "{{ (truenas_apps_read_raw.results[0].stdout | from_json)['out-data'] | from_json }}"
+      docker_config: "{{ (truenas_apps_read_raw.results[1].stdout | from_json)['out-data'] | from_json }}"
+      installed: "{{ (truenas_apps_read_raw.results[2].stdout | from_json)['out-data'] | from_json }}"
+  changed_when: false
+  no_log: true
+
+- name: Read TrueNAS /run usage via QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /bin/df
+      - -B1
+      - --output=size,used,pcent
+      - /run
+  delegate_to: pve_apps_host
+  become: true
+  register: truenas_apps_run_raw
+  changed_when: false
+
+- name: Extract /run usage percentage
+  ansible.builtin.set_fact:
+    truenas_apps_run_usage: "{{ ((truenas_apps_run_raw.stdout | from_json)['out-data'] | regex_findall('[0-9]+%') | first | regex_replace('%', '')) | int }}"
+  changed_when: false
+
+- name: Assert TrueNAS Apps /run safety margin
+  ansible.builtin.assert:
+    that:
+      - truenas_apps_run_usage | int < truenas_apps.max_run_usage_percent | int
+    fail_msg: /run is too full to enable TrueNAS Apps safely.
+
+- name: Display sanitized TrueNAS Apps audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      pool_desired: "{{ truenas_apps.pool }}"
+      pool_observed: "{{ truenas_apps_observed.docker_config.pool }}"
+      docker_status: "{{ truenas_apps_observed.docker_status.status }}"
+      run_used_percent: "{{ truenas_apps_run_usage }}"
+      desired_app_names: "{{ truenas_apps.applications | map(attribute='name') | list }}"
+      installed_app_names: "{{ truenas_apps_observed.installed | map(attribute='name') | list }}"
+      result: PASS

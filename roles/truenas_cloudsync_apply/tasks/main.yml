@@ -1,0 +1,59 @@
+---
+- name: Validate TrueNAS Cloud Sync apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas_cloudsync_plan_result is defined
+      - truenas_cloudsync_plan_result.result == "PASS"
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+      - site_secrets.backblaze_b2 is defined
+      - site_secrets.backblaze_b2 is mapping
+      - site_secrets.backblaze_b2.account_id is defined
+      - site_secrets.backblaze_b2.account_id | length > 0
+      - site_secrets.backblaze_b2.application_key is defined
+      - site_secrets.backblaze_b2.application_key | length >= 8
+    fail_msg: >-
+      TrueNAS Cloud Sync apply requires an accepted plan, write API access,
+      and site-scoped Backblaze B2 credentials in the encrypted fleet secrets.
+  no_log: true
+
+- name: Reconcile TrueNAS B2 Cloud Sync resources
+  truenas_cloudsync_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired_credential: "{{ truenas_provision.cloud_backup.credential }}"
+    desired_tasks: "{{ truenas_provision.cloud_backup.tasks }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    b2_account_id: "{{ site_secrets.backblaze_b2.account_id }}"
+    b2_application_key: "{{ site_secrets.backblaze_b2.application_key }}"
+    plan: "{{ truenas_cloudsync_plan_result }}"
+    restore_existing_remote_on_empty_local: >-
+      {{ truenas_destructive_rebuild_from_b2 | default(false) | bool }}
+  register: truenas_cloudsync_apply_result
+  no_log: true
+
+- name: Publish sanitized TrueNAS Cloud Sync apply result
+  ansible.builtin.set_fact:
+    truenas_cloudsync_apply_sanitized:
+      result: "{{ truenas_cloudsync_apply_result.result }}"
+      changed: "{{ truenas_cloudsync_apply_result.changed }}"
+      operations: "{{ truenas_cloudsync_apply_result.operations }}"
+      b2_credentials_verified: "{{ truenas_cloudsync_apply_result.b2_credentials_verified }}"
+      declared_buckets_verified: "{{ truenas_cloudsync_apply_result.declared_buckets_verified }}"
+  changed_when: false
+
+- name: Report TrueNAS Cloud Sync acceptance
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_cloudsync_apply_sanitized.result }}"
+      operations: "{{ truenas_cloudsync_apply_sanitized.operations }}"
+      b2_credentials_verified: "{{ truenas_cloudsync_apply_sanitized.b2_credentials_verified }}"
+      declared_buckets_verified: "{{ truenas_cloudsync_apply_sanitized.declared_buckets_verified }}"
+      secret_values_reported: false

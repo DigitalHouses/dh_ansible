@@ -1,0 +1,593 @@
+---
+- name: Validate fresh TrueNAS base apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas_provision_plan_result == "PASS"
+      - truenas_provision.write_ready | bool
+      - truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE", "RECONCILE"]
+      - pve_write_token_secret_effective | length > 0
+      - fleet_vault_password_file is defined
+      - fleet_vault_password_file | length > 0
+      - truenas_provision.vm.storage_controller_passthrough.attach_phase == "post_access_bootstrap"
+    fail_msg: >-
+      TrueNAS base apply is blocked by plan, authorization, credentials, or
+      controller attach phase.
+
+- name: Check selected Fleet Vault password file
+  ansible.builtin.stat:
+    path: "{{ fleet_vault_password_file }}"
+  register: fleet_vault_password_stat
+  changed_when: false
+
+- name: Validate selected Fleet Vault password file
+  ansible.builtin.assert:
+    that:
+      - fleet_vault_password_stat.stat.exists
+      - fleet_vault_password_stat.stat.isreg
+      - fleet_vault_password_stat.stat.mode == "0600"
+    fail_msg: >-
+      Selected Fleet Vault password file is absent or has an unsafe mode.
+      No PVE or TrueNAS writes were attempted.
+
+- name: Verify selected Fleet Vault password before writes
+  ansible.builtin.command:
+    argv:
+      - "{{ site_runner.runtime.venv_path }}/bin/ansible-vault"
+      - view
+      - --vault-password-file
+      - "{{ fleet_vault_password_file }}"
+      - "{{ fleet_vault_file_override | mandatory }}"
+  register: fleet_vault_password_verify
+  changed_when: false
+  no_log: true
+
+- name: Read PVE ISO content
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/storage/{{ truenas_provision.os.install_media.storage }}/content?content=iso
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id
+        }}={{ pve_write_token_secret_effective }}
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: truenas_iso_content
+  changed_when: false
+  no_log: true
+
+- name: Determine TrueNAS ISO presence
+  ansible.builtin.set_fact:
+    truenas_iso_volid: >-
+      {{ truenas_provision.os.install_media.storage
+         ~ ':iso/' ~ truenas_provision.os.install_media.filename }}
+    truenas_iso_present: >-
+      {{
+        (
+          truenas_iso_content.json.data
+          | selectattr(
+              'volid',
+              'equalto',
+              truenas_provision.os.install_media.storage
+              ~ ':iso/' ~ truenas_provision.os.install_media.filename
+            )
+          | list
+          | length
+        ) == 1
+      }}
+  changed_when: false
+
+- name: Start verified TrueNAS ISO download when absent
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/storage/{{ truenas_provision.os.install_media.storage }}/download-url
+    method: POST
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id
+        }}={{ pve_write_token_secret_effective }}
+    body_format: form-urlencoded
+    body:
+      content: iso
+      filename: "{{ truenas_provision.os.install_media.filename }}"
+      url: "{{ truenas_provision.os.install_media.url }}"
+      checksum: "{{ truenas_provision.os.install_media.sha256 }}"
+      checksum-algorithm: sha256
+      verify-certificates: 1
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: truenas_iso_download
+  when: not truenas_iso_present | bool
+  no_log: true
+
+- name: Wait for TrueNAS ISO download task
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/tasks/{{ truenas_iso_download.json.data | urlencode }}/status
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id
+        }}={{ pve_write_token_secret_effective }}
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: truenas_iso_download_status
+  until: truenas_iso_download_status.json.data.status == "stopped"
+  retries: 180
+  delay: 5
+  when: not truenas_iso_present | bool
+  no_log: true
+
+- name: Assert TrueNAS ISO download succeeded
+  ansible.builtin.assert:
+    that:
+      - truenas_iso_download_status.json.data.exitstatus == "OK"
+    fail_msg: "PVE TrueNAS ISO download task did not finish with OK."
+  when: not truenas_iso_present | bool
+
+- name: Resolve TrueNAS ISO path on PVE host
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - path
+      - "{{ truenas_iso_volid }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_iso_path
+  changed_when: false
+
+- name: Verify existing or downloaded TrueNAS ISO checksum
+  ansible.builtin.command:
+    argv:
+      - sha256sum
+      - "{{ truenas_iso_path.stdout | trim }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_iso_checksum
+  changed_when: false
+
+- name: Assert TrueNAS ISO checksum
+  ansible.builtin.assert:
+    that:
+      - truenas_iso_checksum.stdout.split()[0] == truenas_provision.os.install_media.sha256
+    fail_msg: "TrueNAS ISO SHA-256 mismatch. VM replacement was not attempted."
+
+- name: Disable protection on replaceable target VM through privileged PVE host transport
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --protection
+      - "0"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_provision_observed_vm.protection | default(0) | int == 1
+
+- name: Stop replaceable target VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: stopped
+    force: true
+    timeout: 180
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_provision_observed_vm.status == "running"
+  no_log: true
+
+- name: Detach owned data controller from replaceable target VM
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --delete
+      - hostpci0
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_provision_observed_vm.hostpci0 | default('') | length > 0
+
+- name: Verify replaceable target VM no longer owns data controller
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_base_replace_vm_config_without_controller
+  changed_when: false
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_provision_observed_vm.hostpci0 | default('') | length > 0
+
+- name: Assert data controller detached before target VM deletion
+  ansible.builtin.assert:
+    that:
+      - "'hostpci0:' not in truenas_base_replace_vm_config_without_controller.stdout"
+    fail_msg: >-
+      Data controller is still attached to replaceable TrueNAS VM.
+      VM deletion is blocked.
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_provision_observed_vm.hostpci0 | default('') | length > 0
+
+- name: Verify physical data controller remains bound to vfio-pci
+  ansible.builtin.command:
+    argv:
+      - lspci
+      - -nnk
+      - -s
+      - "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_base_replace_controller_identity
+  changed_when: false
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Assert physical data controller identity before VM deletion
+  ansible.builtin.assert:
+    that:
+      - truenas_provision.vm.storage_controller_passthrough.expected_class in truenas_base_replace_controller_identity.stdout
+      - truenas_provision.vm.storage_controller_passthrough.expected_pci_id in (truenas_base_replace_controller_identity.stdout | lower)
+      - "'Kernel driver in use: ' ~ truenas_provision.vm.storage_controller_passthrough.host_driver in truenas_base_replace_controller_identity.stdout"
+    fail_msg: >-
+      Physical data controller identity changed after detach.
+      VM deletion is blocked.
+  when:
+    - truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Delete replaceable target VM
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: absent
+    purge: false
+    destroy_unreferenced_disks: false
+    timeout: 180
+  when: truenas_provision_vm_action in ["REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Create fresh TrueNAS VM without data controller
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    name: "{{ truenas_provision.vm.name }}"
+    state: present
+    bios: "{{ truenas_provision.vm.firmware.bios }}"
+    machine: "{{ truenas_provision.vm.firmware.machine }}"
+    cpu: "{{ truenas_provision.vm.cpu.type }}"
+    sockets: "{{ truenas_provision.vm.cpu.sockets | int }}"
+    cores: "{{ truenas_provision.vm.cpu.cores | int }}"
+    memory: "{{ truenas_provision.vm.memory_mb | int }}"
+    balloon: 0
+    ostype: l26
+    scsihw: "{{ truenas_provision.vm.system_disk.controller }}"
+    scsi:
+      scsi0: >-
+        {{ truenas_provision.vm.system_disk.storage
+        }}:{{ truenas_provision.vm.system_disk.size_gb
+        }},discard=on,iothread=1,ssd=1
+    efidisk0:
+      storage: "{{ truenas_provision.vm.system_disk.storage }}"
+      format: "{{ truenas_provision.vm.firmware.efi_format }}"
+      efitype: "{{ truenas_provision.vm.firmware.efi_type }}"
+      pre_enrolled_keys: "{{ truenas_provision.vm.firmware.pre_enrolled_keys | bool }}"
+    ide:
+      ide2: "{{ truenas_iso_volid }},media=cdrom"
+    boot: "order=ide2;scsi0"
+    net:
+      net0: "{{ truenas_provision.vm.network.model }},bridge={{ truenas_provision.vm.network.bridge }}"
+    agent: "enabled=1"
+    onboot: false
+    protection: false
+    timeout: 300
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Start fresh TrueNAS VM installer
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: started
+    timeout: 60
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Generate ephemeral TrueNAS bootstrap password
+  ansible.builtin.set_fact:
+    truenas_bootstrap_password: >-
+      {{
+        lookup(
+          'ansible.builtin.password',
+          '/dev/null',
+          length=32,
+          chars=['ascii_letters', 'digits']
+        )
+      }}
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Install TrueNAS through official installer WebSocket API
+  truenas_installer_rpc:
+    action: install
+    cidr: "{{ truenas_provision.network.bootstrap.cidr }}"
+    expected_version: "{{ truenas_provision.os.release }}"
+    admin_username: truenas_admin
+    admin_password: "{{ truenas_bootstrap_password }}"
+    target_ipv4: "{{ truenas_provision.network.target.ipv4 }}"
+    reboot_after_install: false
+    discovery_timeout: 300
+    install_timeout: 2400
+  register: truenas_install_result
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Stop installer VM after completed OS installation
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: stopped
+    force: true
+    timeout: 120
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Switch installed TrueNAS VM to system-disk boot and eject installer ISO
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/qemu/{{ truenas_provision.vm.vmid }}/config
+    method: PUT
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id
+        }}={{ pve_write_token_secret_effective }}
+    body_format: form-urlencoded
+    body:
+      boot: "order=scsi0"
+      ide2: "none,media=cdrom"
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Start installed TrueNAS from system disk
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ pve_write_token_secret_effective }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: started
+    timeout: 60
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Wait for installed TrueNAS HTTPS API
+  ansible.builtin.wait_for:
+    host: "{{ truenas_provision.network.target.ipv4.split('/')[0] }}"
+    port: 443
+    timeout: 600
+    connect_timeout: 3
+    sleep: 5
+    state: started
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Bootstrap permanent TrueNAS API identities
+  truenas_access_bootstrap:
+    action: provision
+    host: "{{ truenas_provision.network.target.ipv4.split('/')[0] }}"
+    endpoint: "{{ truenas_provision.access_bootstrap.transport.endpoint }}"
+    expected_version: "{{ truenas_provision.os.release }}"
+    trust_on_first_use: true
+    bootstrap_username: truenas_admin
+    bootstrap_password: "{{ truenas_bootstrap_password }}"
+    hostname: "{{ truenas_provision.vm.name }}"
+    ipv4_gateway: "{{ truenas_provision.network.target.gateway }}"
+    nameservers: "{{ truenas_provision.network.target.dns }}"
+    audit_username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+    audit_role: "{{ truenas_provision.access_bootstrap.audit_identity.role }}"
+    write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+    write_role: "{{ truenas_provision.access_bootstrap.write_identity.role }}"
+  register: truenas_access_result
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Persist new TrueNAS API keys in encrypted fleet vault
+  fleet_vault_update:
+    path: "{{ fleet_vault_file_override | mandatory }}"
+    vault_password_file: "{{ fleet_vault_password_file }}"
+    site_id: "{{ site.id }}"
+    migrate_flat_pve: true
+    site_update:
+      truenas:
+        audit_api_key: "{{ truenas_access_result.audit_api_key }}"
+        write_api_key: "{{ truenas_access_result.write_api_key }}"
+  register: fleet_vault_update_result
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Finalize permanent TrueNAS API identities
+  truenas_access_bootstrap:
+    action: finalize
+    host: "{{ truenas_provision.network.target.ipv4.split('/')[0] }}"
+    endpoint: "{{ truenas_provision.access_bootstrap.transport.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas_access_result.tls_sha256_fingerprint }}"
+    expected_version: "{{ truenas_provision.os.release }}"
+    audit_username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+    audit_api_key: "{{ truenas_access_result.audit_api_key }}"
+    write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+    write_api_key: "{{ truenas_access_result.write_api_key }}"
+    bootstrap_username: truenas_admin
+    timezone: "{{ site.timezone }}"
+  register: truenas_bootstrap_lock
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+  no_log: true
+
+- name: Record accepted TrueNAS endpoint identity in site inventory
+  ansible.builtin.copy:
+    dest: "{{ inventory_dir }}/truenas.yml"
+    mode: "0644"
+    content: |
+      ---
+      truenas:
+        lifecycle_state: "access_ready"
+        host: {{ truenas_provision.network.target.ipv4.split('/')[0] }}
+        port: 443
+        endpoint: {{ truenas_provision.access_bootstrap.transport.endpoint }}
+        tls:
+          sha256_fingerprint: "{{ truenas_access_result.tls_sha256_fingerprint }}"
+        auth:
+          username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+          write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Read accepted TrueNAS base VM configuration
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_base_apply_vm_config
+  changed_when: false
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Determine accepted TrueNAS base VM operational drift
+  ansible.builtin.set_fact:
+    truenas_base_apply_vm_operational_update_required: >-
+      {{
+        (
+          (
+            'onboot: 1'
+            if truenas_provision.vm.onboot | bool
+            else 'onboot: 0'
+          )
+          not in truenas_base_apply_vm_config.stdout
+        )
+        or ('protection: 1' not in truenas_base_apply_vm_config.stdout)
+        or (
+          ('startup: ' ~ truenas_provision.vm.startup)
+          not in truenas_base_apply_vm_config.stdout
+        )
+      }}
+  changed_when: false
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Apply accepted TrueNAS base VM operational settings through privileged PVE host transport
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --protection
+      - "1"
+      - --onboot
+      - "{{ (truenas_provision.vm.onboot | bool) | ternary('1', '0') }}"
+      - --startup
+      - "{{ truenas_provision.vm.startup }}"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when:
+    - truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+    - truenas_base_apply_vm_operational_update_required | bool
+
+- name: Verify accepted TrueNAS base VM operational configuration
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_base_apply_final_vm_config
+  changed_when: false
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Assert accepted TrueNAS base VM operational configuration
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          'onboot: 1'
+          if truenas_provision.vm.onboot | bool
+          else 'onboot: 0'
+        ) in truenas_base_apply_final_vm_config.stdout
+      - "'protection: 1' in truenas_base_apply_final_vm_config.stdout"
+      - >-
+        ('startup: ' ~ truenas_provision.vm.startup)
+        in truenas_base_apply_final_vm_config.stdout
+      - "'hostpci' not in truenas_base_apply_final_vm_config.stdout"
+    fail_msg: "Accepted TrueNAS base VM operational state did not converge."
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]
+
+- name: Report TrueNAS base apply acceptance
+  ansible.builtin.debug:
+    msg:
+      result: PASS
+      vmid: "{{ truenas_provision.vm.vmid }}"
+      vm_name: "{{ truenas_provision.vm.name }}"
+      installer_media: "{{ truenas_provision.os.install_media.filename }}"
+      data_controller_attached: false
+      target_ip: "{{ truenas_provision.network.target.ipv4 }}"
+      api_audit_verified: true
+      api_write_verified: true
+      temporary_bootstrap_locked: true
+      fleet_vault_updated: true
+      next_phase: "commit encrypted vault + endpoint identity, then storage"
+  when: truenas_provision_vm_action in ["CREATE", "REPLACE", "REBUILD_INCOMPLETE"]

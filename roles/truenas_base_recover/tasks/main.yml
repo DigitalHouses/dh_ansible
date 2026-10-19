@@ -1,0 +1,513 @@
+---
+- name: Validate recoverable TrueNAS base state
+  ansible.builtin.assert:
+    that:
+      - truenas_provision_plan_result == "PASS"
+      - truenas_provision_vm_action in ["REBUILD_INCOMPLETE", "RECOVER_ACCESS"]
+      - truenas.lifecycle_state == "provision_pending"
+      - truenas_provision_observed_vm.name == truenas_provision.vm.name
+      - (truenas_provision_observed_vm.hostpci0 | default('') | length) == 0
+      - fleet_vault_password_file is defined
+      - fleet_vault_password_file | length > 0
+    fail_msg: >-
+      TrueNAS base recovery requires the exact provision_pending target VM,
+      with no data controller attached.
+
+- name: Read current TrueNAS VM configuration through PVE host
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_vm_config
+  changed_when: false
+
+- name: Assert recovery VM has no data controller
+  ansible.builtin.assert:
+    that:
+      - "'name: ' ~ truenas_provision.vm.name in truenas_recovery_vm_config.stdout"
+      - "'hostpci' not in truenas_recovery_vm_config.stdout"
+      - "'boot: order=scsi0' in truenas_recovery_vm_config.stdout"
+    fail_msg: >-
+      Recovery VM identity/boot/controller gate failed. No key reset was attempted.
+
+- name: Read installed TrueNAS identity through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - system.info
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_system_info_raw
+  changed_when: false
+
+- name: Parse installed TrueNAS identity
+  ansible.builtin.set_fact:
+    truenas_recovery_system_exec: "{{ truenas_recovery_system_info_raw.stdout | from_json }}"
+  changed_when: false
+
+- name: Parse installed TrueNAS system info
+  ansible.builtin.set_fact:
+    truenas_recovery_system_info: "{{ truenas_recovery_system_exec['out-data'] | from_json }}"
+  changed_when: false
+
+- name: Assert installed TrueNAS identity
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_system_exec.exitcode | int == 0
+      - truenas_recovery_system_info.version == truenas_provision.os.release
+      - truenas_recovery_system_info.hostname == truenas_provision.vm.name
+    fail_msg: >-
+      QGA sees an unexpected guest identity/version. Recovery was blocked.
+
+- name: Initialize TrueNAS recovery key strategy
+  ansible.builtin.set_fact:
+    truenas_recovery_finalize_from_vault: false
+  changed_when: false
+
+- name: Try persisted TrueNAS API keys before QGA reset
+  block:
+    - name: Finalize TrueNAS access with persisted Fleet Vault keys
+      truenas_access_bootstrap:
+        action: finalize
+        host: "{{ truenas_provision.network.target.ipv4.split('/')[0] }}"
+        endpoint: "{{ truenas_provision.access_bootstrap.transport.endpoint }}"
+        expected_version: "{{ truenas_provision.os.release }}"
+        trust_on_first_use: true
+        audit_username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+        audit_api_key: "{{ site_secrets.truenas.audit_api_key }}"
+        write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+        write_api_key: "{{ site_secrets.truenas.write_api_key }}"
+        bootstrap_username: truenas_admin
+        timezone: "{{ site.timezone }}"
+      register: truenas_recovery_finalize_persisted
+      no_log: true
+
+    - name: Mark persisted TrueNAS keys accepted
+      ansible.builtin.set_fact:
+        truenas_recovery_finalize_from_vault: true
+      changed_when: false
+
+  rescue:
+    - name: Fall back to QGA key reset
+      ansible.builtin.debug:
+        msg: >-
+          Persisted TrueNAS API credentials did not complete acceptance.
+          Falling back to QGA-scoped key reset; no data controller is attached.
+
+  when:
+    - site_secrets.truenas is defined
+    - site_secrets.truenas.audit_api_key is defined
+    - site_secrets.truenas.write_api_key is defined
+    - site_secrets.truenas.audit_api_key | length > 0
+    - site_secrets.truenas.write_api_key | length > 0
+
+- name: Read TrueNAS users through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - user.query
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_users_raw
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Parse TrueNAS users
+  ansible.builtin.set_fact:
+    truenas_recovery_users_exec: "{{ truenas_recovery_users_raw.stdout | from_json }}"
+    truenas_recovery_users: >-
+      {{
+        (truenas_recovery_users_raw.stdout | from_json)['out-data']
+        | from_json
+      }}
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Select recovered TrueNAS service users
+  ansible.builtin.set_fact:
+    truenas_recovery_audit_users: >-
+      {{
+        truenas_recovery_users
+        | selectattr(
+            'username',
+            'equalto',
+            truenas_provision.access_bootstrap.audit_identity.username
+          )
+        | list
+      }}
+    truenas_recovery_write_users: >-
+      {{
+        truenas_recovery_users
+        | selectattr(
+            'username',
+            'equalto',
+            truenas_provision.access_bootstrap.write_identity.username
+          )
+        | list
+      }}
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Assert recovered TrueNAS service users
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_users_exec.exitcode | int == 0
+      - truenas_recovery_audit_users | length == 1
+      - truenas_recovery_write_users | length == 1
+      - truenas_provision.access_bootstrap.audit_identity.role in (truenas_recovery_audit_users[0].roles | default([]))
+      - truenas_provision.access_bootstrap.write_identity.role in (truenas_recovery_write_users[0].roles | default([]))
+      - truenas_recovery_audit_users[0].password_disabled | bool
+      - truenas_recovery_write_users[0].password_disabled | bool
+      - not (truenas_recovery_audit_users[0].ssh_password_enabled | bool)
+      - not (truenas_recovery_write_users[0].ssh_password_enabled | bool)
+      - not (truenas_recovery_audit_users[0].smb | bool)
+      - not (truenas_recovery_write_users[0].smb | bool)
+      - truenas_recovery_audit_users[0].shell == "/usr/sbin/nologin"
+      - truenas_recovery_write_users[0].shell == "/usr/sbin/nologin"
+    fail_msg: >-
+      Existing TrueNAS service identities do not match the accepted bootstrap contract.
+      API keys were not reset.
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Read TrueNAS API key metadata through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - api_key.query
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_keys_raw
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Parse TrueNAS API key metadata
+  ansible.builtin.set_fact:
+    truenas_recovery_keys_exec: "{{ truenas_recovery_keys_raw.stdout | from_json }}"
+    truenas_recovery_keys: >-
+      {{
+        (truenas_recovery_keys_raw.stdout | from_json)['out-data']
+        | from_json
+      }}
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Select bootstrap-owned TrueNAS API keys
+  ansible.builtin.set_fact:
+    truenas_recovery_audit_keys: >-
+      {{
+        truenas_recovery_keys
+        | selectattr(
+            'name',
+            'equalto',
+            'ansimble-' ~ truenas_provision.access_bootstrap.audit_identity.username
+          )
+        | list
+      }}
+    truenas_recovery_write_keys: >-
+      {{
+        truenas_recovery_keys
+        | selectattr(
+            'name',
+            'equalto',
+            'ansimble-' ~ truenas_provision.access_bootstrap.write_identity.username
+          )
+        | list
+      }}
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Assert recoverable TrueNAS API key metadata
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_keys_exec.exitcode | int == 0
+      - truenas_recovery_audit_keys | length == 1
+      - truenas_recovery_write_keys | length == 1
+      - truenas_recovery_audit_keys[0].username == truenas_provision.access_bootstrap.audit_identity.username
+      - truenas_recovery_write_keys[0].username == truenas_provision.access_bootstrap.write_identity.username
+      - not (truenas_recovery_audit_keys[0].revoked | default(false) | bool)
+      - not (truenas_recovery_write_keys[0].revoked | default(false) | bool)
+    fail_msg: >-
+      Bootstrap-owned API key metadata is not uniquely recoverable.
+      No key reset was attempted.
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Reset TrueNAS audit API key through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - api_key.update
+      - "{{ truenas_recovery_audit_keys[0].id | string }}"
+      - '{"reset":true}'
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_audit_key_reset_raw
+  changed_when: true
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Reset TrueNAS write API key through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - api_key.update
+      - "{{ truenas_recovery_write_keys[0].id | string }}"
+      - '{"reset":true}'
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_write_key_reset_raw
+  changed_when: true
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Parse recovered TrueNAS API keys
+  ansible.builtin.set_fact:
+    truenas_recovery_audit_key_reset_exec: "{{ truenas_recovery_audit_key_reset_raw.stdout | from_json }}"
+    truenas_recovery_write_key_reset_exec: "{{ truenas_recovery_write_key_reset_raw.stdout | from_json }}"
+    truenas_recovery_audit_key: >-
+      {{
+        ((truenas_recovery_audit_key_reset_raw.stdout | from_json)['out-data'] | from_json).key
+      }}
+    truenas_recovery_write_key: >-
+      {{
+        ((truenas_recovery_write_key_reset_raw.stdout | from_json)['out-data'] | from_json).key
+      }}
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Assert recovered TrueNAS API key values
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_audit_key_reset_exec.exitcode | int == 0
+      - truenas_recovery_write_key_reset_exec.exitcode | int == 0
+      - truenas_recovery_audit_key | length > 0
+      - truenas_recovery_write_key | length > 0
+    fail_msg: >-
+      TrueNAS key reset did not return both recoverable key values.
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Persist recovered TrueNAS API keys in encrypted fleet vault
+  fleet_vault_update:
+    path: "{{ fleet_vault_file_override | mandatory }}"
+    vault_password_file: "{{ fleet_vault_password_file }}"
+    site_id: "{{ site.id }}"
+    migrate_flat_pve: true
+    site_update:
+      truenas:
+        audit_api_key: "{{ truenas_recovery_audit_key }}"
+        write_api_key: "{{ truenas_recovery_write_key }}"
+  register: truenas_recovery_vault_update
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Finalize recovered TrueNAS API access
+  truenas_access_bootstrap:
+    action: finalize
+    host: "{{ truenas_provision.network.target.ipv4.split('/')[0] }}"
+    endpoint: "{{ truenas_provision.access_bootstrap.transport.endpoint }}"
+    expected_version: "{{ truenas_provision.os.release }}"
+    trust_on_first_use: true
+    audit_username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+    audit_api_key: "{{ truenas_recovery_audit_key }}"
+    write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+    write_api_key: "{{ truenas_recovery_write_key }}"
+    bootstrap_username: truenas_admin
+    timezone: "{{ site.timezone }}"
+  register: truenas_recovery_finalize_reset
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Select persisted-key TrueNAS finalize result
+  ansible.builtin.set_fact:
+    truenas_recovery_finalize: "{{ truenas_recovery_finalize_persisted }}"
+  changed_when: false
+  no_log: true
+  when: truenas_recovery_finalize_from_vault | bool
+
+- name: Select QGA-reset TrueNAS finalize result
+  ansible.builtin.set_fact:
+    truenas_recovery_finalize: "{{ truenas_recovery_finalize_reset }}"
+  changed_when: false
+  no_log: true
+  when: not truenas_recovery_finalize_from_vault | bool
+
+- name: Assert canonical TrueNAS finalize result
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_finalize.tls_sha256_fingerprint is defined
+      - truenas_recovery_finalize.audit_verified | bool
+      - truenas_recovery_finalize.write_verified | bool
+      - truenas_recovery_finalize.bootstrap_locked | bool
+    fail_msg: "Canonical TrueNAS finalize result is incomplete."
+  no_log: true
+
+- name: Record recovered TrueNAS endpoint identity
+  ansible.builtin.copy:
+    dest: "{{ inventory_dir }}/truenas.yml"
+    mode: "0644"
+    content: |
+      ---
+      truenas:
+        lifecycle_state: "access_ready"
+        host: {{ truenas_provision.network.target.ipv4.split('/')[0] }}
+        port: 443
+        endpoint: {{ truenas_provision.access_bootstrap.transport.endpoint }}
+        tls:
+          sha256_fingerprint: "{{ truenas_recovery_finalize.tls_sha256_fingerprint }}"
+        auth:
+          username: "{{ truenas_provision.access_bootstrap.audit_identity.username }}"
+          write_username: "{{ truenas_provision.access_bootstrap.write_identity.username }}"
+
+- name: Determine accepted TrueNAS base VM operational drift
+  ansible.builtin.set_fact:
+    truenas_recovery_vm_operational_update_required: >-
+      {{
+        (
+          (
+            'onboot: 1'
+            if truenas_provision.vm.onboot | bool
+            else 'onboot: 0'
+          )
+          not in truenas_recovery_vm_config.stdout
+        )
+        or ('protection: 1' not in truenas_recovery_vm_config.stdout)
+        or (
+          ('startup: ' ~ truenas_provision.vm.startup)
+          not in truenas_recovery_vm_config.stdout
+        )
+      }}
+  changed_when: false
+
+- name: Apply accepted TrueNAS base VM operational settings through privileged PVE host transport
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --protection
+      - "1"
+      - --onboot
+      - "{{ (truenas_provision.vm.onboot | bool) | ternary('1', '0') }}"
+      - --startup
+      - "{{ truenas_provision.vm.startup }}"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when: truenas_recovery_vm_operational_update_required | bool
+
+- name: Verify finalized TrueNAS identity through QEMU Guest Agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - system.info
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_final_system_raw
+  changed_when: false
+
+- name: Parse finalized TrueNAS identity
+  ansible.builtin.set_fact:
+    truenas_recovery_final_system: >-
+      {{
+        ((truenas_recovery_final_system_raw.stdout | from_json)['out-data'])
+        | from_json
+      }}
+  changed_when: false
+
+- name: Read finalized TrueNAS VM operational configuration
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_recovery_final_vm_config
+  changed_when: false
+
+- name: Assert finalized TrueNAS base acceptance
+  ansible.builtin.assert:
+    that:
+      - truenas_recovery_final_system.version == truenas_provision.os.release
+      - truenas_recovery_final_system.hostname == truenas_provision.vm.name
+      - truenas_recovery_final_system.timezone == site.timezone
+      - truenas_recovery_finalize.audit_verified | bool
+      - truenas_recovery_finalize.write_verified | bool
+      - truenas_recovery_finalize.bootstrap_locked | bool
+      - >-
+        (
+          'onboot: 1'
+          if truenas_provision.vm.onboot | bool
+          else 'onboot: 0'
+        ) in truenas_recovery_final_vm_config.stdout
+      - "'protection: 1' in truenas_recovery_final_vm_config.stdout"
+      - >-
+        ('startup: ' ~ truenas_provision.vm.startup)
+        in truenas_recovery_final_vm_config.stdout
+      - "'hostpci' not in truenas_recovery_final_vm_config.stdout"
+    fail_msg: "Recovered TrueNAS base failed final acceptance."
+
+- name: Report recovered TrueNAS base acceptance
+  ansible.builtin.debug:
+    msg:
+      result: PASS
+      vmid: "{{ truenas_provision.vm.vmid }}"
+      vm_name: "{{ truenas_provision.vm.name }}"
+      version: "{{ truenas_recovery_final_system.version }}"
+      timezone: "{{ truenas_recovery_final_system.timezone }}"
+      target_ip: "{{ truenas_provision.network.target.ipv4 }}"
+      data_controller_attached: false
+      api_audit_verified: true
+      api_write_verified: true
+      temporary_bootstrap_locked: true
+      vm_protected: true
+      onboot: "{{ truenas_provision.vm.onboot }}"
+      next_phase: "commit encrypted vault + endpoint identity, then storage"

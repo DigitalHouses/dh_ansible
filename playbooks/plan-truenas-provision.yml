@@ -1,0 +1,35 @@
+---
+- name: Plan fresh TrueNAS provisioning
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load PVE variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load PVE standard access variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+
+    - name: Load current TrueNAS lifecycle variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load fresh TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+  roles:
+    - role: fleet_secrets
+
+    - role: pve_audit
+      vars:
+        pve_audit_token_secret_effective: "{{ site_secrets.pve.audit_token_secret }}"
+
+    - role: truenas_provision_plan

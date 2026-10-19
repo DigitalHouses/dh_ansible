@@ -1,0 +1,83 @@
+---
+- name: Offline regression for Proxmox backup job API field shapes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    site:
+      id: offline
+    pve:
+      backup_jobs:
+        - id: dh-test-backup
+          node: pve
+          storage: truenas-backups
+          vmids: [1900]
+          schedule: "03:00"
+          mode: snapshot
+          compress: zstd
+          prune_backups: keep-last=7
+          enabled: true
+          comment: "Managed by Ansimble-2: contract test"
+    observed_base:
+      id: dh-test-backup
+      node: pve
+      storage: truenas-backups
+      vmid: "1900"
+      all: 0
+      schedule: "03:00"
+      mode: snapshot
+      compress: zstd
+      enabled: 1
+      comment: "Managed by Ansimble-2: contract test"
+
+  tasks:
+    - name: Confirm missing job is CREATE
+      ansible.builtin.set_fact:
+        pve_backup_jobs_observed: []
+
+    - ansible.builtin.include_role:
+        name: pve_backup_jobs_plan
+
+    - ansible.builtin.assert:
+        that:
+          - pve_backup_jobs_plan[0].action == 'CREATE'
+
+    - name: Simulate Proxmox structured prune-backups field
+      ansible.builtin.set_fact:
+        pve_backup_jobs_observed:
+          - "{{ observed_base | combine({'prune-backups': {'keep-last': '7'}}) }}"
+
+    - ansible.builtin.include_role:
+        name: pve_backup_jobs_plan
+
+    - ansible.builtin.assert:
+        that:
+          - pve_backup_jobs_plan[0].action == 'NOOP'
+          - pve_backup_jobs_plan[0].changed_fields == []
+          - pve_backup_jobs_plan[0].current['prune-backups'] == 'keep-last=7'
+
+    - name: Simulate drift in structured retention
+      ansible.builtin.set_fact:
+        pve_backup_jobs_observed:
+          - "{{ observed_base | combine({'prune-backups': {'keep-last': '5'}}) }}"
+
+    - ansible.builtin.include_role:
+        name: pve_backup_jobs_plan
+
+    - ansible.builtin.assert:
+        that:
+          - pve_backup_jobs_plan[0].action == 'UPDATE'
+          - pve_backup_jobs_plan[0].changed_fields == ['prune-backups']
+
+    - name: Simulate legacy string-shaped retention
+      ansible.builtin.set_fact:
+        pve_backup_jobs_observed:
+          - "{{ observed_base | combine({'prune-backups': 'keep-last=7'}) }}"
+
+    - ansible.builtin.include_role:
+        name: pve_backup_jobs_plan
+
+    - ansible.builtin.assert:
+        that:
+          - pve_backup_jobs_plan[0].action == 'NOOP'
+          - pve_backup_jobs_plan[0].changed_fields == []

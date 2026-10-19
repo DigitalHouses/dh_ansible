@@ -1,0 +1,53 @@
+---
+# Full destructive disaster-recovery acceptance:
+# - replaces the TrueNAS system VM,
+# - wipes only the data disk owned by the declared passthrough controller,
+# - creates a fresh pool/layout,
+# - restores existing B2 data with a one-time PULL COPY,
+# - verifies PUSH dry-run convergence before enabling permanent PUSH+SYNC.
+#
+# This is intentionally separate from the normal controlled rebuild, whose
+# steady-state policy remains pool import/preservation.
+
+- import_playbook: apply-truenas-base.yml
+  vars:
+    truenas_controlled_rebuild: true
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+- import_playbook: publish-site-runtime-secrets.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+- import_playbook: apply-truenas-runtime.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+# First storage pass attaches the controller. The second pass re-discovers it and
+# performs the explicitly authorized disk wipe + pool create.
+- import_playbook: apply-truenas-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+    truenas_storage_pool_action_override: "create"
+
+- import_playbook: apply-truenas-identities.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-access.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-cloudsync.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-pve-backup-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true

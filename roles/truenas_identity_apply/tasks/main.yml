@@ -1,0 +1,41 @@
+---
+- name: Validate TrueNAS identity apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas_identity_plan_result is defined
+      - truenas_identity_plan_result.result == "PASS"
+      - truenas.auth.write_username is defined
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas is mapping
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+      - site_secrets.truenas.smb_password is defined
+      - site_secrets.truenas.smb_password | length >= 8
+    fail_msg: >-
+      TrueNAS identity apply prerequisites are incomplete. No identity writes
+      are authorized until the write API key and site SMB password exist in
+      Fleet Vault and the read-only plan is PASS.
+  no_log: true
+
+- name: Reconcile TrueNAS local groups and users
+  truenas_identity_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired_groups: "{{ truenas_provision.identity.groups }}"
+    desired_users: "{{ truenas_provision.identity.users }}"
+    smb_password: "{{ site_secrets.truenas.smb_password }}"
+  register: truenas_identity_apply_result
+  no_log: true
+
+- name: Report TrueNAS identity acceptance
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      groups: "{{ truenas_identity_apply_result.groups }}"
+      users: "{{ truenas_identity_apply_result.users }}"

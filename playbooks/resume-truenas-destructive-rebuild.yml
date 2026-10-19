@@ -1,0 +1,26 @@
+---
+# Resume a destructive TrueNAS rebuild after the base/storage phases have already
+# succeeded. This entrypoint MUST NOT replace the VM or recreate the pool.
+#
+# It is intentionally safe to re-run after a fail-closed stop in identities,
+# access, B2 recovery/adoption, or PVE backup-storage recreation.
+
+- import_playbook: apply-truenas-runtime.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-identities.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-access.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-truenas-cloudsync.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true
+
+- import_playbook: apply-pve-backup-storage.yml
+  vars:
+    truenas_destructive_rebuild_from_b2: true

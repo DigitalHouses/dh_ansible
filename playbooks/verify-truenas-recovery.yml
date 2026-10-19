@@ -1,0 +1,6 @@
+---
+# Continue the same acceptance checks after an already completed controlled reboot.
+# Explicit entrypoint: no additional TrueNAS reboot is performed.
+- import_playbook: accept-truenas-recovery.yml
+  vars:
+    truenas_recovery_verify_only: true

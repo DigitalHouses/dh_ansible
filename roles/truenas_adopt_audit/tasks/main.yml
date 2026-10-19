@@ -1,0 +1,290 @@
+---
+- name: Validate TrueNAS adopt reference contract
+  ansible.builtin.assert:
+    that:
+      - truenas_access is mapping
+      - truenas_access.source is mapping
+      - truenas_access.source.repository is defined
+      - truenas_access.pool.name is defined
+      - truenas_access.pool.guid is defined
+      - truenas_access.users | length > 0
+      - truenas_access.groups | length > 0
+      - truenas_access.datasets | length > 0
+      - truenas_access.paths | length > 0
+      - truenas_access.legacy_acl_policy.exact_nfs4_ace_set_approved is false
+    fail_msg: "TrueNAS adopt reference is incomplete or incorrectly marked write-ready."
+
+- name: Read TrueNAS adopt state
+  truenas_rpc:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ vault_truenas_audit_api_key }}"
+    calls:
+      - name: users
+        method: user.query
+        params:
+          - - - local
+              - "="
+              - true
+          - select:
+              - id
+              - uid
+              - username
+              - builtin
+              - local
+              - smb
+              - group
+              - groups
+              - roles
+              - password_disabled
+              - shell
+              - home
+      - name: groups
+        method: group.query
+        params:
+          - - - local
+              - "="
+              - true
+          - select:
+              - id
+              - gid
+              - name
+              - group
+              - builtin
+              - local
+              - smb
+              - users
+              - roles
+      - name: datasets
+        method: pool.dataset.query
+        params:
+          - []
+          - select:
+              - id
+              - acltype
+              - aclmode
+              - mountpoint
+      - name: snapshots
+        method: pool.snapshot.query
+        params:
+          - []
+          - select:
+              - id
+              - dataset
+              - name
+      - name: smb_shares
+        method: sharing.smb.query
+        params: [[], {}]
+      - name: nfs_shares
+        method: sharing.nfs.query
+        params: [[], {}]
+  register: truenas_adopt
+  changed_when: false
+  no_log: true
+
+- name: Validate legacy-managed TrueNAS users
+  ansible.builtin.assert:
+    that:
+      - actual | length > 0
+      - actual.get('id') == item.value.api_id
+      - actual.get('uid') == item.value.uid
+      - actual.get('smb') == item.value.smb
+      - actual.get('password_disabled') == item.value.password_disabled
+      - actual.get('roles', []) == item.value.roles
+      - (actual.get('group') or {}).get('id') == item.value.primary_group_api_id
+      - item.value.required_extra_group_api_ids | difference(actual.get('groups', [])) | length == 0
+      - (actual.get('groups', []) | intersect(managed_group_api_ids) | sort) == (item.value.required_extra_group_api_ids | sort)
+    fail_msg: "Legacy-managed TrueNAS user drift: {{ item.key }}"
+    success_msg: "Legacy-managed TrueNAS user accepted: {{ item.key }}"
+  vars:
+    managed_group_api_ids: "{{ truenas_access.groups.values() | map(attribute='api_id') | list }}"
+    actual: >-
+      {{
+        truenas_adopt.results.users
+        | selectattr('username', 'equalto', item.key)
+        | list
+        | first
+        | default({})
+      }}
+  loop: "{{ truenas_access.users | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate legacy-managed TrueNAS groups
+  ansible.builtin.assert:
+    that:
+      - actual | length > 0
+      - actual.get('id') == item.value.api_id
+      - actual.get('gid') == item.value.gid
+      - actual.get('roles', []) == []
+      - actual.get('smb') == item.value.smb
+    fail_msg: "Legacy-managed TrueNAS group drift: {{ item.key }}"
+    success_msg: "Legacy-managed TrueNAS group accepted: {{ item.key }}"
+  vars:
+    actual: >-
+      {{
+        truenas_adopt.results.groups
+        | selectattr('name', 'equalto', item.key)
+        | list
+        | first
+        | default({})
+      }}
+  loop: "{{ truenas_access.groups | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate pre-migration dataset properties
+  ansible.builtin.assert:
+    that:
+      - actual | length > 0
+      - actual_acltype == item.value.expected_current_acltype
+      - actual_aclmode == item.value.expected_current_aclmode
+    fail_msg: "TrueNAS pre-migration dataset drift: {{ item.key }}"
+    success_msg: "TrueNAS pre-migration dataset accepted: {{ item.key }}"
+  vars:
+    actual: >-
+      {{
+        truenas_adopt.results.datasets
+        | selectattr('id', 'equalto', item.key)
+        | list
+        | first
+        | default({})
+      }}
+    actual_acltype: >-
+      {{
+        actual.get('acltype', {}).get('value')
+        if actual.get('acltype') is mapping
+        else actual.get('acltype')
+      }}
+    actual_aclmode: >-
+      {{
+        actual.get('aclmode', {}).get('value')
+        if actual.get('aclmode') is mapping
+        else actual.get('aclmode')
+      }}
+  loop: "{{ truenas_access.datasets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate pre-migration snapshot set
+  ansible.builtin.assert:
+    that:
+      - matching_snapshots | length == 1
+    fail_msg: "Expected pre-migration snapshot missing or duplicated: {{ expected_snapshot_id }}"
+    success_msg: "Pre-migration snapshot accepted: {{ expected_snapshot_id }}"
+  vars:
+    expected_snapshot_id: "{{ item.key }}@{{ truenas_access.pre_migration_snapshot.name }}"
+    matching_snapshots: >-
+      {{
+        truenas_adopt.results.snapshots
+        | selectattr('id', 'equalto', expected_snapshot_id)
+        | list
+      }}
+  loop: "{{ truenas_access.datasets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+
+- name: Validate pre-migration share baseline
+  ansible.builtin.assert:
+    that:
+      - truenas_adopt.results.smb_shares | length == truenas_access.shares_expected_before_acl_migration.smb
+      - truenas_adopt.results.nfs_shares | length == truenas_access.shares_expected_before_acl_migration.nfs
+    fail_msg: "TrueNAS share baseline drifted before ACL adoption."
+    success_msg: "TrueNAS share baseline accepted: no SMB/NFS shares."
+
+- name: Read TrueNAS path ACL baselines
+  truenas_rpc:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ vault_truenas_audit_api_key }}"
+    calls:
+      - name: stat
+        method: filesystem.stat
+        params: ["{{ item }}"]
+      - name: acl
+        method: filesystem.getacl
+        params: ["{{ item }}", true, false]
+  register: truenas_path_adopt
+  changed_when: false
+  no_log: true
+  loop: "{{ truenas_access.paths }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Validate nine legacy POSIX ACL path baselines
+  ansible.builtin.assert:
+    that:
+      - stat_row.get('type') == 'DIRECTORY'
+      - stat_row.get('realpath') == path
+      - acl_row.get('acltype') == truenas_access.expected_current_path_acl.acltype
+      - acl_row.get('uid') == truenas_access.expected_current_path_acl.owner_uid
+      - acl_row.get('gid') == truenas_access.expected_current_path_acl.owner_gid
+      - acl_entries | length == truenas_access.expected_current_path_acl.entry_count
+      - user_obj | length == 1
+      - group_obj | length == 1
+      - other_obj | length == 1
+      - user_obj[0].get('perms', {}).get('READ') is true
+      - user_obj[0].get('perms', {}).get('WRITE') is true
+      - user_obj[0].get('perms', {}).get('EXECUTE') is true
+      - group_obj[0].get('perms', {}).get('READ') is true
+      - group_obj[0].get('perms', {}).get('WRITE') is false
+      - group_obj[0].get('perms', {}).get('EXECUTE') is true
+      - other_obj[0].get('perms', {}).get('READ') is true
+      - other_obj[0].get('perms', {}).get('WRITE') is false
+      - other_obj[0].get('perms', {}).get('EXECUTE') is true
+    fail_msg: "Legacy POSIX ACL baseline drift: {{ path }}"
+    success_msg: "Legacy POSIX ACL baseline accepted: {{ path }}"
+  vars:
+    path_result: >-
+      {{
+        truenas_path_adopt.results
+        | selectattr('item', 'equalto', item)
+        | list
+        | first
+      }}
+    path: "{{ item }}"
+    stat_row: "{{ path_result.results.stat }}"
+    acl_row: "{{ path_result.results.acl }}"
+    acl_entries: "{{ path_result.results.acl.get('acl', []) }}"
+    user_obj: "{{ acl_entries | selectattr('tag', 'equalto', 'USER_OBJ') | list }}"
+    group_obj: "{{ acl_entries | selectattr('tag', 'equalto', 'GROUP_OBJ') | list }}"
+    other_obj: "{{ acl_entries | selectattr('tag', 'equalto', 'OTHER') | list }}"
+  loop: "{{ truenas_access.paths }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Report TrueNAS legacy adopt audit
+  ansible.builtin.debug:
+    msg:
+      source_repository: "{{ truenas_access.source.repository }}"
+      source_path: "{{ truenas_access.source.path }}"
+      managed_users_verified: "{{ truenas_access.users.keys() | list }}"
+      managed_groups_verified: "{{ truenas_access.groups.keys() | list }}"
+      diagnostic_users_preserved: >-
+        {{
+          truenas_adopt.results.users
+          | selectattr('username', 'in', truenas_access.diagnostic_users)
+          | map(attribute='username')
+          | list
+        }}
+      control_plane_user_present: >-
+        {{
+          truenas_adopt.results.users
+          | selectattr('username', 'equalto', truenas.auth.username)
+          | list
+          | length == 1
+        }}
+      pre_migration_datasets_verified: "{{ truenas_access.datasets | length }}"
+      pre_migration_path_acls_verified: "{{ truenas_access.paths | length }}"
+      pre_migration_snapshots_verified: "{{ truenas_access.datasets | length }}"
+      smb_shares: "{{ truenas_adopt.results.smb_shares | length }}"
+      nfs_shares: "{{ truenas_adopt.results.nfs_shares | length }}"
+      exact_nfs4_ace_set_approved: "{{ truenas_access.legacy_acl_policy.exact_nfs4_ace_set_approved }}"
+      write_ready: false
+      result: PASS

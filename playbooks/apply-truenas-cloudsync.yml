@@ -1,0 +1,37 @@
+---
+- name: Apply TrueNAS Cloud Sync
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load accepted TrueNAS endpoint variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+  roles:
+    - role: fleet_secrets
+    - role: truenas_cloudsync_audit
+    - role: truenas_cloudsync_plan
+    - role: truenas_cloudsync_apply
+    - role: truenas_cloudsync_audit
+      allow_duplicates: true
+    - role: truenas_cloudsync_plan
+      allow_duplicates: true
+
+  post_tasks:
+    - name: Require exact post-apply Cloud Sync convergence
+      ansible.builtin.assert:
+        that:
+          - truenas_cloudsync_plan_result.result == "PASS"
+          - truenas_cloudsync_plan_result.credential.action == "NOOP"
+          - truenas_cloudsync_plan_result.tasks | selectattr('action', 'ne', 'NOOP') | list | length == 0
+        fail_msg: "TrueNAS Cloud Sync post-apply verification did not converge to exact NOOP."

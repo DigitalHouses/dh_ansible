@@ -1,0 +1,51 @@
+---
+- name: Require an accepted backup job plan and pinned host transport
+  ansible.builtin.assert:
+    that:
+      - pve_backup_jobs_plan is sequence
+      - "'BLOCK' not in (pve_backup_jobs_plan | map(attribute='action') | list)"
+      - pve_host_write_transport_verify.stdout | trim == '0'
+    fail_msg: "Backup job API apply requires accepted plan and verified PVE write transport."
+
+# The built-in PVEAdmin role has no Sys.Modify; REST POST /cluster/backup
+# requires this broad cluster permission. Use the pre-existing, pinned,
+# root-owned local Proxmox API CLI rather than widening shared REST tokens.
+- name: Reconcile only declared jobs with PVE's native API endpoint
+  ansible.builtin.command:
+    argv: >-
+      {{
+        ['pvesh',
+         'create' if item.action == 'CREATE' else 'set',
+         '/cluster/backup' ~ (('/' ~ item.id) if item.action == 'UPDATE' else '')]
+        + (['--id', item.id] if item.action == 'CREATE' else [])
+        + ['--all', item.desired.all | string,
+           '--node', item.desired.node,
+           '--storage', item.desired.storage,
+           '--vmid', item.desired.vmid,
+           '--schedule', item.desired.schedule,
+           '--mode', item.desired.mode,
+           '--compress', item.desired.compress,
+           '--prune-backups', item.desired['prune-backups'],
+           '--enabled', item.desired.enabled | string,
+           '--comment', item.desired.comment]
+      }}
+  delegate_to: pve_write_host
+  become: true
+  loop: "{{ pve_backup_jobs_plan }}"
+  loop_control:
+    label: "{{ item.id }}: {{ item.action }}"
+  when: item.action in ['CREATE', 'UPDATE']
+  register: pve_backup_jobs_write
+  changed_when: true
+  no_log: true
+
+- name: Report bounded API writes
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      api: "pvesh /cluster/backup"
+      writes_submitted: >-
+        {{ pve_backup_jobs_plan
+           | selectattr('action', 'in', ['CREATE', 'UPDATE'])
+           | list | length }}
+      result: PASS

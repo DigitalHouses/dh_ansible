@@ -1,0 +1,22 @@
+---
+- import_playbook: apply-truenas-base.yml
+  vars:
+    truenas_controlled_rebuild: true
+
+- import_playbook: publish-site-runtime-secrets.yml
+
+- import_playbook: apply-truenas-runtime.yml
+
+- import_playbook: apply-truenas-storage.yml
+
+# Fresh base provisioning deliberately attaches the data controller on the first
+# storage pass and requires a new discovery/plan before any pool write.
+- import_playbook: apply-truenas-storage.yml
+
+- import_playbook: apply-truenas-identities.yml
+
+- import_playbook: apply-truenas-access.yml
+
+- import_playbook: apply-truenas-cloudsync.yml
+
+- import_playbook: apply-pve-backup-storage.yml

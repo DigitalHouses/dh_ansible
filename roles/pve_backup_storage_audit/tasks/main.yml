@@ -1,0 +1,118 @@
+---
+- name: Validate PVE backup storage audit contract
+  ansible.builtin.assert:
+    that:
+      - pve is mapping
+      - pve.backup_storage is mapping
+      - pve.backup_storage.id | length > 0
+      - pve.backup_storage.type == "nfs"
+      - pve.tls.sha256_fingerprint | length > 0
+      - pve.auth.user | length > 0
+      - pve.auth.token_id | length > 0
+      - site_secrets.pve.audit_token_secret | length > 0
+    fail_msg: "PVE backup storage audit contract is incomplete."
+  no_log: true
+
+- name: Read PVE TLS certificate fingerprint
+  ansible.builtin.shell:
+    cmd: >-
+      openssl s_client
+      -connect {{ pve.host }}:{{ pve.port }}
+      -servername {{ pve.host }}
+      </dev/null 2>/dev/null
+      | openssl x509 -noout -fingerprint -sha256
+  register: pve_backup_storage_tls
+  changed_when: false
+
+- name: Assert pinned PVE TLS identity
+  ansible.builtin.assert:
+    that:
+      - ("sha256 Fingerprint=" ~ pve.tls.sha256_fingerprint) in pve_backup_storage_tls.stdout
+    fail_msg: "PVE TLS fingerprint mismatch. Storage API requests were not attempted."
+
+- name: Read PVE cluster storage configuration
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/storage"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: pve_backup_storage_config_raw
+  changed_when: false
+  no_log: true
+
+- name: Read PVE node storage runtime state
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/storage"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: pve_backup_storage_runtime_raw
+  changed_when: false
+  no_log: true
+
+- name: Select managed PVE backup storage observations
+  ansible.builtin.set_fact:
+    pve_backup_storage_config_matches: >-
+      {{
+        pve_backup_storage_config_raw.json.data
+        | selectattr('storage', 'equalto', pve.backup_storage.id)
+        | list
+      }}
+    pve_backup_storage_runtime_matches: >-
+      {{
+        pve_backup_storage_runtime_raw.json.data
+        | selectattr('storage', 'equalto', pve.backup_storage.id)
+        | list
+      }}
+  changed_when: false
+  no_log: true
+
+- name: Publish sanitized PVE backup storage observation
+  ansible.builtin.set_fact:
+    pve_backup_storage_observed:
+      config_count: "{{ pve_backup_storage_config_matches | length }}"
+      config: >-
+        {{
+          pve_backup_storage_config_matches[0]
+          if (pve_backup_storage_config_matches | length) == 1
+          else {}
+        }}
+      runtime_count: "{{ pve_backup_storage_runtime_matches | length }}"
+      runtime: >-
+        {{
+          pve_backup_storage_runtime_matches[0]
+          if (pve_backup_storage_runtime_matches | length) == 1
+          else {}
+        }}
+  changed_when: false
+  no_log: true
+
+- name: Report sanitized PVE backup storage audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      storage_id: "{{ pve.backup_storage.id }}"
+      config_count: "{{ pve_backup_storage_observed.config_count }}"
+      config:
+        type: "{{ pve_backup_storage_observed.config.type | default('') }}"
+        server: "{{ pve_backup_storage_observed.config.server | default('') }}"
+        export: "{{ pve_backup_storage_observed.config.export | default('') }}"
+        content: "{{ pve_backup_storage_observed.config.content | default('') }}"
+        options: "{{ pve_backup_storage_observed.config.options | default('') }}"
+        nodes: "{{ pve_backup_storage_observed.config.nodes | default('') }}"
+        disabled: "{{ pve_backup_storage_observed.config.disable | default(0) | int }}"
+      runtime:
+        present: "{{ (pve_backup_storage_observed.runtime_count | int) == 1 }}"
+        active: "{{ pve_backup_storage_observed.runtime.active | default(0) | int }}"
+        enabled: "{{ pve_backup_storage_observed.runtime.enabled | default(0) | int }}"
+      result: PASS

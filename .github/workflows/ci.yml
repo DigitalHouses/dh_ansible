@@ -1,0 +1,74 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Block unsafe public source tree before installing dependencies
+        run: python3 bin/public-boundary-check.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
+
+      - name: Install Ansible collections
+        run: ansible-galaxy collection install -r requirements/collections.yml
+
+      - name: Validate repository policies
+        run: python -m pytest -q -m "not private_fleet" tests/
+      - name: Validate runner wrapper syntax
+        run: bash -n bin/ansimble-run
+      - name: Validate Semaphore bootstrap launcher shell syntax
+        run: bash -n bootstrap/semaphore-launch.sh
+      - name: Validate Ansible syntax
+        run: |
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-runner.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-runner-remote-commander.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-nut-baseline.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-provision.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-base.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-truenas-runtime.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-runtime.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-runtime.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/accept-truenas-recovery.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/verify-truenas-recovery.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-controlled-rebuild.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-destructive-rebuild.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-destructive-rebuild.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/resume-truenas-destructive-rebuild.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/recover-truenas-base.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-storage.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-storage.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-truenas-access.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-access.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-access.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-human-admin.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-human-admin.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/set-fleet-truenas-human-admin-password.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/rotate-truenas-human-admin-password.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-truenas-cloudsync.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-cloudsync.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-cloudsync.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-pve-backup-storage.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-backup-storage.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-backup-storage.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-pve-backup-jobs.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-backup-jobs.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-backup-jobs.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/run-pve-backup-once.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/accept-pve-backup-restore.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-restore-isolation.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/set-backblaze-b2-credentials.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/publish-site-runtime-secrets.yml

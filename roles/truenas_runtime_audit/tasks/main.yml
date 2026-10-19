@@ -1,0 +1,123 @@
+---
+- name: Validate TrueNAS runtime audit contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state in ["access_ready", "managed"]
+      - truenas_provision.vm.memory_mb | int >= 4096
+      - truenas_provision.vm.runtime.run_tmpfs.max_mb | int >= 512
+      - truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int > 0
+      - truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int < 100
+      - truenas_provision.vm.runtime.run_tmpfs.init_comment | length > 0
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+    fail_msg: "TrueNAS runtime audit prerequisites are incomplete."
+  no_log: true
+
+- name: Read current PVE TrueNAS VM configuration
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/nodes/{{ pve.node }}/qemu/{{ truenas_provision.vm.vmid }}/config"
+      - --output-format
+      - json
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_pve_config_raw
+  changed_when: false
+
+- name: Read current TrueNAS /run tmpfs usage through QEMU guest agent
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /bin/df
+      - -B1
+      - --output=size,used,pcent
+      - /run
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_run_df_raw
+  changed_when: false
+
+- name: Audit managed TrueNAS PREINIT runtime policy
+  truenas_initshutdown_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired:
+      type: "COMMAND"
+      command: >-
+        mount -o remount,size={{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}M /run
+      script: ""
+      when: "PREINIT"
+      enabled: true
+      timeout: 10
+      comment: "{{ truenas_provision.vm.runtime.run_tmpfs.init_comment }}"
+    apply: false
+  register: truenas_runtime_init_policy_audit
+  changed_when: false
+  no_log: true
+
+- name: Parse TrueNAS runtime observations
+  ansible.builtin.set_fact:
+    truenas_runtime_pve_config: "{{ truenas_runtime_pve_config_raw.stdout | from_json }}"
+    truenas_runtime_run_df: "{{ truenas_runtime_run_df_raw.stdout | from_json }}"
+  changed_when: false
+
+- name: Parse /run tmpfs numeric observations
+  ansible.builtin.set_fact:
+    truenas_runtime_run_numbers: >-
+      {{
+        (
+          truenas_runtime_run_df['out-data']
+          | default('')
+        ).splitlines()
+        | reject('equalto', '')
+        | list
+        | last
+        | regex_findall('[0-9]+')
+      }}
+  changed_when: false
+
+- name: Validate parsed TrueNAS runtime observations
+  ansible.builtin.assert:
+    that:
+      - truenas_runtime_pve_config.memory is defined
+      - truenas_runtime_run_numbers | length == 3
+    fail_msg: "TrueNAS runtime observation output could not be parsed safely."
+
+- name: Publish sanitized TrueNAS runtime observations
+  ansible.builtin.set_fact:
+    truenas_runtime_observed:
+      memory_mb: "{{ truenas_runtime_pve_config.memory | int }}"
+      balloon_mb: "{{ truenas_runtime_pve_config.balloon | default(0) | int }}"
+      status: "{{ truenas_runtime_pve_config.status | default('unknown') }}"
+      run_tmpfs:
+        size_bytes: "{{ truenas_runtime_run_numbers[0] | int }}"
+        used_bytes: "{{ truenas_runtime_run_numbers[1] | int }}"
+        usage_percent: "{{ truenas_runtime_run_numbers[2] | int }}"
+      init_policy:
+        action: "{{ truenas_runtime_init_policy_audit.action }}"
+        observed: "{{ truenas_runtime_init_policy_audit.observed }}"
+  changed_when: false
+
+- name: Report sanitized TrueNAS runtime audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      observed: "{{ truenas_runtime_observed }}"
+      desired:
+        memory_mb: "{{ truenas_provision.vm.memory_mb | int }}"
+        balloon_mb: 0
+        run_tmpfs_max_mb: "{{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}"
+        run_tmpfs_max_usage_percent: "{{ truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int }}"
+        init_comment: "{{ truenas_provision.vm.runtime.run_tmpfs.init_comment }}"

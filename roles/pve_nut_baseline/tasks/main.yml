@@ -1,0 +1,544 @@
+---
+- name: Validate PVE NUT baseline contract
+  ansible.builtin.assert:
+    that:
+      - ups is mapping
+      - ups.provisioning.always_install | bool
+      - ups.provisioning.control_user == 'dh_primary_user'
+      - ups.nut.mode == 'standalone'
+      - ups.nut.server.listen_host == '127.0.0.1'
+      - ups.nut.server.port | int == 3493
+      - ups.nut.driver == 'usbhid-ups'
+      - ups.nut.port == 'auto'
+      - ups.nut.fsd.enabled is defined
+      - ups.nut.monitor.expected_state in ['enabled', 'disabled']
+      - (ups.nut.fsd.enabled | bool) == (ups.nut.monitor.expected_state == 'enabled')
+      - ups.write_ready | bool
+    fail_msg: "PVE NUT baseline apply is not authorized or the inventory contract is incomplete."
+
+
+- name: Install standard NUT packages
+  ansible.builtin.apt:
+    name: "{{ ups.provisioning.packages }}"
+    state: present
+    update_cache: false
+
+- name: Ensure DigitalHouses secret directory exists
+  ansible.builtin.file:
+    path: "{{ ups.provisioning.secret_file | dirname }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Check persistent NUT control secret
+  ansible.builtin.stat:
+    path: "{{ ups.provisioning.secret_file }}"
+  register: pve_nut_secret_stat
+
+- name: Generate persistent NUT control secret once
+  ansible.builtin.shell:
+    cmd: "umask 077 && openssl rand -hex 32 > {{ ups.provisioning.secret_file | quote }}"
+    creates: "{{ ups.provisioning.secret_file }}"
+  no_log: true
+  when: not pve_nut_secret_stat.stat.exists
+
+- name: Enforce NUT control secret ownership
+  ansible.builtin.file:
+    path: "{{ ups.provisioning.secret_file }}"
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Read persistent NUT control secret
+  ansible.builtin.slurp:
+    src: "{{ ups.provisioning.secret_file }}"
+  register: pve_nut_secret_raw
+  no_log: true
+
+- name: Decode persistent NUT control secret
+  ansible.builtin.set_fact:
+    pve_nut_control_secret: "{{ pve_nut_secret_raw.content | b64decode | trim }}"
+  no_log: true
+
+- name: Check existing NUT UPS configuration
+  ansible.builtin.stat:
+    path: /etc/nut/ups.conf
+  register: pve_nut_ups_conf_stat
+
+- name: Read existing selected UPS section
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - |
+        import json
+        import re
+        import sys
+        from pathlib import Path
+
+        path, target = sys.argv[1], sys.argv[2]
+        section = None
+        values = {}
+
+        for raw in Path(path).read_text(
+            encoding="utf-8",
+            errors="replace",
+        ).splitlines():
+            line = raw.strip()
+
+            if not line or line.startswith(("#", ";")):
+                continue
+
+            match = re.match(
+                r"^\[([^\]]+)\]\s*(?:[#;].*)?$",
+                line,
+            )
+            if match:
+                section = match.group(1).strip()
+                if section != target and values:
+                    break
+                continue
+
+            if section != target or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip().lower()
+            value = value.strip()
+
+            if (
+                len(value) >= 2
+                and value[0] == value[-1]
+                and value[0] in ('"', "'")
+            ):
+                value = value[1:-1]
+
+            values[key] = value
+
+        print(json.dumps(values, sort_keys=True))
+      - /etc/nut/ups.conf
+      - "{{ ups.nut.ups_name }}"
+  register: pve_nut_existing_ups_section_raw
+  changed_when: false
+  when: pve_nut_ups_conf_stat.stat.exists
+
+- name: Parse existing selected UPS section
+  ansible.builtin.set_fact:
+    pve_nut_existing_ups_section: >-
+      {{
+        (pve_nut_existing_ups_section_raw.stdout | from_json)
+        if (pve_nut_ups_conf_stat.stat.exists)
+        else {}
+      }}
+  changed_when: false
+
+- name: Validate compatible existing selected UPS section
+  ansible.builtin.assert:
+    that:
+      - >-
+        (pve_nut_existing_ups_section | length == 0)
+        or
+        (
+          pve_nut_existing_ups_section.get('driver', '') == ups.nut.driver
+          and
+          pve_nut_existing_ups_section.get('port', '') == ups.nut.port
+        )
+    fail_msg: "Existing selected UPS section conflicts with the DigitalHouses baseline; refusing blind overwrite."
+
+- name: Read existing NUT user configuration
+  ansible.builtin.slurp:
+    src: /etc/nut/upsd.users
+  register: pve_nut_users_raw
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Validate managed NUT user ownership
+  ansible.builtin.assert:
+    that:
+      - >-
+        (pve_nut_users_raw is failed)
+        or
+        (
+          ('[' ~ ups.provisioning.control_user ~ ']')
+          not in
+          (pve_nut_users_raw.content | default('') | b64decode)
+        )
+        or
+        (
+          'BEGIN DIGITALHOUSES MANAGED PRIMARY USER'
+          in
+          (pve_nut_users_raw.content | default('') | b64decode)
+        )
+    fail_msg: "Existing unmanaged NUT control user found; refusing blind overwrite."
+  no_log: true
+
+- name: Read existing upsmon configuration
+  ansible.builtin.slurp:
+    src: /etc/nut/upsmon.conf
+  register: pve_nut_upsmon_raw
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Validate upsmon MONITOR ownership
+  ansible.builtin.shell:
+    cmd: |
+      python3 - <<'PY'
+      import os
+      import re
+
+      text = os.environ.get("DH_UPSMON_TEXT", "")
+      begin = "# BEGIN DIGITALHOUSES MANAGED MONITOR"
+      end = "# END DIGITALHOUSES MANAGED MONITOR"
+      managed = re.sub(
+          re.escape(begin) + r".*?" + re.escape(end),
+          "",
+          text,
+          flags=re.S,
+      )
+      lines = [
+          line.strip()
+          for line in managed.splitlines()
+          if line.strip() and not line.lstrip().startswith("#")
+      ]
+      if any(line.upper().startswith("MONITOR ") for line in lines):
+          raise SystemExit(1)
+      PY
+  environment:
+    DH_UPSMON_TEXT: "{{ pve_nut_upsmon_raw.content | default('') | b64decode }}"
+  changed_when: false
+  no_log: true
+  when: ups.nut.fsd.enabled | bool
+
+- name: Check existing loopback NUT listener
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/grep
+      - -E
+      - "^\\s*LISTEN\\s+{{ ups.nut.server.listen_host | regex_escape }}\\s+{{ ups.nut.server.port }}\\s*$"
+      - /etc/nut/upsd.conf
+  register: pve_nut_listener_probe
+  failed_when: pve_nut_listener_probe.rc not in [0, 1, 2]
+  changed_when: false
+
+- name: Configure NUT standalone mode
+  ansible.builtin.lineinfile:
+    path: /etc/nut/nut.conf
+    regexp: '^\\s*MODE\\s*='
+    line: 'MODE=standalone'
+    create: true
+    owner: root
+    group: nut
+    mode: "0640"
+    backup: true
+  notify: Restart NUT server
+
+- name: Configure standard local UPS driver
+  ansible.builtin.blockinfile:
+    path: /etc/nut/ups.conf
+    marker: "# {mark} DIGITALHOUSES MANAGED UPS"
+    block: |
+      [{{ ups.nut.ups_name }}]
+          driver = {{ ups.nut.driver }}
+          port = {{ ups.nut.port }}
+    create: true
+    owner: root
+    group: nut
+    mode: "0640"
+    backup: true
+  notify:
+    - Reconcile NUT driver services
+    - Restart NUT server
+  when: pve_nut_existing_ups_section | length == 0
+
+- name: Configure loopback-only NUT server
+  ansible.builtin.blockinfile:
+    path: /etc/nut/upsd.conf
+    marker: "# {mark} DIGITALHOUSES MANAGED LISTENER"
+    block: |
+      LISTEN {{ ups.nut.server.listen_host }} {{ ups.nut.server.port }}
+    create: true
+    owner: root
+    group: nut
+    mode: "0640"
+    backup: true
+  notify: Restart NUT server
+  when: pve_nut_listener_probe.rc != 0
+
+- name: Configure managed NUT primary user
+  ansible.builtin.blockinfile:
+    path: /etc/nut/upsd.users
+    marker: "# {mark} DIGITALHOUSES MANAGED PRIMARY USER"
+    block: |
+      [{{ ups.provisioning.control_user }}]
+          password = {{ pve_nut_control_secret }}
+          upsmon primary
+          instcmds = ALL
+    create: true
+    owner: root
+    group: nut
+    mode: "0640"
+    backup: true
+  no_log: true
+  notify: Restart NUT server
+
+- name: Check retired DigitalHouses threshold service
+  ansible.builtin.stat:
+    path: /etc/systemd/system/digitalhouses-nut-shutdown-policy.service
+  register: pve_nut_retired_unit
+
+- name: Stop and disable retired DigitalHouses threshold service
+  ansible.builtin.systemd_service:
+    name: digitalhouses-nut-shutdown-policy.service
+    state: stopped
+    enabled: false
+  when: pve_nut_retired_unit.stat.exists
+
+- name: Remove retired DigitalHouses threshold service unit
+  ansible.builtin.file:
+    path: /etc/systemd/system/digitalhouses-nut-shutdown-policy.service
+    state: absent
+  when: pve_nut_retired_unit.stat.exists
+  notify: Reload systemd
+
+- name: Remove retired DigitalHouses threshold helper
+  ansible.builtin.file:
+    path: /usr/local/libexec/digitalhouses-nut-shutdown-policy
+    state: absent
+
+- name: Read existing native NUT shutdown command
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/grep
+      - -E
+      - '^\s*SHUTDOWNCMD\s+'
+      - /etc/nut/upsmon.conf
+  register: pve_nut_shutdowncmd_probe
+  changed_when: false
+  failed_when: pve_nut_shutdowncmd_probe.rc not in [0, 1]
+  when: ups.nut.fsd.enabled | bool
+
+- name: Refuse unsafe native NUT shutdown command
+  ansible.builtin.assert:
+    that:
+      - >-
+        pve_nut_shutdowncmd_probe.rc == 1
+        or
+        (
+          '/sbin/shutdown -h' in pve_nut_shutdowncmd_probe.stdout
+          or '/usr/sbin/shutdown -h' in pve_nut_shutdowncmd_probe.stdout
+        )
+    fail_msg: "Existing NUT SHUTDOWNCMD is unknown or not a real host shutdown command."
+  when: ups.nut.fsd.enabled | bool
+
+- name: Install native NUT shutdown command only when absent
+  ansible.builtin.lineinfile:
+    path: /etc/nut/upsmon.conf
+    regexp: '^\s*SHUTDOWNCMD\s+'
+    line: 'SHUTDOWNCMD "/sbin/shutdown -h now"'
+    backup: true
+  register: pve_nut_shutdown_command_config
+  when: ups.nut.fsd.enabled | bool and pve_nut_shutdowncmd_probe.rc == 1
+
+- name: Read native NUT monitor state before applying changes
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - nut-monitor.service
+  register: pve_nut_monitor_before
+  changed_when: false
+  failed_when: false
+
+- name: Configure primary upsmon for emergency shutdown
+  ansible.builtin.blockinfile:
+    path: /etc/nut/upsmon.conf
+    marker: "# {mark} DIGITALHOUSES MANAGED MONITOR"
+    block: |
+      MONITOR {{ ups.nut.ups_name }}@{{ ups.nut.server.listen_host }} 1 {{ ups.provisioning.control_user }} {{ pve_nut_control_secret }} primary
+    state: "{{ 'present' if (ups.nut.fsd.enabled | bool) else 'absent' }}"
+    backup: true
+  register: pve_nut_monitor_config
+  no_log: true
+
+- name: Enable NUT server
+  ansible.builtin.systemd_service:
+    name: nut-server.service
+    enabled: true
+    state: started
+
+- name: Reconcile NUT driver service instances
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/upsdrvsvcctl
+      - resync
+  register: pve_nut_resync
+  changed_when: pve_nut_resync.rc == 42
+  failed_when: pve_nut_resync.rc not in [0, 42]
+
+- name: Flush NUT baseline handlers
+  ansible.builtin.meta: flush_handlers
+
+- name: Check selected UPS telemetry
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/upsc
+      - "{{ ups.nut.ups_name }}@{{ ups.nut.server.listen_host }}"
+  register: pve_nut_upsc
+  changed_when: false
+  failed_when: false
+
+- name: Safely probe managed NUT credentials and command capabilities
+  ansible.builtin.shell:
+    cmd: |
+      python3 - <<'PY'
+      import os
+      import socket
+
+      host = os.environ["DH_NUT_HOST"]
+      port = int(os.environ["DH_NUT_PORT"])
+      user = os.environ["DH_NUT_USER"]
+      password = os.environ["DH_NUT_PASSWORD"]
+      ups = os.environ["DH_NUT_UPS"]
+
+      sock = socket.create_connection((host, port), timeout=3)
+      sock.settimeout(3)
+      reader = sock.makefile("r", encoding="utf-8")
+      writer = sock.makefile("w", encoding="utf-8")
+
+      def expect_ok(command):
+          writer.write(command + "\n")
+          writer.flush()
+          response = reader.readline().strip()
+          if not response.startswith("OK"):
+              raise RuntimeError(response)
+
+      expect_ok("USERNAME " + user)
+      expect_ok("PASSWORD " + password)
+      expect_ok("PRIMARY " + ups)
+
+      writer.write("LIST CMD " + ups + "\n")
+      writer.flush()
+      first = reader.readline().strip()
+      if not first.startswith("BEGIN LIST CMD "):
+          raise RuntimeError(first)
+
+      commands = []
+      while True:
+          line = reader.readline().strip()
+          if line.startswith("END LIST CMD "):
+              break
+          parts = line.split()
+          if len(parts) >= 3 and parts[0] == "CMD":
+              commands.append(parts[2])
+
+      print("\n".join(sorted(commands)))
+      sock.close()
+      PY
+  environment:
+    DH_NUT_HOST: "{{ ups.nut.server.listen_host }}"
+    DH_NUT_PORT: "{{ ups.nut.server.port | string }}"
+    DH_NUT_USER: "{{ ups.provisioning.control_user }}"
+    DH_NUT_PASSWORD: "{{ pve_nut_control_secret }}"
+    DH_NUT_UPS: "{{ ups.nut.ups_name }}"
+  register: pve_nut_commands
+  changed_when: false
+  failed_when: false
+  no_log: true
+  when: pve_nut_upsc.rc == 0
+
+- name: Read selected UPS power state before enabling PRIMARY
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/upsc
+      - "{{ ups.nut.ups_name }}@{{ ups.nut.server.listen_host }}"
+      - ups.status
+  register: pve_nut_power_state
+  changed_when: false
+  failed_when: false
+  when: ups.nut.fsd.enabled | bool and pve_nut_upsc.rc == 0
+
+- name: Require stable utility power before enabling PRIMARY
+  ansible.builtin.assert:
+    that:
+      - pve_nut_power_state.rc == 0
+      - "'OL' in pve_nut_power_state.stdout.split()"
+      - "'OB' not in pve_nut_power_state.stdout.split()"
+      - "'LB' not in pve_nut_power_state.stdout.split()"
+      - "'FSD' not in pve_nut_power_state.stdout.split()"
+    fail_msg: "NUT PRIMARY activation blocked: UPS is not safely on utility power."
+  when: ups.nut.fsd.enabled | bool and pve_nut_upsc.rc == 0
+
+- name: Enable native NUT PRIMARY monitor
+  ansible.builtin.systemd_service:
+    name: nut-monitor.service
+    state: started
+    enabled: true
+    masked: false
+  when: ups.nut.fsd.enabled | bool and pve_nut_upsc.rc == 0
+
+- name: Restart active NUT monitor after managed MONITOR change
+  ansible.builtin.systemd_service:
+    name: nut-monitor.service
+    state: restarted
+  when:
+    - ups.nut.fsd.enabled | bool
+    - pve_nut_upsc.rc == 0
+    - (pve_nut_monitor_config is changed) or (pve_nut_shutdown_command_config is changed)
+    - pve_nut_monitor_before.stdout == 'active'
+
+- name: Keep NUT monitor off when PRIMARY is not commissioned
+  ansible.builtin.systemd_service:
+    name: nut-monitor.service
+    state: stopped
+    enabled: false
+    masked: true
+  when: not (ups.nut.fsd.enabled | bool) or pve_nut_upsc.rc != 0
+
+- name: Verify NUT monitor state
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - nut-monitor.service
+  register: pve_nut_monitor_state
+  changed_when: false
+  failed_when: false
+
+- name: Verify NUT baseline services
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/systemctl
+      - is-active
+      - nut-server.service
+  register: pve_nut_server_state
+  changed_when: false
+
+- name: Assert PVE NUT baseline acceptance
+  ansible.builtin.assert:
+    that:
+      - pve_nut_server_state.stdout == 'active'
+      - not (ups.device.required | bool) or pve_nut_upsc.rc == 0
+      - >-
+        ((ups.nut.fsd.enabled | bool) and pve_nut_upsc.rc == 0 and pve_nut_monitor_state.stdout == 'active')
+        or
+        ((not ups.nut.fsd.enabled | bool or pve_nut_upsc.rc != 0) and pve_nut_monitor_state.stdout != 'active')
+      - (pve_nut_upsc.rc != 0) or (pve_nut_commands.rc == 0)
+    fail_msg: "PVE NUT baseline acceptance failed."
+
+- name: Report PVE NUT baseline
+  ansible.builtin.debug:
+    msg:
+      result: PASS
+      always_installed: true
+      selected_ups: "{{ ups.nut.ups_name }}"
+      server: "{{ ups.nut.server.listen_host }}:{{ ups.nut.server.port }}"
+      control_user: "{{ ups.provisioning.control_user }}"
+      ups_present: "{{ pve_nut_upsc.rc == 0 }}"
+      command_probe: "{{ 'PASS' if pve_nut_upsc.rc == 0 else 'SKIPPED_NO_UPS' }}"
+      native_nut_primary: "{{ ups.nut.fsd.enabled }}"
+      nut_monitor_state: "{{ pve_nut_monitor_state.stdout }}"
+      agent_managed: false
+      secret_created: "{{ not pve_nut_secret_stat.stat.exists }}"

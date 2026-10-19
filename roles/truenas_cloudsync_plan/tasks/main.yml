@@ -1,0 +1,37 @@
+---
+- name: Validate TrueNAS Cloud Sync plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas_cloudsync_credentials is defined
+      - truenas_cloudsync_tasks is defined
+      - truenas_provision.storage.pool.name | length > 0
+      - truenas_provision.cloud_backup.credential.name | length > 0
+      - truenas_provision.cloud_backup.credential.provider_type == "B2"
+      - truenas_provision.cloud_backup.tasks | length > 0
+    fail_msg: "TrueNAS Cloud Sync plan prerequisites are incomplete."
+
+- name: Build TrueNAS Cloud Sync reconciliation plan
+  truenas_cloudsync_plan:
+    observed_credentials: "{{ truenas_cloudsync_credentials }}"
+    observed_tasks: "{{ truenas_cloudsync_tasks }}"
+    desired_credential: "{{ truenas_provision.cloud_backup.credential }}"
+    desired_tasks: "{{ truenas_provision.cloud_backup.tasks }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+  register: truenas_cloudsync_plan_result
+  changed_when: false
+
+- name: Report TrueNAS Cloud Sync plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_cloudsync_plan_result.result }}"
+      credential: "{{ truenas_cloudsync_plan_result.credential }}"
+      tasks: "{{ truenas_cloudsync_plan_result.tasks }}"
+      gates: "{{ truenas_cloudsync_plan_result.gates }}"
+      issues: "{{ truenas_cloudsync_plan_result.issues }}"
+
+- name: Block unsafe TrueNAS Cloud Sync plan
+  ansible.builtin.assert:
+    that:
+      - truenas_cloudsync_plan_result.result == "PASS"
+    fail_msg: "TrueNAS Cloud Sync plan is blocked; no writes are authorized."

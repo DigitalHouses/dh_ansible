@@ -1,0 +1,43 @@
+---
+- name: Apply PVE guest lifecycle
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site PVE variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load site PVE lifecycle target
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_lifecycle.yml"
+
+  roles:
+    - role: pve_audit
+    - role: pve_lifecycle_plan
+    - role: pve_lifecycle_apply
+
+  post_tasks:
+    - name: Re-read PVE after lifecycle apply
+      ansible.builtin.include_role:
+        name: pve_audit
+
+    - name: Re-plan PVE lifecycle after apply
+      ansible.builtin.include_role:
+        name: pve_lifecycle_plan
+
+    - name: Assert lifecycle apply converged
+      ansible.builtin.assert:
+        that:
+          - pve_lifecycle_plan_entries | selectattr('action', 'equalto', 'UPDATE') | list | length == 0
+          - pve_lifecycle_plan_entries | selectattr('action', 'equalto', 'BLOCK') | list | length == 0
+        fail_msg: "PVE lifecycle verify failed: desired state did not converge."
+
+    - name: Report lifecycle verification
+      ansible.builtin.debug:
+        msg:
+          managed_guests: "{{ pve_lifecycle.managed_guests | length }}"
+          pending_updates: 0
+          blocked: 0
+          result: PASS

@@ -1,0 +1,89 @@
+---
+- name: Validate TrueNAS access audit contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas_provision.storage.pool.name | length > 0
+      - truenas_provision.storage.layout.datasets is sequence
+      - truenas_provision.storage.layout.directories is sequence
+      - truenas.auth.username | length > 0
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas.audit_api_key is defined
+      - site_secrets.truenas.audit_api_key | length > 0
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+    fail_msg: "TrueNAS access audit prerequisites are incomplete."
+  no_log: true
+
+- name: Initialize declared TrueNAS access paths
+  ansible.builtin.set_fact:
+    truenas_access_paths:
+      - "/mnt/{{ truenas_provision.storage.pool.name }}"
+  changed_when: false
+
+- name: Add declared dataset paths to access audit
+  ansible.builtin.set_fact:
+    truenas_access_paths: >-
+      {{
+        truenas_access_paths
+        + ['/mnt/' ~ truenas_provision.storage.pool.name ~ '/' ~ item]
+      }}
+  loop: "{{ truenas_provision.storage.layout.datasets }}"
+  changed_when: false
+
+- name: Add declared directory paths to access audit
+  ansible.builtin.set_fact:
+    truenas_access_paths: >-
+      {{
+        truenas_access_paths
+        + ['/mnt/' ~ truenas_provision.storage.pool.name ~ '/' ~ item]
+      }}
+  loop: "{{ truenas_provision.storage.layout.directories }}"
+  changed_when: false
+
+- name: Observe TrueNAS access state through persistent read sessions
+  truenas_access_observe:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    audit_username: "{{ truenas.auth.username }}"
+    audit_api_key: "{{ site_secrets.truenas.audit_api_key }}"
+    filesystem_username: "{{ truenas.auth.write_username }}"
+    filesystem_api_key: "{{ site_secrets.truenas.write_api_key }}"
+    paths: "{{ truenas_access_paths | unique | list }}"
+    timeout: 30
+  register: truenas_access_observe_result
+  changed_when: false
+
+- name: Publish sanitized TrueNAS access observations
+  ansible.builtin.set_fact:
+    truenas_access_acls: "{{ truenas_access_observe_result.acls }}"
+    truenas_access_directory_counts: "{{ truenas_access_observe_result.directory_counts }}"
+    truenas_access_observed:
+      results:
+        smb_shares: "{{ truenas_access_observe_result.smb_shares }}"
+        nfs_shares: "{{ truenas_access_observe_result.nfs_shares }}"
+        services: "{{ truenas_access_observe_result.services }}"
+        nfs_config: "{{ truenas_access_observe_result.nfs_config }}"
+        smb_config: "{{ truenas_access_observe_result.smb_config }}"
+  changed_when: false
+
+- name: Report sanitized TrueNAS access audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_access_observe_result.result }}"
+      paths: "{{ truenas_access_paths | unique | list }}"
+      acls: "{{ truenas_access_acls }}"
+      directory_counts: "{{ truenas_access_directory_counts }}"
+      smb_shares: "{{ truenas_access_observed.results.smb_shares }}"
+      nfs_shares: "{{ truenas_access_observed.results.nfs_shares }}"
+      services: >-
+        {{
+          truenas_access_observed.results.services
+          | selectattr('service', 'in', ['cifs', 'smb', 'nfs'])
+          | list
+        }}
+      nfs_config: "{{ truenas_access_observed.results.nfs_config }}"
+      smb_config: "{{ truenas_access_observed.results.smb_config }}"

@@ -1,0 +1,276 @@
+---
+- name: Validate TrueNAS storage apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas_storage_plan_result == "PASS"
+      - truenas_storage_controller_action in ["ATTACH", "RECONCILE"]
+      - site_secrets is mapping
+      - site_secrets.pve is mapping
+      - site_secrets.pve.write_token_secret | length > 0
+      - site_secrets.truenas is mapping
+      - site_secrets.truenas.write_api_key | length > 0
+      - truenas.tls.sha256_fingerprint is defined
+      - truenas.tls.sha256_fingerprint | length > 0
+    fail_msg: >-
+      TrueNAS storage apply is blocked by plan, credentials, or TLS identity.
+
+- name: Read physical storage controller identity
+  ansible.builtin.command:
+    argv:
+      - lspci
+      - -D
+      - -nnk
+      - -s
+      - "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_storage_controller_lspci
+  changed_when: false
+
+- name: Report physical storage controller identity
+  ansible.builtin.debug:
+    msg:
+      address: "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+      expected_class: "{{ truenas_provision.vm.storage_controller_passthrough.expected_class }}"
+      expected_pci_id: "{{ truenas_provision.vm.storage_controller_passthrough.expected_pci_id }}"
+      expected_device_name: "{{ truenas_provision.vm.storage_controller_passthrough.expected_device_name | default('diagnostic-only') }}"
+      expected_host_driver: "{{ truenas_provision.vm.storage_controller_passthrough.host_driver }}"
+      observed: "{{ truenas_storage_controller_lspci.stdout_lines }}"
+
+- name: Assert physical storage controller identity and host driver
+  ansible.builtin.assert:
+    that:
+      - truenas_provision.vm.storage_controller_passthrough.expected_class in truenas_storage_controller_lspci.stdout
+      - >-
+        ('['
+        ~ truenas_provision.vm.storage_controller_passthrough.expected_pci_id
+        ~ ']')
+        in truenas_storage_controller_lspci.stdout
+      - >-
+        ('Kernel driver in use: '
+        ~ truenas_provision.vm.storage_controller_passthrough.host_driver)
+        in truenas_storage_controller_lspci.stdout
+    fail_msg: >-
+      Physical SATA controller address/class/PCI-ID/driver mismatch.
+      Controller attach was not attempted.
+
+- name: Stop TrueNAS before whole-controller attach
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ site_secrets.pve.write_token_secret }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: stopped
+    force: true
+    timeout: 90
+  when:
+    - truenas_storage_controller_action == "ATTACH"
+    - truenas_storage_target_vm.status == "running"
+  no_log: true
+
+- name: Attach whole SATA controller with raw PCI passthrough
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --hostpci0
+      - >-
+        {{ truenas_provision.vm.storage_controller_passthrough.address
+        }},{{ truenas_provision.vm.storage_controller_passthrough.options }}
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_storage_controller_attach
+  changed_when: truenas_storage_controller_action == "ATTACH"
+  when: truenas_storage_controller_action == "ATTACH"
+
+- name: Read TrueNAS VM configuration after controller attach
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_storage_qm_config_after_attach
+  changed_when: false
+
+- name: Verify exact whole-controller passthrough
+  ansible.builtin.assert:
+    that:
+      - >-
+        ('hostpci0: '
+        ~ truenas_provision.vm.storage_controller_passthrough.address
+        ~ ','
+        ~ truenas_provision.vm.storage_controller_passthrough.options)
+        in truenas_storage_qm_config_after_attach.stdout
+    fail_msg: >-
+      TrueNAS VM does not expose the declared raw SATA controller after attach.
+
+- name: Start TrueNAS with data controller attached
+  community.proxmox.proxmox_kvm:
+    api_host: "{{ pve.host }}"
+    api_port: "{{ pve.port }}"
+    api_user: "{{ pve_access.api.write.user }}"
+    api_token_id: "{{ pve_access.api.write.token_id }}"
+    api_token_secret: "{{ site_secrets.pve.write_token_secret }}"
+    validate_certs: false
+    node: "{{ pve.node }}"
+    vmid: "{{ truenas_provision.vm.vmid | int }}"
+    state: started
+    timeout: 60
+  no_log: true
+
+- name: Wait for TrueNAS API after controller attach
+  ansible.builtin.wait_for:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    state: started
+    connect_timeout: 3
+    sleep: 5
+    timeout: 300
+
+- name: Discover data storage after controller attachment
+  truenas_storage_reconcile:
+    action: discover
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    pool_action: "{{ truenas_storage_pool_action_effective }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    topology: "{{ truenas_provision.storage.pool.topology.current }}"
+    allow_declared_storage_reset: false
+    timeout: 120
+  register: truenas_storage_post_attach_discovery
+  changed_when: false
+  no_log: true
+  when: truenas_storage_controller_action == "ATTACH"
+
+- name: Report controller attachment acceptance and require re-plan
+  ansible.builtin.debug:
+    msg:
+      result: ATTACHED_REPLAN_REQUIRED
+      vmid: "{{ truenas_provision.vm.vmid }}"
+      controller: "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+      data_disks: "{{ truenas_storage_post_attach_discovery.data_disks | default([]) }}"
+      importable_pools: "{{ truenas_storage_post_attach_discovery.importable_pools | default([]) }}"
+      next_phase: "re-run plan-truenas-storage.yml before any pool write"
+  when: truenas_storage_controller_action == "ATTACH"
+
+- name: Reconcile TrueNAS pool and base storage layout
+  truenas_storage_reconcile:
+    action: reconcile
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    pool_action: "{{ truenas_storage_pool_action_effective }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    topology: "{{ truenas_provision.storage.pool.topology.current }}"
+    allow_declared_storage_reset: >-
+      {{
+        (truenas_storage_declared_reset_effective | default(false) | bool)
+        or
+        (
+          truenas_provision.destructive_scope.declared_pool_create_storage_reset_authorized
+          | bool
+        )
+      }}
+    datasets: "{{ truenas_provision.storage.layout.datasets }}"
+    directories: "{{ truenas_provision.storage.layout.directories }}"
+    timeout: 900
+  register: truenas_storage_reconcile_result
+  no_log: true
+  when: truenas_storage_controller_action == "RECONCILE"
+
+- name: Apply final TrueNAS PVE lifecycle baseline
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --onboot
+      - "1"
+      - --startup
+      - "{{ truenas_provision.vm.startup }}"
+      - --agent
+      - "enabled=1"
+      - --protection
+      - "1"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_storage_lifecycle_apply
+  when:
+    - truenas_storage_controller_action == "RECONCILE"
+    - >-
+      (truenas_storage_target_vm.onboot | int != 1)
+      or (truenas_storage_target_vm.startup != truenas_provision.vm.startup)
+      or ('enabled=1' not in truenas_storage_target_vm.agent and truenas_storage_target_vm.agent != '1')
+      or (truenas_storage_target_vm.protection | int != 1)
+  changed_when: true
+
+- name: Read final TrueNAS VM configuration
+  ansible.builtin.command:
+    argv:
+      - qm
+      - config
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_storage_qm_config_final
+  changed_when: false
+
+- name: Verify final TrueNAS VM lifecycle and passthrough
+  ansible.builtin.assert:
+    that:
+      - "'onboot: 1' in truenas_storage_qm_config_final.stdout"
+      - >-
+        ('startup: ' ~ truenas_provision.vm.startup)
+        in truenas_storage_qm_config_final.stdout
+      - "'protection: 1' in truenas_storage_qm_config_final.stdout"
+      - >-
+        truenas_provision.vm.storage_controller_passthrough.address
+        in truenas_storage_qm_config_final.stdout
+    fail_msg: "Final TrueNAS PVE lifecycle verification failed."
+
+- name: Record managed TrueNAS lifecycle state
+  ansible.builtin.copy:
+    dest: "{{ inventory_dir }}/truenas.yml"
+    mode: "0644"
+    content: |
+      ---
+      truenas:
+        lifecycle_state: "managed"
+        host: {{ truenas.host }}
+        port: {{ truenas.port }}
+        endpoint: {{ truenas.endpoint }}
+        tls:
+          sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+        auth:
+          username: "{{ truenas.auth.username }}"
+          write_username: "{{ truenas.auth.write_username }}"
+  when:
+    - truenas_storage_controller_action == "RECONCILE"
+    - truenas.lifecycle_state != "managed"
+
+- name: Report TrueNAS storage acceptance
+  ansible.builtin.debug:
+    msg:
+      result: PASS
+      vmid: "{{ truenas_provision.vm.vmid }}"
+      controller: "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+      data_disks: "{{ truenas_storage_reconcile_result.data_disks }}"
+      pool: "{{ truenas_storage_reconcile_result.pool }}"
+      datasets: "{{ truenas_provision.storage.layout.datasets }}"
+      directories: "{{ truenas_provision.storage.layout.directories }}"
+      lifecycle_state: managed
+  when: truenas_storage_controller_action == "RECONCILE"

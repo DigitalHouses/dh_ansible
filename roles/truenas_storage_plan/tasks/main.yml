@@ -1,0 +1,272 @@
+---
+- name: Select effective TrueNAS storage recovery mode
+  ansible.builtin.set_fact:
+    truenas_storage_pool_action_effective: >-
+      {{
+        truenas_storage_pool_action_override
+        | default(truenas_provision.storage.pool.action)
+      }}
+    truenas_storage_declared_reset_effective: >-
+      {{
+        (truenas_destructive_rebuild_from_b2 | default(false) | bool)
+        and
+        (
+          truenas_storage_pool_action_override
+          | default(truenas_provision.storage.pool.action)
+        ) == 'create'
+        and
+        truenas_provision.destructive_scope.declared_pool_create_scope
+        == 'owned_controller_disks_only'
+        and
+        (truenas_provision.vm.storage_controller_passthrough.all_attached_disks_owned_by_guest | bool)
+      }}
+  changed_when: false
+
+- name: Validate TrueNAS storage plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas is mapping
+      - (truenas.lifecycle_state | default('unknown')) in ['access_ready', 'managed']
+      - truenas_provision is mapping
+      - truenas_provision.vm.storage_controller_passthrough.mode == "whole_controller"
+      - truenas_provision.vm.storage_controller_passthrough.attach_phase == "post_access_bootstrap"
+      - truenas_storage_pool_action_effective in ["create", "import"]
+      - >-
+        not (truenas_destructive_rebuild_from_b2 | default(false) | bool)
+        or truenas_storage_pool_action_effective == "create"
+      - truenas_provision.storage.pool.name == (site.owner_slug ~ "_pool")
+      - truenas_provision.storage.pool.topology.current == "single_disk"
+      - not (truenas_provision.storage.pool.topology.auto_select_redundancy | bool)
+    fail_msg: >-
+      TrueNAS storage plan contract is incomplete or violates the accepted
+      controller/pool policy.
+
+- name: Initialize TrueNAS storage observed state
+  ansible.builtin.set_fact:
+    truenas_storage_target_vm: {}
+    truenas_storage_controller_users: []
+    truenas_storage_discovery: {}
+  changed_when: false
+
+- name: Select target TrueNAS VM configuration
+  ansible.builtin.set_fact:
+    truenas_storage_target_vm:
+      vmid: "{{ item.item.vmid | int }}"
+      name: "{{ item.item.name | default(item.json.data.name | default('')) }}"
+      status: "{{ item.item.status | default('unknown') }}"
+      protection: "{{ item.json.data.protection | default(0) | int }}"
+      hostpci0: "{{ item.json.data.hostpci0 | default('') }}"
+      agent: "{{ item.json.data.agent | default('0') | string }}"
+      onboot: "{{ item.json.data.onboot | default(0) | int }}"
+      startup: "{{ item.json.data.startup | default('') }}"
+      unexpected_virtual_data_disks: >-
+        {{
+          item.json.data
+          | dict2items
+          | selectattr('key', 'match', '^(scsi|sata|virtio)[0-9]+$')
+          | rejectattr('key', 'equalto', 'scsi0')
+          | list
+        }}
+  loop: "{{ pve_qemu_configs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.vmid | default('unknown') }}"
+  when:
+    - item.item.vmid is defined
+    - item.item.vmid | int == truenas_provision.vm.vmid | int
+  changed_when: false
+  no_log: true
+
+- name: Detect VMs using desired storage controller
+  ansible.builtin.set_fact:
+    truenas_storage_controller_users: >-
+      {{
+        truenas_storage_controller_users
+        +
+        [item.item.vmid | int]
+      }}
+  vars:
+    hostpci_values: >-
+      {{
+        item.json.data
+        | dict2items
+        | selectattr('key', 'match', '^hostpci[0-9]+$')
+        | map(attribute='value')
+        | list
+      }}
+  loop: "{{ pve_qemu_configs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.vmid | default('unknown') }}"
+  when:
+    - item.item.vmid is defined
+    - truenas_provision.vm.storage_controller_passthrough.address in (hostpci_values | join(' '))
+  changed_when: false
+  no_log: true
+
+- name: Classify controller attach action
+  ansible.builtin.set_fact:
+    truenas_storage_controller_action: >-
+      {%- if truenas_storage_target_vm | length == 0 -%}
+      BLOCK
+      {%- elif truenas_storage_target_vm.name != truenas_provision.vm.name -%}
+      BLOCK
+      {%- elif
+        (
+          truenas_storage_controller_users
+          | reject('equalto', truenas_provision.vm.vmid | int)
+          | list
+          | length
+        ) > 0
+      -%}
+      BLOCK
+      {%- elif
+        truenas_storage_target_vm.hostpci0 | length == 0
+      -%}
+      ATTACH
+      {%- elif
+        truenas_provision.vm.storage_controller_passthrough.address
+        in truenas_storage_target_vm.hostpci0
+      -%}
+      RECONCILE
+      {%- else -%}
+      BLOCK
+      {%- endif -%}
+  changed_when: false
+
+- name: Discover TrueNAS storage after controller attachment
+  truenas_storage_reconcile:
+    action: discover
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    pool_action: "{{ truenas_storage_pool_action_effective }}"
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    topology: "{{ truenas_provision.storage.pool.topology.current }}"
+    allow_declared_storage_reset: false
+    datasets: "{{ truenas_provision.storage.layout.datasets }}"
+    directories: "{{ truenas_provision.storage.layout.directories }}"
+    timeout: 120
+  register: truenas_storage_discovery_result
+  changed_when: false
+  no_log: true
+  when: truenas_storage_controller_action == "RECONCILE"
+
+- name: Record sanitized TrueNAS storage discovery
+  ansible.builtin.set_fact:
+    truenas_storage_discovery:
+      boot_disks: "{{ truenas_storage_discovery_result.boot_disks | default([]) }}"
+      data_disks: "{{ truenas_storage_discovery_result.data_disks | default([]) }}"
+      importable_pools: "{{ truenas_storage_discovery_result.importable_pools | default([]) }}"
+      desired_pool: "{{ truenas_storage_discovery_result.desired_pool | default(none) }}"
+      existing_datasets: "{{ truenas_storage_discovery_result.existing_datasets | default([]) }}"
+      missing_datasets: "{{ truenas_storage_discovery_result.missing_datasets | default([]) }}"
+      directory_states: "{{ truenas_storage_discovery_result.directory_states | default({}) }}"
+  changed_when: false
+  when: truenas_storage_controller_action == "RECONCILE"
+
+- name: Build TrueNAS storage plan gates
+  ansible.builtin.set_fact:
+    truenas_storage_plan_gates:
+      lifecycle_ready: >-
+        {{ (truenas.lifecycle_state | default('unknown')) in ['access_ready', 'managed'] }}
+      target_vm_exact: >-
+        {{
+          truenas_storage_target_vm | length > 0
+          and truenas_storage_target_vm.name == truenas_provision.vm.name
+        }}
+      controller_exclusive: >-
+        {{
+          (
+            truenas_storage_controller_users
+            | reject('equalto', truenas_provision.vm.vmid | int)
+            | list
+            | length
+          ) == 0
+        }}
+      controller_slot_safe: "{{ truenas_storage_controller_action != 'BLOCK' }}"
+      no_unexpected_virtual_data_disks: >-
+        {{
+          truenas_storage_target_vm.unexpected_virtual_data_disks
+          | default([])
+          | length == 0
+        }}
+      post_attach_discovery_ready: >-
+        {{
+          truenas_storage_controller_action == 'ATTACH'
+          or (
+            truenas_storage_controller_action == 'RECONCILE'
+            and truenas_storage_discovery.data_disks | default([]) | length == 1
+          )
+        }}
+      pool_action_explicit: >-
+        {{ truenas_storage_pool_action_effective in ['create', 'import'] }}
+      pool_name_policy: >-
+        {{ truenas_provision.storage.pool.name == (site.owner_slug ~ '_pool') }}
+      single_disk_topology_deferred_multi_disk: >-
+        {{
+          truenas_provision.storage.pool.topology.current == 'single_disk'
+          and not (truenas_provision.storage.pool.topology.auto_select_redundancy | bool)
+        }}
+      declared_create_reset_scoped: >-
+        {{
+          truenas_storage_pool_action_effective != 'create'
+          or (truenas_storage_declared_reset_effective | bool)
+          or (
+            truenas_provision.destructive_scope.declared_pool_create_storage_reset_authorized | bool
+            and
+            truenas_provision.destructive_scope.declared_pool_create_scope
+            == 'owned_controller_disks_only'
+          )
+        }}
+  changed_when: false
+
+- name: Determine TrueNAS storage plan result
+  ansible.builtin.set_fact:
+    truenas_storage_plan_result: >-
+      {{
+        'PASS'
+        if (
+          truenas_storage_plan_gates.lifecycle_ready | bool
+          and truenas_storage_plan_gates.target_vm_exact | bool
+          and truenas_storage_plan_gates.controller_exclusive | bool
+          and truenas_storage_plan_gates.controller_slot_safe | bool
+          and truenas_storage_plan_gates.no_unexpected_virtual_data_disks | bool
+          and truenas_storage_plan_gates.post_attach_discovery_ready | bool
+          and truenas_storage_plan_gates.pool_action_explicit | bool
+          and truenas_storage_plan_gates.pool_name_policy | bool
+          and truenas_storage_plan_gates.single_disk_topology_deferred_multi_disk | bool
+          and truenas_storage_plan_gates.declared_create_reset_scoped | bool
+        )
+        else 'BLOCK'
+      }}
+  changed_when: false
+
+- name: Report TrueNAS storage plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_storage_plan_result }}"
+      controller_action: "{{ truenas_storage_controller_action }}"
+      controller_address: "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+      controller_users: "{{ truenas_storage_controller_users }}"
+      target_vm: "{{ truenas_storage_target_vm }}"
+      discovery: "{{ truenas_storage_discovery }}"
+      pool:
+        action: "{{ truenas_storage_pool_action_effective }}"
+        destructive_rebuild_from_b2: "{{ truenas_destructive_rebuild_from_b2 | default(false) | bool }}"
+        name: "{{ truenas_provision.storage.pool.name }}"
+        topology: "{{ truenas_provision.storage.pool.topology.current }}"
+      layout:
+        datasets: "{{ truenas_provision.storage.layout.datasets }}"
+        directories: "{{ truenas_provision.storage.layout.directories }}"
+      gates: "{{ truenas_storage_plan_gates }}"
+
+- name: Block unsafe TrueNAS storage plan
+  ansible.builtin.assert:
+    that:
+      - truenas_storage_plan_result == "PASS"
+    fail_msg: >-
+      TrueNAS storage plan is BLOCKED. Controller ownership or pool safety
+      gates did not pass; no storage write is authorized.

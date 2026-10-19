@@ -1,0 +1,5 @@
+ansible-core==2.21.4
+websockets==17.1
+proxmoxer==2.3.0
+requests==2.34.2
+PyYAML==6.0.3

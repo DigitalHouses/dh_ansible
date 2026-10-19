@@ -1,0 +1,352 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+if [ "$#" -ne 2 ]; then
+  echo "Usage: $0 <site> <playbook.yml>" >&2
+  exit 2
+fi
+
+SITE="$1"
+PLAYBOOK="$2"
+
+case "$SITE" in
+  *[!a-z0-9_-]*|'')
+    echo "Invalid site id." >&2
+    exit 2
+    ;;
+esac
+
+case "$PLAYBOOK" in
+  *[!a-z0-9_.-]*|'')
+    echo "Invalid playbook name." >&2
+    exit 2
+    ;;
+esac
+
+ROOT="$(git rev-parse --show-toplevel)"
+cd "$ROOT"
+
+# Fleet data is never part of the public code Git working tree.
+FLEET_ROOT="${DH_FLEET_DETAIL_DIR:-/var/lib/ansimble/fleet-detail}"
+case "$FLEET_ROOT" in
+  /*) ;;
+  *) echo "Fleet Detail directory must be absolute." >&2; exit 3 ;;
+esac
+if [ ! -d "$FLEET_ROOT/.git" ] || [ -L "$FLEET_ROOT" ]; then
+  echo "Trusted Fleet Detail Git checkout is missing." >&2
+  exit 3
+fi
+FLEET_ORIGIN="$(git -C "$FLEET_ROOT" remote get-url origin)"
+case "$FLEET_ORIGIN" in
+  "git@github.com:DigitalHouses/dh_ansimble_fleet_detail.git"|"https://github.com/DigitalHouses/dh_ansimble_fleet_detail.git") ;;
+  *) echo "Unexpected Fleet Detail origin." >&2; exit 3 ;;
+esac
+INVENTORY="$FLEET_ROOT/inventories/$SITE/hosts.yml"
+PLAYBOOK_PATH="playbooks/$PLAYBOOK"
+VAULT="$FLEET_ROOT/secrets/fleet.vault.yml"
+ANSIBLE_PLAYBOOK="${ANSIBLE_PLAYBOOK:-/opt/ansimble/venv/bin/ansible-playbook}"
+ANSIBLE_VAULT="${ANSIBLE_VAULT:-/opt/ansimble/venv/bin/ansible-vault}"
+PYTHON="${PYTHON:-/opt/ansimble/venv/bin/python}"
+BOOTSTRAP_DIR="/var/lib/ansimble/bootstrap"
+PASSFILE="$BOOTSTRAP_DIR/fleet-master-$$"
+RUNTIME_FILE="$BOOTSTRAP_DIR/site-runtime-$$.yml"
+
+cleanup() {
+  unset MASTER
+  rm -f "$PASSFILE" "$RUNTIME_FILE"
+}
+trap cleanup EXIT HUP INT TERM
+
+[ -f "$INVENTORY" ] || {
+  echo "Inventory not found: $INVENTORY" >&2
+  exit 3
+}
+
+[ -f "$PLAYBOOK_PATH" ] || {
+  echo "Playbook not found: $PLAYBOOK_PATH" >&2
+  exit 3
+}
+
+[ -f "$VAULT" ] || {
+  echo "Fleet Vault not found: $VAULT" >&2
+  exit 3
+}
+
+[ -x "$ANSIBLE_PLAYBOOK" ] || {
+  echo "ansible-playbook not executable: $ANSIBLE_PLAYBOOK" >&2
+  exit 3
+}
+
+[ -x "$ANSIBLE_VAULT" ] || {
+  echo "ansible-vault not executable: $ANSIBLE_VAULT" >&2
+  exit 3
+}
+
+[ -x "$PYTHON" ] || {
+  echo "Python not executable: $PYTHON" >&2
+  exit 3
+}
+
+# Code and Fleet Detail have independent provenance/cleanliness gates.
+DIRTY_STATE="$(git status --porcelain --untracked-files=all)"
+if [ -n "$DIRTY_STATE" ]; then
+  echo "CODE_REPO_CLEAN=FAIL" >&2
+  git status --short >&2
+  exit 10
+fi
+FLEET_DIRTY="$(git -C "$FLEET_ROOT" status --porcelain --untracked-files=all)"
+RECOVERY_DIRTY_VAULT_ONLY=0
+if [ -n "$FLEET_DIRTY" ]; then
+  if [ "$PLAYBOOK" = "recover-truenas-base.yml" ] &&
+     [ "$FLEET_DIRTY" = " M secrets/fleet.vault.yml" ]; then
+    RECOVERY_DIRTY_VAULT_ONLY=1
+    echo "FLEET_DIRTY_SCOPE=RECOVERY_VAULT_ONLY"
+  else
+    echo "FLEET_REPO_CLEAN=FAIL" >&2
+    git -C "$FLEET_ROOT" status --short >&2
+    exit 10
+  fi
+fi
+
+git fetch --quiet origin main
+git -C "$FLEET_ROOT" fetch --quiet origin main
+CODE_HEAD="$(git rev-parse HEAD)"
+CODE_ORIGIN_HEAD="$(git rev-parse origin/main)"
+FLEET_HEAD="$(git -C "$FLEET_ROOT" rev-parse HEAD)"
+FLEET_ORIGIN_HEAD="$(git -C "$FLEET_ROOT" rev-parse origin/main)"
+echo "CODE_HEAD=$CODE_HEAD"
+echo "FLEET_HEAD=$FLEET_HEAD"
+if [ "$CODE_HEAD" != "$CODE_ORIGIN_HEAD" ]; then
+  echo "CODE_HEAD=FAIL" >&2
+  exit 11
+fi
+if [ "$FLEET_HEAD" != "$FLEET_ORIGIN_HEAD" ]; then
+  echo "FLEET_HEAD=FAIL" >&2
+  exit 11
+fi
+echo "CODE_HEAD=PASS"
+echo "FLEET_HEAD=PASS"
+if [ "$RECOVERY_DIRTY_VAULT_ONLY" = "1" ]; then
+  echo "FLEET_CLEAN=RECOVERY_VAULT_ONLY"
+else
+  echo "FLEET_CLEAN=PASS"
+fi
+echo "CODE_CLEAN=PASS"
+
+install -d -m 0700 "$BOOTSTRAP_DIR"
+
+playbook_requires_master() {
+  case "$PLAYBOOK" in
+    apply-truenas-base.yml|apply-truenas-controlled-rebuild.yml|apply-truenas-destructive-rebuild.yml|recover-truenas-base.yml|set-truenas-smb-password.yml|set-backblaze-b2-credentials.yml|set-fleet-truenas-human-admin-password.yml|publish-site-runtime-secrets.yml)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+playbook_refreshes_runtime() {
+  case "$PLAYBOOK" in
+    apply-truenas-base.yml|apply-truenas-controlled-rebuild.yml|apply-truenas-destructive-rebuild.yml|recover-truenas-base.yml|set-truenas-smb-password.yml|set-backblaze-b2-credentials.yml|set-fleet-truenas-human-admin-password.yml)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+try_site_runtime() {
+  local cfg
+  local -a values
+
+  set +e
+  mapfile -t values < <(
+    "$PYTHON" - "$SITE" "$FLEET_ROOT" <<'PY'
+import pathlib
+import sys
+import yaml
+
+site = sys.argv[1]
+root = pathlib.Path(sys.argv[2])
+base = root / "inventories" / site
+
+def load(name):
+    with (base / name).open("r", encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+pve = load("pve.yml")["pve"]
+access = load("pve_access.yml")["pve_access"]["host"]
+runner = load("runner.yml")["site_runner"]["runtime"]["secrets"]
+
+print(runner.get("mode", ""))
+print(runner.get("provider", ""))
+print(runner.get("remote_directory", ""))
+print(pve["host"])
+print(access["user"])
+print(access["identity_file"])
+print(access["known_hosts_file"])
+PY
+  )
+  cfg=$?
+  set -e
+
+  [ "$cfg" -eq 0 ] || return 1
+  [ "${#values[@]}" -eq 7 ] || return 1
+  [ "${values[0]}" = "site_runtime_preferred" ] || return 1
+  [ "${values[1]}" = "pve_root_file" ] || return 1
+
+  local runtime_dir="${values[2]}"
+  local pve_host="${values[3]}"
+  local pve_user="${values[4]}"
+  local identity_file="${values[5]}"
+  local known_hosts_file="${values[6]}"
+  local remote_path
+
+  case "$runtime_dir" in
+    /*) ;;
+    *) return 1 ;;
+  esac
+
+  case "$runtime_dir" in
+    *[!a-zA-Z0-9_./-]*) return 1 ;;
+  esac
+
+  remote_path="${runtime_dir%/}/$SITE.yml"
+
+  [ -f "$identity_file" ] || return 1
+  [ -f "$known_hosts_file" ] || return 1
+
+  set +e
+  ssh -T \
+    -o BatchMode=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o "UserKnownHostsFile=$known_hosts_file" \
+    -o ConnectTimeout=5 \
+    -i "$identity_file" \
+    "$pve_user@$pve_host" \
+    sudo -n /bin/cat "$remote_path" \
+    >"$RUNTIME_FILE"
+  local fetch_rc=$?
+  set -e
+
+  [ "$fetch_rc" -eq 0 ] || {
+    rm -f "$RUNTIME_FILE"
+    return 1
+  }
+
+  chmod 0600 "$RUNTIME_FILE"
+
+  "$PYTHON" - "$RUNTIME_FILE" "$SITE" <<'PY'
+import pathlib
+import sys
+import yaml
+
+path = pathlib.Path(sys.argv[1])
+site = sys.argv[2]
+payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+runtime = payload.get("runtime_secrets")
+
+if not isinstance(runtime, dict):
+    raise SystemExit(1)
+if runtime.get("schema_version") != 1:
+    raise SystemExit(1)
+if runtime.get("site_id") != site:
+    raise SystemExit(1)
+if not isinstance(runtime.get("site_secrets"), dict):
+    raise SystemExit(1)
+PY
+
+  echo "SITE_RUNTIME_VERIFY=PASS"
+  echo "SECRET_SOURCE=SITE_RUNTIME"
+  return 0
+}
+
+run_with_runtime() {
+  set +e
+  "$ANSIBLE_PLAYBOOK" \
+    -i "$INVENTORY" \
+    "$PLAYBOOK_PATH" \
+    -e "fleet_runtime_secrets_file_override=$RUNTIME_FILE"
+  local rc=$?
+  set -e
+
+  echo "PLAYBOOK_RC=$rc"
+  return "$rc"
+}
+
+run_with_master() {
+  printf "Master password: "
+  IFS= read -r -s MASTER
+  echo
+
+  if [ "${#MASTER}" -lt 8 ]; then
+    echo "MASTER_PASSWORD_LENGTH=FAIL" >&2
+    return 12
+  fi
+
+  printf '%s\n' "$MASTER" > "$PASSFILE"
+  chmod 0600 "$PASSFILE"
+  unset MASTER
+
+  "$ANSIBLE_VAULT" view \
+    --vault-password-file "$PASSFILE" \
+    "$VAULT" \
+    >/dev/null
+
+  echo "FLEET_VAULT_VERIFY=PASS"
+  echo "SECRET_SOURCE=FLEET_VAULT"
+
+  set +e
+  "$ANSIBLE_PLAYBOOK" \
+    -i "$INVENTORY" \
+    "$PLAYBOOK_PATH" \
+    --vault-password-file "$PASSFILE" \
+    -e "fleet_vault_password_file_override=$PASSFILE" \
+    -e "fleet_vault_file_override=$VAULT"
+  local rc=$?
+  set -e
+
+  if [ "$rc" -eq 0 ] && playbook_refreshes_runtime; then
+    echo "SITE_RUNTIME_REFRESH=START"
+
+    set +e
+    "$ANSIBLE_PLAYBOOK" \
+      -i "$INVENTORY" \
+      playbooks/publish-site-runtime-secrets.yml \
+      --vault-password-file "$PASSFILE" \
+      -e "fleet_vault_password_file_override=$PASSFILE" \
+    -e "fleet_vault_file_override=$VAULT"
+    local publish_rc=$?
+    set -e
+
+    if [ "$publish_rc" -ne 0 ]; then
+      echo "SITE_RUNTIME_REFRESH=FAIL" >&2
+      rc="$publish_rc"
+    else
+      echo "SITE_RUNTIME_REFRESH=PASS"
+    fi
+  fi
+
+  echo "PLAYBOOK_RC=$rc"
+  return "$rc"
+}
+
+echo "PLAYBOOK=$PLAYBOOK_PATH"
+echo "SITE=$SITE"
+
+if ! playbook_requires_master; then
+  if try_site_runtime; then
+    run_with_runtime
+    exit $?
+  fi
+
+  echo "SITE_RUNTIME_AVAILABLE=NO"
+  echo "SECRET_SOURCE_FALLBACK=OPERATOR_EPHEMERAL"
+fi
+
+run_with_master
+exit $?

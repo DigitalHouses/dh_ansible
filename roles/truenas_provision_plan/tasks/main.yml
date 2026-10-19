@@ -1,0 +1,235 @@
+---
+- name: Select effective TrueNAS provisioning storage action
+  ansible.builtin.set_fact:
+    truenas_provision_pool_action_effective: >-
+      {{
+        truenas_storage_pool_action_override
+        | default(truenas_provision.storage.pool.action)
+      }}
+    truenas_provision_declared_reset_effective: >-
+      {{
+        (truenas_destructive_rebuild_from_b2 | default(false) | bool)
+        and
+        (
+          truenas_storage_pool_action_override
+          | default(truenas_provision.storage.pool.action)
+        ) == 'create'
+        and
+        truenas_provision.destructive_scope.declared_pool_create_scope
+        == 'owned_controller_disks_only'
+        and
+        (truenas_provision.vm.storage_controller_passthrough.all_attached_disks_owned_by_guest | bool)
+      }}
+  changed_when: false
+
+- name: Validate fresh TrueNAS provisioning plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas_provision is mapping
+      - truenas_provision.mode == "fresh"
+      - truenas_provision.vm is mapping
+      - truenas_provision.vm.vmid | int > 0
+      - truenas_provision.vm.name | length > 0
+      - truenas_provision.vm.replace_existing is mapping
+      - truenas_provision.vm.replace_existing.authorized | bool
+      - truenas_provision.destructive_scope.delete_existing_target_vm_authorized | bool
+      - truenas_provision.vm.storage_controller_passthrough.mode == "whole_controller"
+      - truenas_provision.vm.storage_controller_passthrough.attach_phase == "post_access_bootstrap"
+      - not (truenas_provision.vm.storage_controller_passthrough.individual_disk_passthrough | bool)
+      - not (truenas_provision.vm.storage_controller_passthrough.mapped_device | bool)
+      - truenas_provision.network.bootstrap.mode == "router_dhcp"
+      - not (truenas_provision.network.bootstrap.host_dnsmasq_allowed | bool)
+      - truenas_provision_pool_action_effective in ["create", "import"]
+      - truenas_provision.storage.discovery.require_explicit_action | bool
+    fail_msg: >-
+      Fresh TrueNAS provisioning inventory is incomplete or violates the
+      accepted safety contract.
+
+- name: Initialize fresh TrueNAS observed VM state
+  ansible.builtin.set_fact:
+    truenas_provision_observed_vm: {}
+  changed_when: false
+
+- name: Select current target VM configuration
+  ansible.builtin.set_fact:
+    truenas_provision_observed_vm:
+      vmid: "{{ item.item.vmid | int }}"
+      name: "{{ item.item.name | default(item.json.data.name | default('')) }}"
+      status: "{{ item.item.status | default('unknown') }}"
+      protection: "{{ item.json.data.protection | default(0) | int }}"
+      bios: "{{ item.json.data.bios | default('') }}"
+      machine: "{{ item.json.data.machine | default('') }}"
+      cores: "{{ item.json.data.cores | default(0) | int }}"
+      memory_mb: "{{ item.json.data.memory | default(0) | int }}"
+      scsi0: "{{ item.json.data.scsi0 | default('') }}"
+      efidisk0: "{{ item.json.data.efidisk0 | default('') }}"
+      hostpci0: "{{ item.json.data.hostpci0 | default('') }}"
+      net0: "{{ item.json.data.net0 | default('') }}"
+      agent: "{{ item.json.data.agent | default('0') | string }}"
+      onboot: "{{ item.json.data.onboot | default(0) | int }}"
+      startup: "{{ item.json.data.startup | default('') }}"
+  loop: "{{ pve_qemu_configs.results | default([]) }}"
+  loop_control:
+    label: "{{ item.item.vmid | default('unknown') }}"
+  when:
+    - item.item.vmid is defined
+    - item.item.vmid | int == truenas_provision.vm.vmid | int
+  changed_when: false
+  no_log: true
+
+- name: Classify fresh TrueNAS VM action
+  ansible.builtin.set_fact:
+    truenas_provision_vm_action: >-
+      {%- if truenas_provision_observed_vm | length == 0 -%}
+      CREATE
+      {%- elif
+        truenas_provision_observed_vm.name == truenas_provision.vm.name
+        and (truenas.lifecycle_state | default('provision_pending')) in ['access_ready', 'managed']
+        and (truenas_controlled_rebuild | default(false) | bool)
+        and truenas_provision.vm.replace_existing.authorized | bool
+        and truenas_provision.destructive_scope.delete_existing_target_vm_authorized | bool
+      -%}
+      REPLACE
+      {%- elif
+        truenas_provision_observed_vm.name == truenas_provision.vm.name
+        and (truenas.lifecycle_state | default('provision_pending')) in ['access_ready', 'managed']
+      -%}
+      RECONCILE
+      {%- elif
+        truenas_provision_observed_vm.name == truenas_provision.vm.name
+        and (truenas.lifecycle_state | default('provision_pending')) == 'provision_pending'
+        and (
+          site_secrets.truenas is defined
+          and (
+            site_secrets.truenas.audit_api_key is defined
+            or site_secrets.truenas.write_api_key is defined
+          )
+        )
+      -%}
+      RECOVER_ACCESS
+      {%- elif
+        truenas_provision_observed_vm.name == truenas_provision.vm.name
+        and (truenas.lifecycle_state | default('provision_pending')) == 'provision_pending'
+        and truenas_provision.vm.replace_existing.authorized | bool
+        and truenas_provision.destructive_scope.delete_existing_target_vm_authorized | bool
+      -%}
+      REBUILD_INCOMPLETE
+      {%- elif
+        truenas_provision_observed_vm.name
+        in truenas_provision.vm.replace_existing.expected_current_names
+        and truenas_provision.vm.replace_existing.authorized | bool
+        and truenas_provision.destructive_scope.delete_existing_target_vm_authorized | bool
+      -%}
+      REPLACE
+      {%- else -%}
+      BLOCK
+      {%- endif -%}
+  changed_when: false
+
+- name: Build fresh TrueNAS plan gates
+  ansible.builtin.set_fact:
+    truenas_provision_plan_gates:
+      vm_identity_known: >-
+        {{ truenas_provision_vm_action != 'BLOCK' }}
+      recoverable_partial_state_known: >-
+        {{ truenas_provision_vm_action != 'BLOCK' }}
+      write_ready: "{{ truenas_provision.write_ready | bool }}"
+      controlled_rebuild_exact_target: >-
+        {{
+          not (truenas_controlled_rebuild | default(false) | bool)
+          or (
+            truenas_provision_observed_vm | length > 0
+            and truenas_provision_observed_vm.name == truenas_provision.vm.name
+            and truenas_provision_observed_vm.vmid | int == truenas_provision.vm.vmid | int
+          )
+        }}
+      replacement_authorized: >-
+        {{
+          truenas_provision_vm_action not in ['REPLACE', 'REBUILD_INCOMPLETE']
+          or (
+            truenas_provision.vm.replace_existing.authorized | bool
+            and truenas_provision.destructive_scope.delete_existing_target_vm_authorized | bool
+          )
+        }}
+      controller_attach_post_access_bootstrap: >-
+        {{
+          truenas_provision.vm.storage_controller_passthrough.attach_phase
+          == 'post_access_bootstrap'
+        }}
+      installer_sees_data_controller: false
+      pool_action_explicit: >-
+        {{ truenas_provision_pool_action_effective in ['create', 'import'] }}
+      pool_create_storage_reset_scoped: >-
+        {{
+          truenas_provision_pool_action_effective != 'create'
+          or (truenas_provision_declared_reset_effective | bool)
+          or (
+            truenas_provision.destructive_scope.declared_pool_create_storage_reset_authorized | bool
+            and
+            truenas_provision.destructive_scope.declared_pool_create_scope
+            == 'owned_controller_disks_only'
+          )
+        }}
+  changed_when: false
+
+- name: Determine fresh TrueNAS plan result
+  ansible.builtin.set_fact:
+    truenas_provision_plan_result: >-
+      {{
+        'PASS'
+        if (
+          truenas_provision_plan_gates.vm_identity_known | bool
+          and truenas_provision_plan_gates.recoverable_partial_state_known | bool
+          and truenas_provision_plan_gates.replacement_authorized | bool
+          and truenas_provision_plan_gates.controller_attach_post_access_bootstrap | bool
+          and truenas_provision_plan_gates.pool_action_explicit | bool
+          and truenas_provision_plan_gates.pool_create_storage_reset_scoped | bool
+        )
+        else 'BLOCK'
+      }}
+  changed_when: false
+
+- name: Report fresh TrueNAS provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_provision_plan_result }}"
+      action: "{{ truenas_provision_vm_action }}"
+      controlled_rebuild_requested: "{{ truenas_controlled_rebuild | default(false) | bool }}"
+      current_vm: "{{ truenas_provision_observed_vm if truenas_provision_observed_vm | length > 0 else 'ABSENT' }}"
+      desired_vm:
+        vmid: "{{ truenas_provision.vm.vmid }}"
+        name: "{{ truenas_provision.vm.name }}"
+        cpu_cores: "{{ truenas_provision.vm.cpu.cores }}"
+        memory_mb: "{{ truenas_provision.vm.memory_mb }}"
+        system_disk_gb: "{{ truenas_provision.vm.system_disk.size_gb }}"
+        firmware: "{{ truenas_provision.vm.firmware.bios }}"
+        machine: "{{ truenas_provision.vm.firmware.machine }}"
+        network_bridge: "{{ truenas_provision.vm.network.bridge }}"
+        installer_media: "{{ truenas_provision.os.install_media.filename }}"
+      phases:
+        - "replace_or_create_vm_without_data_controller"
+        - "boot_official_installer_via_router_dhcp"
+        - "install_to_single_visible_virtual_system_disk"
+        - "reboot_to_static_target_network"
+        - "pin_tls_identity"
+        - "bootstrap_api_identities_and_persist_credentials"
+        - "attach_whole_sata_controller"
+        - "explicit_pool_{{ truenas_provision_pool_action_effective }}"
+        - "create_dataset_directory_layout"
+        - "verify_and_idempotence"
+      storage:
+        controller: "{{ truenas_provision.vm.storage_controller_passthrough.address }}"
+        controller_attach_phase: "{{ truenas_provision.vm.storage_controller_passthrough.attach_phase }}"
+        pool_action: "{{ truenas_provision_pool_action_effective }}"
+        pool_name: "{{ truenas_provision.storage.pool.name }}"
+        topology: "{{ truenas_provision.storage.pool.topology.current }}"
+      gates: "{{ truenas_provision_plan_gates }}"
+
+- name: Block fresh TrueNAS provisioning on unsafe plan
+  ansible.builtin.assert:
+    that:
+      - truenas_provision_plan_result == "PASS"
+    fail_msg: >-
+      Fresh TrueNAS provisioning plan is BLOCKED. No write operation is
+      authorized until the observed VM identity and all safety gates pass.

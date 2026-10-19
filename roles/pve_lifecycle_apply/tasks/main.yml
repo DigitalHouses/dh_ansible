@@ -1,0 +1,72 @@
+---
+- name: Validate PVE lifecycle apply contract
+  ansible.builtin.assert:
+    that:
+      - pve_lifecycle is mapping
+      - pve_lifecycle.write_ready | bool
+      - pve_lifecycle.writer is mapping
+      - pve_lifecycle.writer.user is defined
+      - pve_lifecycle.writer.token_id is defined
+      - pve_lifecycle.writer.role is defined
+      - pve_lifecycle.writer.privileges == ['VM.Config.Options']
+      - vault_pve_lifecycle_token_secret is defined
+      - vault_pve_lifecycle_token_secret | length > 0
+      - pve_lifecycle_plan_entries is defined
+      - pve_lifecycle_plan_entries | selectattr('action', 'equalto', 'BLOCK') | list | length == 0
+    fail_msg: "PVE lifecycle apply is not authorized or the writer contract is incomplete."
+
+- name: Block QEMU startup updates without root Sys.Modify transport
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          pve_lifecycle_plan_entries
+          | selectattr('action', 'equalto', 'UPDATE')
+          | selectattr('type', 'equalto', 'qemu')
+          | list
+          | length
+        ) == 0
+    fail_msg: >-
+      PVE lifecycle apply is BLOCKED: QEMU startup changes require Sys.Modify
+      on the root path in Proxmox. The VM.Config.Options writer must not be
+      broadened; use the approved privileged host transport for QEMU lifecycle
+      fields instead.
+
+- name: Apply exact PVE lifecycle option updates
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/{{ 'qemu' if item.type == 'qemu' else 'lxc' }}/{{ item.vmid }}/config"
+    method: PUT
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_lifecycle.writer.user }}!{{ pve_lifecycle.writer.token_id }}={{ vault_pve_lifecycle_token_secret }}
+    body_format: form-urlencoded
+    body:
+      onboot: "{{ item.desired.onboot | int }}"
+      startup: "{{ item.desired.startup }}"
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_lifecycle_apply_timeout | default(30) }}"
+    return_content: true
+  loop: >-
+    {{
+      pve_lifecycle_plan_entries
+      | selectattr('action', 'equalto', 'UPDATE')
+      | list
+    }}
+  loop_control:
+    label: "{{ item.type }}:{{ item.vmid }}"
+  register: pve_lifecycle_apply_results
+  no_log: true
+
+- name: Report lifecycle apply count
+  ansible.builtin.debug:
+    msg:
+      updates_submitted: >-
+        {{
+          pve_lifecycle_plan_entries
+          | selectattr('action', 'equalto', 'UPDATE')
+          | list
+          | length
+        }}
+      runtime_guest_operations: 0
+      result: PASS

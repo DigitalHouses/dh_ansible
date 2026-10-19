@@ -1,0 +1,69 @@
+---
+- name: Apply TrueNAS human Web UI administrator
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site runner variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/runner.yml"
+
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load PVE endpoint variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load PVE access variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+
+    - name: Load PVE host identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Load accepted TrueNAS endpoint variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+    - name: Register PVE host write transport
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: site_runtime_human_admin_secret
+    - role: truenas_human_admin_plan
+    - role: truenas_human_admin_apply
+    - role: truenas_human_admin_plan
+      allow_duplicates: true
+
+  post_tasks:
+    - name: Require exact post-apply human administrator convergence
+      ansible.builtin.assert:
+        that:
+          - truenas_human_admin_plan_result.result == "PASS"
+          - truenas_human_admin_plan_result.admin.action == "NOOP"
+          - truenas_human_admin_plan_result.admin.local_admin_set_up | bool
+        fail_msg: "TrueNAS human administrator post-apply verification did not converge to exact NOOP."

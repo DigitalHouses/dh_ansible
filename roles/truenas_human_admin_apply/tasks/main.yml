@@ -1,0 +1,38 @@
+---
+- name: Validate TrueNAS human administrator apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas_human_admin_plan_result is defined
+      - truenas_human_admin_plan_result.result == "PASS"
+      - truenas.auth.write_username is defined
+      - truenas.auth.write_username | length > 0
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+      - truenas_human_admin_password_effective is defined
+      - truenas_human_admin_password_effective | length >= 8
+    fail_msg: "TrueNAS human administrator apply prerequisites are incomplete."
+  no_log: true
+
+- name: Reconcile TrueNAS human Web UI administrator
+  truenas_human_admin_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired_admin: "{{ truenas_provision.human_admin }}"
+    human_admin_password: "{{ truenas_human_admin_password_effective }}"
+    plan: "{{ truenas_human_admin_plan_result }}"
+  register: truenas_human_admin_apply_result
+  no_log: true
+
+- name: Report TrueNAS human administrator acceptance
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      action: "{{ truenas_human_admin_apply_result.action }}"
+      local_admin_set_up: "{{ truenas_human_admin_apply_result.local_admin_set_up }}"
+      password_login_verified: "{{ truenas_human_admin_apply_result.password_login_verified }}"
+      secret_values_reported: false

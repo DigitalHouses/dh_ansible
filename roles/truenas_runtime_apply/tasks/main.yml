@@ -1,0 +1,241 @@
+---
+- name: Validate TrueNAS runtime apply contract
+  ansible.builtin.assert:
+    that:
+      - truenas_runtime_plan is mapping
+      - truenas_runtime_plan.result == "PASS"
+      - site_secrets.truenas.write_api_key is defined
+      - site_secrets.truenas.write_api_key | length > 0
+    fail_msg: "TrueNAS runtime apply requires an accepted plan and write API credentials."
+  no_log: true
+
+- name: Reconcile managed TrueNAS PREINIT runtime policy
+  truenas_initshutdown_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired:
+      type: "COMMAND"
+      command: >-
+        mount -o remount,size={{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}M /run
+      script: ""
+      when: "PREINIT"
+      enabled: true
+      timeout: 10
+      comment: "{{ truenas_provision.vm.runtime.run_tmpfs.init_comment }}"
+    apply: true
+  register: truenas_runtime_init_policy_apply
+  no_log: true
+
+- name: Determine whether TrueNAS runtime reboot is required
+  ansible.builtin.set_fact:
+    truenas_runtime_reboot_required: >-
+      {{
+        truenas_runtime_plan.memory_action == 'UPDATE'
+        or truenas_runtime_plan.init_policy_action in ['CREATE', 'UPDATE']
+      }}
+  changed_when: false
+
+- name: Apply live /run tmpfs limit when current cap is smaller
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /bin/mount
+      - -o
+      - "remount,size={{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}M"
+      - /run
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when: truenas_runtime_plan.tmpfs_action == "LIVE_UPDATE"
+
+- name: Gracefully shut down TrueNAS before runtime reboot
+  ansible.builtin.command:
+    argv:
+      - qm
+      - shutdown
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --timeout
+      - "120"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when: truenas_runtime_reboot_required | bool
+
+- name: Wait for TrueNAS VM to stop
+  ansible.builtin.command:
+    argv:
+      - qm
+      - status
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_stop_status
+  changed_when: false
+  retries: 30
+  delay: 2
+  until: "'status: stopped' in truenas_runtime_stop_status.stdout"
+  when: truenas_runtime_reboot_required | bool
+
+- name: Apply fixed TrueNAS VM memory
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --memory
+      - "{{ truenas_provision.vm.memory_mb | int | string }}"
+      - --balloon
+      - "0"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when: truenas_runtime_plan.memory_action == "UPDATE"
+
+- name: Start TrueNAS after runtime update
+  ansible.builtin.command:
+    argv:
+      - qm
+      - start
+      - "{{ truenas_provision.vm.vmid | string }}"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when: truenas_runtime_reboot_required | bool
+
+- name: Wait for TrueNAS HTTPS API after runtime reboot
+  ansible.builtin.wait_for:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    timeout: 600
+    connect_timeout: 3
+    sleep: 5
+    state: started
+  when: truenas_runtime_reboot_required | bool
+
+- name: Wait for TrueNAS QEMU guest agent after runtime reboot
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - cmd
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - ping
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_qga_ping
+  changed_when: false
+  retries: 60
+  delay: 5
+  until: truenas_runtime_qga_ping.rc == 0
+  when: truenas_runtime_reboot_required | bool
+
+- name: Ensure TrueNAS application catalog synchronization
+  truenas_initshutdown_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    desired:
+      type: "COMMAND"
+      command: >-
+        mount -o remount,size={{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}M /run
+      script: ""
+      when: "PREINIT"
+      enabled: true
+      timeout: 10
+      comment: "{{ truenas_provision.vm.runtime.run_tmpfs.init_comment }}"
+    apply: false
+    sync_catalog_if_needed: true
+    catalog_sync_timeout: 600
+  register: truenas_runtime_catalog_wait
+  no_log: true
+
+- name: Re-read PVE TrueNAS VM configuration after runtime apply
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/nodes/{{ pve.node }}/qemu/{{ truenas_provision.vm.vmid }}/config"
+      - --output-format
+      - json
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_verify_pve_config_raw
+  changed_when: false
+
+- name: Re-read TrueNAS /run tmpfs usage after catalog synchronization
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /bin/df
+      - -B1
+      - --output=size,used,pcent
+      - /run
+  delegate_to: pve_write_host
+  become: true
+  register: truenas_runtime_verify_run_df_raw
+  changed_when: false
+
+- name: Parse TrueNAS runtime post-apply observations
+  ansible.builtin.set_fact:
+    truenas_runtime_verify_pve_config: "{{ truenas_runtime_verify_pve_config_raw.stdout | from_json }}"
+    truenas_runtime_verify_run_df: "{{ truenas_runtime_verify_run_df_raw.stdout | from_json }}"
+  changed_when: false
+
+- name: Parse TrueNAS runtime post-apply /run numbers
+  ansible.builtin.set_fact:
+    truenas_runtime_verify_run_numbers: >-
+      {{
+        (
+          truenas_runtime_verify_run_df['out-data']
+          | default('')
+        ).splitlines()
+        | reject('equalto', '')
+        | list
+        | last
+        | regex_findall('[0-9]+')
+      }}
+  changed_when: false
+
+- name: Require exact TrueNAS runtime convergence
+  ansible.builtin.assert:
+    that:
+      - truenas_runtime_verify_pve_config.memory | int == truenas_provision.vm.memory_mb | int
+      - truenas_runtime_verify_pve_config.balloon | default(0) | int == 0
+      - truenas_runtime_verify_run_numbers | length == 3
+      - >-
+        truenas_runtime_verify_run_numbers[0] | int
+        >= (truenas_provision.vm.runtime.run_tmpfs.max_mb | int) * 1024 * 1024
+      - >-
+        truenas_runtime_verify_run_numbers[2] | int
+        <= truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int
+      - truenas_runtime_catalog_wait.action == "NOOP"
+      - truenas_runtime_catalog_wait.catalog_synced | bool
+    fail_msg: "TrueNAS runtime policy did not converge after apply/reboot."
+
+- name: Report TrueNAS runtime acceptance
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      memory_mb: "{{ truenas_runtime_verify_pve_config.memory | int }}"
+      balloon_mb: "{{ truenas_runtime_verify_pve_config.balloon | default(0) | int }}"
+      run_tmpfs_size_bytes: "{{ truenas_runtime_verify_run_numbers[0] | int }}"
+      run_tmpfs_used_bytes: "{{ truenas_runtime_verify_run_numbers[1] | int }}"
+      run_tmpfs_usage_percent: "{{ truenas_runtime_verify_run_numbers[2] | int }}"
+      catalog_synced: "{{ truenas_runtime_catalog_wait.catalog_synced | bool }}"
+      init_policy: NOOP

@@ -1,0 +1,56 @@
+---
+- name: Apply and verify TrueNAS ACL SMB and NFS state
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load accepted TrueNAS endpoint variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+  roles:
+    - role: fleet_secrets
+    - role: truenas_identity_plan
+    - role: truenas_access_audit
+    - role: truenas_access_plan
+    - role: truenas_access_apply
+
+  post_tasks:
+    - name: Re-audit TrueNAS access state after apply
+      ansible.builtin.include_role:
+        name: truenas_access_audit
+        allow_duplicates: true
+
+    - name: Re-plan TrueNAS access state after apply
+      ansible.builtin.include_role:
+        name: truenas_access_plan
+        allow_duplicates: true
+
+    - name: Require exact post-apply convergence
+      ansible.builtin.assert:
+        that:
+          - truenas_access_plan_result.result == "PASS"
+          - truenas_access_plan_result.issues | length == 0
+          - (truenas_access_plan_result.acl_actions | rejectattr('action', 'equalto', 'NOOP') | list | length) == 0
+          - (truenas_access_plan_result.smb_actions | rejectattr('action', 'equalto', 'NOOP') | list | length) == 0
+          - (truenas_access_plan_result.nfs_actions | rejectattr('action', 'equalto', 'NOOP') | list | length) == 0
+          - truenas_access_plan_result.nfs_config_action.action == "NOOP"
+          - (truenas_access_plan_result.service_actions | rejectattr('enable_action', 'equalto', 'NOOP') | list | length) == 0
+          - (truenas_access_plan_result.service_actions | rejectattr('runtime_action', 'equalto', 'NOOP') | list | length) == 0
+        fail_msg: "TrueNAS access post-apply verification did not converge to exact NOOP."
+
+    - name: Report TrueNAS access acceptance
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          result: "PASS"
+          post_apply_converged: true

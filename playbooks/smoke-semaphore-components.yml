@@ -1,0 +1,32 @@
+---
+# Read-only Semaphore Community 2.19 smoke test.
+# This version has Enum (single-select), not Select (multi-select).
+- name: Validate component selection from Semaphore UI
+  hosts: all
+  gather_facts: false
+  become: false
+  vars:
+    component_flags:
+      truenas: "{{ deploy_truenas | default('disabled') }}"
+      uptime_kuma: "{{ deploy_uptime_kuma | default('disabled') }}"
+      cloudflare: "{{ deploy_cloudflare | default('disabled') }}"
+  tasks:
+    - name: Validate choices from survey
+      ansible.builtin.assert:
+        that:
+          - (component_flags.values() | difference(['enabled', 'disabled']) | length) == 0
+        fail_msg: "Invalid survey value: choose Enabled or Disabled."
+
+    - name: Verify at least one component is selected
+      ansible.builtin.assert:
+        that:
+          - (component_flags | dict2items | selectattr('value', 'equalto', 'enabled') | list | length) > 0
+        fail_msg: "Choose Enabled for at least one component."
+
+    - name: Show selected components without making changes
+      ansible.builtin.debug:
+        msg:
+          status: PASS
+          mode: DRY_RUN_UI_TEST
+          selected_components: "{{ component_flags | dict2items | selectattr('value', 'equalto', 'enabled') | map(attribute='key') | list }}"
+          changes_applied: false

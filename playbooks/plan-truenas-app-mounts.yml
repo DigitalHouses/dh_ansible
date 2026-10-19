@@ -1,0 +1,19 @@
+---
+- name: Plan TrueNAS Backrest and FileBrowser Quantum mounts
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps.yml"
+  roles:
+    - role: fleet_secrets
+    - role: truenas_apps_mounts
+      vars:
+        apps_mounts_apply: false

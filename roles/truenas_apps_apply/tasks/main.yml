@@ -1,0 +1,144 @@
+---
+- name: Require explicit non-destructive TrueNAS Apps apply authorization
+  ansible.builtin.assert:
+    that:
+      - truenas_apps_apply_authorized | default(false) | bool
+      - truenas_apps_observed.docker_config.pool in [none, truenas_apps.pool]
+      - truenas_apps_run_usage | int < truenas_apps.max_run_usage_percent | int
+    fail_msg: "Apps apply not authorized or safety checks failed."
+
+- name: Select applications without unavailable external secrets
+  ansible.builtin.set_fact:
+    truenas_apps_installed_names: "{{ truenas_apps_observed.installed | map(attribute='name') | list }}"
+    truenas_apps_secret_pending: "{{ truenas_apps.applications | rejectattr('secret_fields', 'equalto', {}) | map(attribute='name') | list }}"
+  changed_when: false
+
+- name: Initialize existing TrueNAS Apps pool without migrating data
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - --job
+      - docker.update
+      - "{{ {'pool': truenas_apps.pool, 'enable_image_updates': truenas_apps.docker.enable_image_updates} | to_json }}"
+  delegate_to: pve_apps_host
+  become: true
+  async: 600
+  poll: 5
+  register: truenas_apps_docker_apply
+  changed_when: true
+  no_log: true
+  when: >-
+    truenas_apps_observed.docker_config.pool is none
+    or (truenas_apps_observed.docker_config.enable_image_updates | bool)
+      != (truenas_apps.docker.enable_image_updates | bool)
+
+- name: Validate completed Docker initialization job
+  ansible.builtin.assert:
+    that:
+      - (truenas_apps_docker_apply.stdout | from_json)['exitcode'] | int == 0
+    fail_msg: "TrueNAS middleware Docker initialization did not complete successfully."
+  when: truenas_apps_docker_apply is changed
+
+- name: Wait for Docker service readiness
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - docker.status
+  delegate_to: pve_apps_host
+  become: true
+  register: truenas_apps_docker_ready
+  retries: 24
+  delay: 5
+  until: "'RUNNING' in truenas_apps_docker_ready.stdout"
+  changed_when: false
+
+- name: Install only credential-free pinned catalog applications
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - --job
+      - app.create
+      - "{{ {'app_name': item.name, 'catalog_app': item.catalog_app, 'train': item.train, 'version': item.version, 'values': item['values']} | to_json }}"
+  delegate_to: pve_apps_host
+  become: true
+  async: 900
+  poll: 10
+  loop: "{{ truenas_apps.applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when:
+    - item.secret_fields | length == 0
+    - item.name not in truenas_apps_installed_names
+  register: truenas_apps_install_results
+  changed_when: true
+  no_log: true
+
+- name: Verify successful TrueNAS middleware install jobs
+  ansible.builtin.assert:
+    that:
+      - (item.stdout | from_json)['exitcode'] | int == 0
+    fail_msg: "TrueNAS middleware app.create failed; inspect job through TrueNAS."
+  loop: "{{ truenas_apps_install_results.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"
+  when: item is changed
+
+- name: Re-read installed apps after reconciliation
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - "{{ truenas_provision.vm.vmid | string }}"
+      - --
+      - /usr/bin/midclt
+      - call
+      - app.query
+  delegate_to: pve_apps_host
+  become: true
+  register: truenas_apps_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Parse new installed app names
+  ansible.builtin.set_fact:
+    truenas_apps_after: "{{ (truenas_apps_after_raw.stdout | from_json)['out-data'] | from_json }}"
+  changed_when: false
+  no_log: true
+
+- name: Verify all credential-free applications are installed
+  ansible.builtin.assert:
+    that:
+      - item.name in (truenas_apps_after | map(attribute='name') | list)
+    fail_msg: "Catalog application missing after apply."
+  loop: "{{ truenas_apps.applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.secret_fields | length == 0
+
+- name: Report partial Apps deployment without disclosing secrets
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      pool: "{{ truenas_apps.pool }}"
+      installed: "{{ truenas_apps_after | map(attribute='name') | list }}"
+      pending_external_secrets: "{{ truenas_apps_secret_pending }}"
+      status: "{{ 'PENDING_SECRETS' if truenas_apps_secret_pending | length > 0 else 'PASS' }}"

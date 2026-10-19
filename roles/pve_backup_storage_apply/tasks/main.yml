@@ -1,0 +1,141 @@
+---
+- name: Validate PVE backup storage apply contract
+  ansible.builtin.assert:
+    that:
+      - pve_backup_storage_plan is mapping
+      - pve_backup_storage_plan.result == "PASS"
+      - pve_backup_storage_plan.action in ["CREATE", "UPDATE", "NOOP"]
+      - pve_access.api.write.user | length > 0
+      - pve_access.api.write.token_id | length > 0
+      - site_secrets.pve.write_token_secret | length > 0
+    fail_msg: "PVE backup storage apply is not authorized by an accepted plan."
+  no_log: true
+
+- name: Read exact managed PVE storage mountpoint before create
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - -rn
+      - -M
+      - "/mnt/pve/{{ pve.backup_storage.id }}"
+      - -o
+      - SOURCE,FSTYPE
+  delegate_to: pve_write_host
+  become: true
+  register: pve_backup_storage_precreate_mount
+  changed_when: false
+  failed_when: false
+  when: pve_backup_storage_plan.action == "CREATE"
+
+- name: Validate stale managed NFS mount ownership before unmount
+  ansible.builtin.assert:
+    that:
+      - >-
+        pve_backup_storage_precreate_mount.rc != 0
+        or (
+          (pve_backup_storage_precreate_mount.stdout.split() | length) == 2
+          and (
+            pve_backup_storage_precreate_mount.stdout.split()[0]
+            == pve.backup_storage.server ~ ':' ~ pve.backup_storage.export
+          )
+          and (
+            pve_backup_storage_precreate_mount.stdout.split()[1]
+            in ['nfs', 'nfs4']
+          )
+        )
+    fail_msg: >-
+      PVE backup storage CREATE found a mount at the managed path that is not
+      owned by the declared TrueNAS server/export. Automatic unmount is blocked.
+  when: pve_backup_storage_plan.action == "CREATE"
+
+- name: Unmount stale exact managed NFS mount before create
+  ansible.builtin.command:
+    argv:
+      - umount
+      - "/mnt/pve/{{ pve.backup_storage.id }}"
+  delegate_to: pve_write_host
+  become: true
+  changed_when: true
+  when:
+    - pve_backup_storage_plan.action == "CREATE"
+    - pve_backup_storage_precreate_mount.rc == 0
+
+- name: Create native PVE NFS backup storage
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/storage"
+    method: POST
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id }}={{ site_secrets.pve.write_token_secret }}
+    body_format: form-urlencoded
+    body:
+      storage: "{{ pve.backup_storage.id }}"
+      type: "{{ pve.backup_storage.type }}"
+      server: "{{ pve.backup_storage.server }}"
+      export: "{{ pve.backup_storage.export }}"
+      content: "{{ pve.backup_storage.content | join(',') }}"
+      options: "{{ pve.backup_storage.options }}"
+      nodes: "{{ pve.backup_storage.nodes | join(',') }}"
+      disable: "{{ 0 if pve.backup_storage.enabled else 1 }}"
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: pve_backup_storage_create
+  when: pve_backup_storage_plan.action == "CREATE"
+  changed_when: true
+  no_log: true
+
+- name: Update mutable native PVE NFS backup storage fields
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/storage/{{ pve.backup_storage.id | urlencode }}"
+    method: PUT
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id }}={{ site_secrets.pve.write_token_secret }}
+    body_format: form-urlencoded
+    body:
+      content: "{{ pve.backup_storage.content | join(',') }}"
+      options: "{{ pve.backup_storage.options }}"
+      nodes: "{{ pve.backup_storage.nodes | join(',') }}"
+      disable: "{{ 0 if pve.backup_storage.enabled else 1 }}"
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: pve_backup_storage_update
+  when: pve_backup_storage_plan.action == "UPDATE"
+  changed_when: true
+  no_log: true
+
+- name: Wait for native PVE NFS backup storage to become active
+  ansible.builtin.uri:
+    url: >-
+      https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+      }}/storage/{{ pve.backup_storage.id | urlencode }}/status
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id }}={{ site_secrets.pve.write_token_secret }}
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 30
+  register: pve_backup_storage_status
+  until:
+    - pve_backup_storage_status.json.data.active | default(0) | int == 1
+    - pve_backup_storage_status.json.data.enabled | default(0) | int == 1
+  retries: 12
+  delay: 2
+  when: pve_backup_storage_plan.action in ["CREATE", "UPDATE"]
+  changed_when: false
+  no_log: true
+
+- name: Report PVE backup storage apply
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      storage_id: "{{ pve.backup_storage.id }}"
+      action: "{{ pve_backup_storage_plan.action }}"
+      writes_submitted: "{{ 1 if pve_backup_storage_plan.action in ['CREATE', 'UPDATE'] else 0 }}"
+      result: PASS

@@ -1,0 +1,22 @@
+---
+- name: Plan TrueNAS local identities
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load accepted TrueNAS endpoint variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+  roles:
+    - role: fleet_secrets
+    - role: truenas_identity_plan

@@ -1,0 +1,43 @@
+---
+- name: Validate installed Apps observation from prior read-only audit
+  ansible.builtin.assert:
+    that:
+      - truenas_apps_observed.docker_status.status == 'RUNNING'
+      - truenas_apps_observed.docker_config.pool == truenas_apps.pool
+      - truenas_apps_observed.docker_config.enable_image_updates == truenas_apps.docker.enable_image_updates
+      - truenas_apps_run_usage | int < truenas_apps.max_run_usage_percent | int
+    fail_msg: "Docker, Apps pool, updates policy or /run safety gate differs from inventory."
+
+- name: Check installed app identities, pinned versions and runtime health
+  ansible.builtin.assert:
+    that:
+      - item.name in (truenas_apps.applications | map(attribute='name') | list)
+      - item.version == ((truenas_apps.applications | selectattr('name', 'equalto', item.name) | first).version)
+      - item.state == 'RUNNING'
+    fail_msg: "Installed TrueNAS App is unknown, unhealthy, or has drifted from its pinned version."
+  loop: "{{ truenas_apps_observed.installed }}"
+  no_log: true
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require all credential-free site apps to be running
+  ansible.builtin.assert:
+    that:
+      - item.name in (truenas_apps_observed.installed | map(attribute='name') | list)
+    fail_msg: "Credential-free TrueNAS App is missing from runtime."
+  loop: "{{ truenas_apps.applications }}"
+  loop_control:
+    label: "{{ item.name }}"
+  when: item.secret_fields | length == 0
+
+- name: Report sanitized runtime Apps acceptance
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      pool: "{{ truenas_apps.pool }}"
+      docker_status: "{{ truenas_apps_observed.docker_status.status }}"
+      installed_apps: "{{ truenas_apps_observed.installed | map(attribute='name') | list }}"
+      installed_versions: "{{ truenas_apps_observed.installed | map(attribute='version') | list }}"
+      pending_external_secrets: "{{ truenas_apps.applications | rejectattr('secret_fields', 'equalto', {}) | map(attribute='name') | difference(truenas_apps_observed.installed | map(attribute='name') | list) | list }}"
+      run_used_percent: "{{ truenas_apps_run_usage }}"

@@ -1,0 +1,37 @@
+---
+- name: Reconcile a stopped isolated PVE restore test guest
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Register pinned native PVE API transport
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: pve_backup_restore_isolation

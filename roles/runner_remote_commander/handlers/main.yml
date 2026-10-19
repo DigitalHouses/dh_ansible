@@ -1,0 +1,6 @@
+---
+- name: Restart Remote Commander
+  ansible.builtin.systemd_service:
+    name: "{{ remote_commander_service_name }}"
+    state: restarted
+    daemon_reload: true

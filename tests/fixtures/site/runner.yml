@@ -1,0 +1,16 @@
+---
+site_runner:
+  vmid: 1231
+  site_name: CI Example
+  hostname: ansimble-ci-example
+  network:
+    ipv4: 198.51.100.231/24
+    gateway: 198.51.100.1
+  runtime:
+    ansible_core: '2.21.4'
+    venv_path: /opt/ansimble/venv
+  bootstrap:
+    repository_path: /opt/digitalhouses/dh_ansible
+  management:
+    write_ready: false
+    pve_credentials_configured: false

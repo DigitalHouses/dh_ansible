@@ -1,0 +1,81 @@
+---
+- name: Validate TrueNAS human administrator plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state in ["access_ready", "managed"]
+      - truenas_provision.human_admin is mapping
+      - site_secrets.truenas.audit_api_key is defined
+      - site_secrets.truenas.audit_api_key | length > 0
+    fail_msg: "TrueNAS human administrator plan prerequisites are incomplete."
+
+- name: Read current TrueNAS human administrator state
+  truenas_rpc:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ site_secrets.truenas.audit_api_key }}"
+    calls:
+      - name: groups
+        method: group.query
+        params:
+          - []
+          - select:
+              - id
+              - gid
+              - name
+              - builtin
+              - local
+              - roles
+              - users
+      - name: users
+        method: user.query
+        params:
+          - []
+          - select:
+              - id
+              - uid
+              - username
+              - full_name
+              - builtin
+              - local
+              - smb
+              - password_disabled
+              - ssh_password_enabled
+              - shell
+              - home
+              - locked
+              - roles
+              - group
+              - groups
+      - name: local_admin_set_up
+        method: user.has_local_administrator_set_up
+        params: []
+  register: truenas_human_admin_observed
+  changed_when: false
+  no_log: true
+
+- name: Build TrueNAS human administrator reconciliation plan
+  truenas_human_admin_plan:
+    observed_groups: "{{ truenas_human_admin_observed.results.groups }}"
+    observed_users: "{{ truenas_human_admin_observed.results.users }}"
+    local_admin_set_up: "{{ truenas_human_admin_observed.results.local_admin_set_up }}"
+    force_password_rotation: "{{ truenas_human_admin_force_password_rotation | default(false) | bool }}"
+    desired_admin: "{{ truenas_provision.human_admin }}"
+  register: truenas_human_admin_plan_result
+  changed_when: false
+
+- name: Report TrueNAS human administrator plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_human_admin_plan_result.result }}"
+      gates: "{{ truenas_human_admin_plan_result.gates }}"
+      admin: "{{ truenas_human_admin_plan_result.admin }}"
+
+- name: Block unsafe TrueNAS human administrator plan
+  ansible.builtin.assert:
+    that:
+      - truenas_human_admin_plan_result.result == "PASS"
+    fail_msg: "TrueNAS human administrator plan is unsafe. No writes are authorized."

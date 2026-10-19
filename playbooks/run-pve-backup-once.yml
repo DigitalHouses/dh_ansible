@@ -1,0 +1,175 @@
+---
+# Explicit one-shot acceptance action; never part of scheduled job reconciliation.
+- name: Run and verify one declaratively selected PVE backup
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Register pinned PVE host transport for authoritative backup inventory
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: pve_backup_jobs_audit
+    - role: pve_backup_jobs_plan
+
+  tasks:
+    - name: Select explicit one-shot backup job
+      ansible.builtin.set_fact:
+        pve_backup_once_matches: >-
+          {{ pve_backup_jobs_plan
+             | selectattr('id', 'equalto', pve.backup_acceptance.job_id)
+             | list }}
+      changed_when: false
+
+    - name: Require accepted live job with a single guest
+      ansible.builtin.assert:
+        that:
+          - pve_backup_once_matches | length == 1
+          - pve_backup_once_matches[0].action == 'NOOP'
+          - pve.backup_jobs | length == 1
+          - pve.backup_jobs[0].vmids | length == 1
+          - pve_backup_once_matches[0].desired.enabled | int == 1
+        fail_msg: "One-shot backup requires exact live NOOP and a single authorized VMID."
+
+    - name: Read existing source backup archive inventory
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ pve.node }}/storage/{{ pve.backup_storage.id }}/content"
+          - --content
+          - backup
+          - --output-format
+          - json
+      delegate_to: pve_write_host
+      become: true
+      register: pve_backup_once_before
+      changed_when: false
+      no_log: true
+
+    - name: Require first-backup-only acceptance scope
+      ansible.builtin.assert:
+        that:
+          - >-
+            ((pve_backup_once_before.stdout | from_json)
+             | selectattr('vmid', 'equalto', pve.backup_jobs[0].vmids[0] | int)
+             | list | length) == 0
+        fail_msg: "Existing CT archives detected; a repeat one-shot run is blocked."
+
+    - name: Trigger exactly one CT backup via Proxmox API
+      ansible.builtin.uri:
+        url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/vzdump"
+        method: POST
+        headers:
+          Authorization: >-
+            PVEAPIToken={{ pve_access.api.write.user }}!{{
+            pve_access.api.write.token_id }}={{
+            site_secrets.pve.write_token_secret }}
+        body_format: form-urlencoded
+        body:
+          vmid: "{{ pve.backup_jobs[0].vmids[0] }}"
+          storage: "{{ pve.backup_jobs[0].storage }}"
+          mode: "{{ pve.backup_jobs[0].mode }}"
+          compress: "{{ pve.backup_jobs[0].compress }}"
+          remove: 0
+        validate_certs: false
+        return_content: true
+        status_code: 200
+        timeout: 30
+      register: pve_backup_once_start
+      changed_when: true
+      no_log: true
+
+    - name: Poll asynchronous Proxmox backup task
+      ansible.builtin.uri:
+        url: >-
+          https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node
+          }}/tasks/{{ pve_backup_once_start.json.data | urlencode }}/status
+        method: GET
+        headers:
+          Authorization: >-
+            PVEAPIToken={{ pve_access.api.write.user }}!{{
+            pve_access.api.write.token_id }}={{
+            site_secrets.pve.write_token_secret }}
+        validate_certs: false
+        return_content: true
+        status_code: 200
+        timeout: 30
+      register: pve_backup_once_task
+      changed_when: false
+      until: pve_backup_once_task.json.data.status == 'stopped'
+      retries: 180
+      delay: 5
+      no_log: true
+
+    - name: Require Proxmox backup task success
+      ansible.builtin.assert:
+        that:
+          - pve_backup_once_task.json.data.exitstatus == 'OK'
+        fail_msg: "The scheduled-job acceptance backup task did not complete with OK."
+
+    - name: Read produced backup archive from native storage
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ pve.node }}/storage/{{ pve.backup_storage.id }}/content"
+          - --content
+          - backup
+          - --output-format
+          - json
+      delegate_to: pve_write_host
+      become: true
+      register: pve_backup_once_after
+      changed_when: false
+      no_log: true
+
+    - name: Select produced archives for the declared CT only
+      ansible.builtin.set_fact:
+        pve_backup_once_source_archives: >-
+          {{ (pve_backup_once_after.stdout | from_json)
+             | selectattr('vmid', 'equalto', pve.backup_jobs[0].vmids[0] | int)
+             | list }}
+      changed_when: false
+
+    - name: Verify exactly one new native backup archive
+      ansible.builtin.assert:
+        that:
+          - pve_backup_once_source_archives | length == 1
+          - pve_backup_once_source_archives[0].volid is match('^' ~ pve.backup_storage.id ~ ':backup/vzdump-lxc-' ~ (pve.backup_jobs[0].vmids[0] | string) ~ '-')
+        fail_msg: "Backup task ended but the expected CT archive is missing."
+
+    - name: Report first CT backup acceptance
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          vmid: "{{ pve.backup_jobs[0].vmids[0] }}"
+          task_status: "{{ pve_backup_once_task.json.data.exitstatus }}"
+          archive: "{{ pve_backup_once_source_archives[0].volid }}"
+          result: PASS

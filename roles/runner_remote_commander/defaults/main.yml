@@ -1,0 +1,13 @@
+---
+# A single DigitalHouses Remote Commander installation for any site runner.
+# Versions are pinned deliberately; update in a reviewed repository commit.
+remote_commander_node_version: "v24.22.0"
+remote_commander_package_version: "0.2.52"
+remote_commander_service_name: "digitalhouses-remote-commander.service"
+remote_commander_node_checksums:
+  x86_64: "cc2f601cee82d9a5a233302fe307abc600727035fd7d2c3a3571755989e95008"
+  aarch64: "fef00bb4d36e1c50104a9775a10359beee98f162b4104dd12472c75065c6a143"
+remote_commander_node_dir: "/opt/dh-node-{{ remote_commander_node_version }}"
+remote_commander_node_bin: "/opt/dh-node/bin"
+remote_commander_package: "@wonderwhy-er/desktop-commander"
+remote_commander_node_network_options: "--dns-result-order=ipv4first --network-family-autoselection-attempt-timeout=2000"

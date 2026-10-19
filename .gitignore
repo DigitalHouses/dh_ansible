@@ -1,0 +1,24 @@
+# Secrets and local runtime state
+*.retry
+*.log
+*.swp
+*.swo
+.env
+.env.*
+!.env.example
+.vault_pass*
+**/private_keys/**
+*.pem
+*.key
+*.p12
+__pycache__/
+.pytest_cache/
+.venv/
+venv/
+*.py[cod]
+.DS_Store
+
+# Fleet Detail is a separate private repository: never publish its working tree.
+/secrets/
+/inventories/*/
+!/inventories/example/

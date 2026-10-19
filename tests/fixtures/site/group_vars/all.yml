@@ -1,0 +1,7 @@
+---
+site:
+  id: ci-example
+  owner_slug: ci
+  type: example
+  name: CI Example
+  timezone: UTC

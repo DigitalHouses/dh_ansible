@@ -1,0 +1,45 @@
+---
+- name: Validate TrueNAS access plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas_provision.access is mapping
+      - truenas_identity_plan_result.result == "PASS"
+      - truenas_access_acls is defined
+      - truenas_access_directory_counts is defined
+      - truenas_access_observed is defined
+    fail_msg: "TrueNAS access plan prerequisites are incomplete."
+
+- name: Build TrueNAS access reconciliation plan
+  truenas_access_plan:
+    pool_name: "{{ truenas_provision.storage.pool.name }}"
+    desired_access: "{{ truenas_provision.access }}"
+    desired_users: "{{ truenas_provision.identity.users }}"
+    desired_groups: "{{ truenas_provision.identity.groups }}"
+    observed_acls: "{{ truenas_access_acls }}"
+    directory_counts: "{{ truenas_access_directory_counts }}"
+    observed_smb_shares: "{{ truenas_access_observed.results.smb_shares | default([]) }}"
+    observed_nfs_shares: "{{ truenas_access_observed.results.nfs_shares | default([]) }}"
+    observed_services: "{{ truenas_access_observed.results.services | default([]) }}"
+    observed_nfs_config: "{{ truenas_access_observed.results.nfs_config | default({}) }}"
+    observed_smb_config: "{{ truenas_access_observed.results.smb_config | default({}) }}"
+  register: truenas_access_plan_result
+  changed_when: false
+
+- name: Report TrueNAS access plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_access_plan_result.result }}"
+      gates: "{{ truenas_access_plan_result.gates }}"
+      issues: "{{ truenas_access_plan_result.issues }}"
+      acl_actions: "{{ truenas_access_plan_result.acl_actions }}"
+      smb_actions: "{{ truenas_access_plan_result.smb_actions }}"
+      nfs_actions: "{{ truenas_access_plan_result.nfs_actions }}"
+      nfs_config_action: "{{ truenas_access_plan_result.nfs_config_action }}"
+      service_actions: "{{ truenas_access_plan_result.service_actions }}"
+
+- name: Block unsafe TrueNAS access plan
+  ansible.builtin.assert:
+    that:
+      - truenas_access_plan_result.result == "PASS"
+    fail_msg: "TrueNAS access plan is not write-ready: {{ truenas_access_plan_result.issues | join(', ') }}"

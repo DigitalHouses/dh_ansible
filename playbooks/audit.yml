@@ -1,0 +1,62 @@
+---
+- name: Audit local site
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load site identity variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load site runner variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/runner.yml"
+
+    - name: Load site PVE variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load site PVE host audit variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Load site TrueNAS variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+
+    - name: Load site TrueNAS provisioning variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_provision.yml"
+
+    - name: Load site UPS variables
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/ups.yml"
+
+    - name: Load site TrueNAS adopt reference
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_access.yml"
+      when: (truenas_provision.mode | default('adopt')) == 'adopt'
+
+  roles:
+    - role: fleet_secrets
+
+    - role: runner_audit
+
+    - role: pve_audit
+      vars:
+        pve_audit_token_secret_effective: "{{ site_secrets.pve.audit_token_secret }}"
+
+    - role: pve_host_audit
+    - role: pve_ups_audit
+
+    - role: truenas_audit
+      vars:
+        vault_truenas_audit_api_key: "{{ site_secrets.truenas.audit_api_key }}"
+      when:
+        - (truenas.lifecycle_state | default('unknown')) in ['access_ready', 'managed']
+        - site_secrets.truenas is defined
+        - site_secrets.truenas.audit_api_key is defined
+
+    - role: truenas_adopt_audit
+      when: (truenas_provision.mode | default('adopt')) == 'adopt'

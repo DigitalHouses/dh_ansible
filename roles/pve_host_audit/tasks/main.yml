@@ -1,0 +1,112 @@
+---
+- name: Validate PVE host audit transport contract
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit is mapping
+      - pve_host_audit.host is defined
+      - pve_host_audit.port is defined
+      - pve_host_audit.user is defined
+      - pve_host_audit.source_ipv4 is defined
+      - pve_host_audit.identity_file is defined
+      - pve_host_audit.public_key_file is defined
+      - pve_host_audit.known_hosts_file is defined
+      - pve_host_audit.client_key_fingerprint is defined
+      - pve_host_audit.forced_command is defined
+      - pve_host_audit.expected.schema is defined
+      - pve_host_audit.expected.hostname is defined
+      - pve_host_audit.expected.machine_id is defined
+      - pve_host_audit.expected.remote_user is defined
+      - pve_host_audit.expected.required_group is defined
+    fail_msg: "PVE host audit transport inventory contract is incomplete."
+
+- name: Check local PVE host audit identity files
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - "{{ pve_host_audit.identity_file }}"
+    - "{{ pve_host_audit.public_key_file }}"
+    - "{{ pve_host_audit.known_hosts_file }}"
+  register: pve_host_audit_local_files
+  changed_when: false
+  when: pve_host_audit.enabled | bool
+
+- name: Assert local PVE host audit identity files
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit_local_files.results | map(attribute='stat.exists') | min
+    fail_msg: "PVE host audit SSH identity or pinned known_hosts file is missing."
+  when: pve_host_audit.enabled | bool
+
+- name: Read PVE host audit client key fingerprint
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -lf
+      - "{{ pve_host_audit.public_key_file }}"
+      - -E
+      - sha256
+  register: pve_host_audit_key_fingerprint
+  changed_when: false
+  when: pve_host_audit.enabled | bool
+
+- name: Assert PVE host audit client key fingerprint
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit.client_key_fingerprint in pve_host_audit_key_fingerprint.stdout
+    fail_msg: "PVE host audit client key fingerprint mismatch."
+  when: pve_host_audit.enabled | bool
+
+- name: Read PVE host facts through restricted SSH transport
+  ansible.builtin.command:
+    argv:
+      - ssh
+      - -T
+      - -o
+      - BatchMode=yes
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - "UserKnownHostsFile={{ pve_host_audit.known_hosts_file }}"
+      - -o
+      - "ConnectTimeout={{ pve_host_audit_connect_timeout }}"
+      - -p
+      - "{{ pve_host_audit.port | string }}"
+      - -i
+      - "{{ pve_host_audit.identity_file }}"
+      - "{{ pve_host_audit.user }}@{{ pve_host_audit.host }}"
+  register: pve_host_audit_raw
+  changed_when: false
+  when: pve_host_audit.enabled | bool
+
+- name: Parse PVE host audit facts
+  ansible.builtin.set_fact:
+    pve_host_audit_facts: "{{ pve_host_audit_raw.stdout | from_json }}"
+  changed_when: false
+  when: pve_host_audit.enabled | bool
+
+- name: Validate restricted PVE host identity
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit_facts.schema | int == pve_host_audit.expected.schema | int
+      - pve_host_audit_facts.hostname == pve_host_audit.expected.hostname
+      - pve_host_audit_facts.machine_id == pve_host_audit.expected.machine_id
+      - pve_host_audit_facts.username == pve_host_audit.expected.remote_user
+      - pve_host_audit_facts.effective_uid | int != 0
+      - pve_host_audit.expected.required_group in pve_host_audit_facts.groups
+      - pve_host_audit_facts.ssh_source_ip == pve_host_audit.source_ipv4
+    fail_msg: "Restricted PVE host audit identity or source validation failed."
+  when: pve_host_audit.enabled | bool
+
+- name: Report PVE host audit transport
+  ansible.builtin.debug:
+    msg:
+      enabled: "{{ pve_host_audit.enabled }}"
+      host: "{{ pve_host_audit.host }}"
+      user: "{{ pve_host_audit.user }}"
+      forced_command: "{{ pve_host_audit.forced_command }}"
+      root: false
+      sudo: false
+      arbitrary_shell: false
+      result: "{{ 'PASS' if pve_host_audit.enabled | bool else 'DISABLED' }}"

@@ -1,0 +1,95 @@
+---
+- name: Validate TrueNAS runtime plan input
+  ansible.builtin.assert:
+    that:
+      - truenas_runtime_observed is mapping
+      - truenas_runtime_observed.memory_mb is defined
+      - truenas_runtime_observed.run_tmpfs is mapping
+      - truenas_runtime_observed.init_policy is mapping
+    fail_msg: "TrueNAS runtime audit must complete before planning."
+
+- name: Calculate TrueNAS runtime desired limits
+  ansible.builtin.set_fact:
+    truenas_runtime_target_bytes: >-
+      {{ (truenas_provision.vm.runtime.run_tmpfs.max_mb | int) * 1024 * 1024 }}
+    truenas_runtime_target_usage_bytes: >-
+      {{
+        (
+          (truenas_provision.vm.runtime.run_tmpfs.max_mb | int)
+          * 1024 * 1024
+          * (truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int)
+          / 100
+        ) | int
+      }}
+  changed_when: false
+
+- name: Build TrueNAS runtime reconciliation plan
+  ansible.builtin.set_fact:
+    truenas_runtime_plan:
+      result: >-
+        {{
+          'PASS'
+          if (
+            truenas_runtime_observed.run_tmpfs.used_bytes | int
+            <= truenas_runtime_target_usage_bytes | int
+          )
+          else 'BLOCK'
+        }}
+      memory_action: >-
+        {{
+          'NOOP'
+          if (
+            truenas_runtime_observed.memory_mb | int
+            == truenas_provision.vm.memory_mb | int
+            and truenas_runtime_observed.balloon_mb | int == 0
+          )
+          else 'UPDATE'
+        }}
+      tmpfs_action: >-
+        {{
+          'NOOP'
+          if (
+            truenas_runtime_observed.run_tmpfs.size_bytes | int
+            >= truenas_runtime_target_bytes | int
+          )
+          else 'LIVE_UPDATE'
+        }}
+      init_policy_action: "{{ truenas_runtime_observed.init_policy.action }}"
+      desired:
+        memory_mb: "{{ truenas_provision.vm.memory_mb | int }}"
+        balloon_mb: 0
+        run_tmpfs_max_mb: "{{ truenas_provision.vm.runtime.run_tmpfs.max_mb | int }}"
+        run_tmpfs_max_usage_percent: "{{ truenas_provision.vm.runtime.run_tmpfs.max_usage_percent | int }}"
+      observed: "{{ truenas_runtime_observed }}"
+      gates:
+        desired_memory_positive: "{{ truenas_provision.vm.memory_mb | int > 0 }}"
+        fixed_memory: true
+        tmpfs_limit_sufficient_for_current_usage: >-
+          {{
+            truenas_runtime_observed.run_tmpfs.used_bytes | int
+            <= truenas_runtime_target_usage_bytes | int
+          }}
+        qemu_agent_required: "{{ truenas_provision.vm.qemu_agent_required | bool }}"
+        preinit_policy_unique: >-
+          {{ truenas_runtime_observed.init_policy.action in ['CREATE', 'UPDATE', 'NOOP'] }}
+  changed_when: false
+
+- name: Report TrueNAS runtime plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      plan: "{{ truenas_runtime_plan }}"
+
+- name: Block unsafe TrueNAS runtime plan
+  ansible.builtin.assert:
+    that:
+      - truenas_runtime_plan.result == "PASS"
+      - truenas_runtime_plan.gates.desired_memory_positive | bool
+      - truenas_runtime_plan.gates.fixed_memory | bool
+      - truenas_runtime_plan.gates.tmpfs_limit_sufficient_for_current_usage | bool
+      - truenas_runtime_plan.gates.qemu_agent_required | bool
+      - truenas_runtime_plan.gates.preinit_policy_unique | bool
+    fail_msg: >-
+      TrueNAS runtime plan is blocked. Current /run usage would exceed the
+      declared safety threshold even after applying the desired tmpfs limit,
+      or another runtime safety gate failed.

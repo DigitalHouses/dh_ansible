@@ -1,0 +1,20 @@
+---
+# Manual invocation only after CF Access/DNS acceptance; never invoked by base install.
+- name: Apply Amir TrueNAS Apps LAN-only web port publication
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps_ports.yml"
+  roles:
+    - role: fleet_secrets
+    - role: truenas_apps_ports
+      vars:
+        apps_ports_apply: true

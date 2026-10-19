@@ -1,0 +1,156 @@
+---
+- name: Validate PVE backup storage plan prerequisites
+  ansible.builtin.assert:
+    that:
+      - pve_backup_storage_observed is mapping
+      - truenas_provision.access.nfs.protocols == ["NFSV4"]
+      - truenas_provision.access.nfs.exports is sequence
+      - pve.backup_storage.server == truenas.host
+      - pve.backup_storage.export == "/mnt/" ~ truenas_provision.storage.pool.name ~ "/backups/pve"
+      - pve.backup_storage.content == ["backup"]
+      - pve.backup_storage.options == "vers=4"
+      - pve.backup_storage.nodes == [pve.node]
+    fail_msg: "PVE backup storage declaration is inconsistent with the accepted TrueNAS contract."
+
+- name: Select accepted TrueNAS PVE NFS export
+  ansible.builtin.set_fact:
+    pve_backup_storage_truenas_exports: >-
+      {{
+        truenas_provision.access.nfs.exports
+        | selectattr('relative_path', 'equalto', 'backups/pve')
+        | list
+      }}
+  changed_when: false
+
+- name: Gate PVE storage on exact TrueNAS export ownership
+  ansible.builtin.assert:
+    that:
+      - pve_backup_storage_truenas_exports | length == 1
+      - pve_backup_storage_truenas_exports[0].hosts == [pve.host]
+      - pve_backup_storage_truenas_exports[0].networks == []
+      - not (pve_backup_storage_truenas_exports[0].read_only | bool)
+      - pve_backup_storage_truenas_exports[0].mapall_user == "pve_user"
+      - pve_backup_storage_truenas_exports[0].mapall_group == "backup_group"
+      - pve_backup_storage_truenas_exports[0].security == ["SYS"]
+      - pve_backup_storage_truenas_exports[0].enabled | bool
+    fail_msg: "TrueNAS backups/pve export does not match the PVE backup storage security contract."
+
+- name: Normalize current PVE backup storage fields
+  ansible.builtin.set_fact:
+    pve_backup_storage_current:
+      type: "{{ pve_backup_storage_observed.config.type | default('') }}"
+      server: "{{ pve_backup_storage_observed.config.server | default('') }}"
+      export: "{{ pve_backup_storage_observed.config.export | default('') }}"
+      content: "{{ (pve_backup_storage_observed.config.content | default('')).split(',') | sort }}"
+      options: "{{ pve_backup_storage_observed.config.options | default('') }}"
+      nodes: "{{ (pve_backup_storage_observed.config.nodes | default('')).split(',') | reject('equalto', '') | list | sort }}"
+      disabled: "{{ pve_backup_storage_observed.config.disable | default(0) | int }}"
+      runtime_present: "{{ (pve_backup_storage_observed.runtime_count | int) == 1 }}"
+      runtime_active: "{{ pve_backup_storage_observed.runtime.active | default(0) | int }}"
+      runtime_enabled: "{{ pve_backup_storage_observed.runtime.enabled | default(0) | int }}"
+  changed_when: false
+
+- name: Build PVE backup storage plan
+  ansible.builtin.set_fact:
+    pve_backup_storage_plan:
+      result: >-
+        {{
+          'BLOCK'
+          if (
+            (pve_backup_storage_observed.config_count | int) > 1
+            or (
+              (pve_backup_storage_observed.config_count | int) == 1
+              and (
+                pve_backup_storage_current.type != pve.backup_storage.type
+                or pve_backup_storage_current.server != pve.backup_storage.server
+                or pve_backup_storage_current.export != pve.backup_storage.export
+              )
+            )
+            or (
+              (pve_backup_storage_observed.config_count | int) == 1
+              and (
+                not pve_backup_storage_current.runtime_present
+                or pve_backup_storage_current.runtime_active != 1
+                or pve_backup_storage_current.runtime_enabled != 1
+              )
+            )
+          )
+          else 'PASS'
+        }}
+      action: >-
+        {{
+          'BLOCK'
+          if (
+            (pve_backup_storage_observed.config_count | int) > 1
+            or (
+              (pve_backup_storage_observed.config_count | int) == 1
+              and (
+                pve_backup_storage_current.type != pve.backup_storage.type
+                or pve_backup_storage_current.server != pve.backup_storage.server
+                or pve_backup_storage_current.export != pve.backup_storage.export
+              )
+            )
+            or (
+              (pve_backup_storage_observed.config_count | int) == 1
+              and (
+                not pve_backup_storage_current.runtime_present
+                or pve_backup_storage_current.runtime_active != 1
+                or pve_backup_storage_current.runtime_enabled != 1
+              )
+            )
+          )
+          else (
+            'CREATE'
+            if (pve_backup_storage_observed.config_count | int) == 0
+            else (
+              'UPDATE'
+              if (
+                pve_backup_storage_current.content != (pve.backup_storage.content | sort)
+                or pve_backup_storage_current.options != pve.backup_storage.options
+                or pve_backup_storage_current.nodes != (pve.backup_storage.nodes | sort)
+                or pve_backup_storage_current.disabled != (0 if pve.backup_storage.enabled else 1)
+              )
+              else 'NOOP'
+            )
+          )
+        }}
+      changed_fields: >-
+        {{
+          (['content'] if ((pve_backup_storage_observed.config_count | int) == 1 and pve_backup_storage_current.content != (pve.backup_storage.content | sort)) else [])
+          +
+          (['options'] if ((pve_backup_storage_observed.config_count | int) == 1 and pve_backup_storage_current.options != pve.backup_storage.options) else [])
+          +
+          (['nodes'] if ((pve_backup_storage_observed.config_count | int) == 1 and pve_backup_storage_current.nodes != (pve.backup_storage.nodes | sort)) else [])
+          +
+          (['enabled'] if ((pve_backup_storage_observed.config_count | int) == 1 and pve_backup_storage_current.disabled != (0 if pve.backup_storage.enabled else 1)) else [])
+        }}
+      desired:
+        id: "{{ pve.backup_storage.id }}"
+        type: "{{ pve.backup_storage.type }}"
+        server: "{{ pve.backup_storage.server }}"
+        export: "{{ pve.backup_storage.export }}"
+        content: "{{ pve.backup_storage.content | sort }}"
+        options: "{{ pve.backup_storage.options }}"
+        nodes: "{{ pve.backup_storage.nodes | sort }}"
+        enabled: "{{ pve.backup_storage.enabled | bool }}"
+      current: "{{ pve_backup_storage_current }}"
+  changed_when: false
+
+- name: Block unsafe PVE backup storage plan
+  ansible.builtin.assert:
+    that:
+      - pve_backup_storage_plan.result == "PASS"
+      - pve_backup_storage_plan.action != "BLOCK"
+    fail_msg: >-
+      PVE backup storage plan is blocked by duplicate storage ID, identity drift,
+      or an inactive/unavailable existing storage.
+
+- name: Report PVE backup storage plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      storage_id: "{{ pve.backup_storage.id }}"
+      action: "{{ pve_backup_storage_plan.action }}"
+      changed_fields: "{{ pve_backup_storage_plan.changed_fields }}"
+      desired: "{{ pve_backup_storage_plan.desired }}"
+      result: "{{ pve_backup_storage_plan.result }}"

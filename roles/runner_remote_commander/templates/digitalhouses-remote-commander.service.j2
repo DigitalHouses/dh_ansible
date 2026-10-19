@@ -1,0 +1,21 @@
+[Unit]
+Description=DigitalHouses Remote Desktop Commander
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root
+Environment=HOME=/root
+Environment=PATH=/opt/dh-node/bin:/usr/bin:/bin
+Environment="NODE_OPTIONS={{ remote_commander_node_network_options }}"
+Environment=LANG=C.UTF-8
+ExecStart=/opt/dh-node/bin/desktop-commander remote
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=10
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

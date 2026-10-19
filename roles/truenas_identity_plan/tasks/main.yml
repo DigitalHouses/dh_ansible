@@ -1,0 +1,80 @@
+---
+- name: Validate TrueNAS identity plan contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == "managed"
+      - truenas_provision.identity is mapping
+      - truenas_provision.identity.groups is sequence
+      - truenas_provision.identity.users is sequence
+      - site_secrets.truenas.audit_api_key is defined
+      - site_secrets.truenas.audit_api_key | length > 0
+    fail_msg: "TrueNAS identity plan prerequisites are incomplete."
+
+- name: Read current TrueNAS local identities
+  truenas_rpc:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ site_secrets.truenas.audit_api_key }}"
+    calls:
+      - name: groups
+        method: group.query
+        params:
+          - []
+          - select:
+              - id
+              - gid
+              - name
+              - builtin
+              - local
+              - smb
+              - roles
+              - users
+      - name: users
+        method: user.query
+        params:
+          - []
+          - select:
+              - id
+              - uid
+              - username
+              - full_name
+              - builtin
+              - local
+              - smb
+              - password_disabled
+              - ssh_password_enabled
+              - shell
+              - home
+              - roles
+              - group
+              - groups
+  register: truenas_identity_observed
+  changed_when: false
+  no_log: true
+
+- name: Build TrueNAS identity reconciliation plan
+  truenas_identity_plan:
+    observed_groups: "{{ truenas_identity_observed.results.groups }}"
+    observed_users: "{{ truenas_identity_observed.results.users }}"
+    desired_groups: "{{ truenas_provision.identity.groups }}"
+    desired_users: "{{ truenas_provision.identity.users }}"
+  register: truenas_identity_plan_result
+  changed_when: false
+
+- name: Report TrueNAS identity plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: "{{ truenas_identity_plan_result.result }}"
+      gates: "{{ truenas_identity_plan_result.gates }}"
+      groups: "{{ truenas_identity_plan_result.groups }}"
+      users: "{{ truenas_identity_plan_result.users }}"
+
+- name: Block unsafe TrueNAS identity plan
+  ansible.builtin.assert:
+    that:
+      - truenas_identity_plan_result.result == "PASS"
+    fail_msg: "TrueNAS identity plan is unsafe. No identity writes are authorized."

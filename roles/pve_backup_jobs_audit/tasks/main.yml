@@ -1,0 +1,178 @@
+---
+- name: Validate declarative PVE backup jobs
+  ansible.builtin.assert:
+    that:
+      - pve.backup_jobs is sequence
+      - (pve.backup_jobs | map(attribute='id') | unique | list | length) == (pve.backup_jobs | length)
+      - site_secrets.pve.audit_token_secret | length > 0
+      - pve.tls.sha256_fingerprint | length > 0
+    fail_msg: "Invalid PVE backup jobs inventory."
+  no_log: true
+
+- name: Validate each PVE backup job boundary
+  ansible.builtin.assert:
+    that:
+      - item.id is match('^[A-Za-z0-9_-]+$')
+      - item.storage == pve.backup_storage.id
+      - item.node == pve.node
+      - item.vmids is sequence
+      - item.vmids | length > 0
+      - (item.vmids | map('int') | unique | list | length) == item.vmids | length
+      - item.schedule | length > 0
+      - item.mode in ['snapshot', 'stop', 'suspend']
+      - item.compress in ['zstd', 'gzip', 'lzo']
+      - item.prune_backups is match('^keep-last=[1-9][0-9]*$')
+      - item.comment is match('^Managed by Ansimble-2:')
+    fail_msg: "Backup job must have an explicit node, storage, VMID list, retention and managed ownership."
+  loop: "{{ pve.backup_jobs }}"
+  loop_control:
+    label: "{{ item.id }}"
+
+- name: Read pinned PVE TLS identity
+  ansible.builtin.shell:
+    cmd: >-
+      openssl s_client -connect {{ pve.host }}:{{ pve.port }}
+      -servername {{ pve.host }} </dev/null 2>/dev/null
+      | openssl x509 -noout -fingerprint -sha256
+  register: pve_backup_jobs_tls
+  changed_when: false
+
+- name: Require pinned PVE TLS identity
+  ansible.builtin.assert:
+    that:
+      - ('sha256 Fingerprint=' ~ pve.tls.sha256_fingerprint) in pve_backup_jobs_tls.stdout
+    fail_msg: "PVE TLS fingerprint mismatch."
+
+- name: Read cluster backup jobs through Proxmox API
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/cluster/backup"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}"
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_backup_jobs_raw
+  changed_when: false
+  no_log: true
+
+- name: Read target guest inventory through Proxmox API
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}"
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_backup_jobs_guests
+  changed_when: false
+  no_log: true
+
+- name: Read backup storage runtime through Proxmox API
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/storage/{{ pve.backup_storage.id }}/status"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}"
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_backup_jobs_storage
+  changed_when: false
+  no_log: true
+
+- name: Require ready backup storage and exact targeted guests
+  ansible.builtin.assert:
+    that:
+      - pve_backup_jobs_storage.json.data.active | int == 1
+      - pve_backup_jobs_storage.json.data.enabled | int == 1
+      - pve_backup_jobs_storage.json.data.type == 'nfs'
+      - >-
+        (pve_backup_jobs_guests.json.data
+         | selectattr('vmid', 'equalto', item | int)
+         | selectattr('node', 'equalto', pve.node)
+         | list | length) == 1
+    fail_msg: "Backup source missing, moved to another node or target NFS storage inactive."
+  loop: "{{ pve.backup_jobs | map(attribute='vmids') | flatten | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Fetch LXC configurations for snapshot safety
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/lxc/{{ item }}/config"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}"
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  loop: "{{ pve.backup_jobs | selectattr('mode', 'equalto', 'snapshot') | map(attribute='vmids') | flatten | unique | list }}"
+  loop_control:
+    label: "{{ item }}"
+  when: >-
+    (pve_backup_jobs_guests.json.data
+     | selectattr('vmid', 'equalto', item | int)
+     | selectattr('type', 'equalto', 'lxc')
+     | list | length) == 1
+  register: pve_backup_jobs_lxc_configs
+  changed_when: false
+  no_log: true
+
+- name: Require simple LXC snapshot-compatible volume layout
+  ansible.builtin.assert:
+    that:
+      - item.json.data.rootfs is defined
+      - >-
+        (item.json.data | dict2items
+         | selectattr('key', 'match', '^mp[0-9]+$')
+         | list | length) == 0
+    fail_msg: "LXC has an additional mount point or missing rootfs; snapshot mode needs an explicit storage review."
+  loop: "{{ pve_backup_jobs_lxc_configs.results | rejectattr('skipped', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Read PVE node storage runtime for snapshot eligibility
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/storage"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ site_secrets.pve.audit_token_secret }}"
+    validate_certs: false
+    status_code: 200
+    return_content: true
+  register: pve_backup_jobs_node_storages
+  changed_when: false
+  no_log: true
+
+- name: Require active snapshot-capable LXC rootfs storage
+  ansible.builtin.assert:
+    that:
+      - snapshot_storage_matches | length == 1
+      - snapshot_storage_matches[0].type in ['lvmthin', 'zfspool', 'btrfs', 'rbd']
+      - snapshot_storage_matches[0].active | int == 1
+      - snapshot_storage_matches[0].enabled | int == 1
+    fail_msg: "LXC source storage is not active or snapshot capable."
+  vars:
+    snapshot_storage_matches: >-
+      {{ pve_backup_jobs_node_storages.json.data
+         | selectattr('storage', 'equalto', item.json.data.rootfs.split(':')[0])
+         | list }}
+  loop: "{{ pve_backup_jobs_lxc_configs.results | rejectattr('skipped', 'defined') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+  no_log: true
+
+- name: Publish sanitized PVE backup job audit
+  ansible.builtin.set_fact:
+    pve_backup_jobs_observed: "{{ pve_backup_jobs_raw.json.data }}"
+  changed_when: false
+
+- name: Report PVE backup jobs audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      managed_ids: "{{ pve.backup_jobs | map(attribute='id') | list }}"
+      total_cluster_jobs: "{{ pve_backup_jobs_observed | length }}"
+      storage_ready: true
+      result: PASS

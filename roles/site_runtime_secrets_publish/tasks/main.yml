@@ -1,0 +1,150 @@
+---
+- name: Validate site runtime secret publish contract
+  ansible.builtin.assert:
+    that:
+      - site_runner.runtime.secrets.mode == "site_runtime_preferred"
+      - site_runner.runtime.secrets.provider == "pve_root_file"
+      - site_runner.runtime.secrets.remote_directory | length > 0
+      - site_secrets is mapping
+      - "'pve_write_host' in groups.get('pve_write_target', [])"
+    fail_msg: "Site runtime secret publish prerequisites are incomplete."
+  no_log: true
+
+- name: Ensure root-only site runtime secret directory exists
+  ansible.builtin.file:
+    path: "{{ site_runner.runtime.secrets.remote_directory }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+  delegate_to: pve_write_host
+  become: true
+
+- name: Check for existing site runtime secret envelope
+  ansible.builtin.stat:
+    path: "{{ site_runner.runtime.secrets.remote_directory }}/{{ site.id }}.yml"
+  delegate_to: pve_write_host
+  become: true
+  register: site_runtime_existing_stat
+  changed_when: false
+  no_log: true
+
+- name: Read existing site runtime secret envelope
+  ansible.builtin.slurp:
+    src: "{{ site_runner.runtime.secrets.remote_directory }}/{{ site.id }}.yml"
+  delegate_to: pve_write_host
+  become: true
+  register: site_runtime_existing_raw
+  changed_when: false
+  no_log: true
+  when: site_runtime_existing_stat.stat.exists
+
+- name: Parse existing site runtime secret envelope
+  ansible.builtin.set_fact:
+    site_runtime_existing_payload: >-
+      {{
+        (site_runtime_existing_raw.content | b64decode | from_yaml)
+        if site_runtime_existing_stat.stat.exists
+        else {}
+      }}
+  no_log: true
+
+- name: Validate existing site runtime secret envelope before preservation
+  ansible.builtin.assert:
+    that:
+      - site_runtime_existing_payload.runtime_secrets.schema_version | int == 1
+      - site_runtime_existing_payload.runtime_secrets.site_id == site.id
+      - site_runtime_existing_payload.runtime_secrets.site_secrets is mapping
+    fail_msg: "Existing site runtime secret envelope is unsafe to preserve."
+  no_log: true
+  when: site_runtime_existing_stat.stat.exists
+
+- name: Require fleet-wide TrueNAS human administrator credential
+  ansible.builtin.assert:
+    that:
+      - fleet_shared_secrets is mapping
+      - fleet_shared_secrets.truenas_human_admin_password is defined
+      - fleet_shared_secrets.truenas_human_admin_password | length >= 8
+    fail_msg: >-
+      Fleet-wide TrueNAS human administrator password is absent from Fleet Vault.
+      Set it explicitly before publishing site runtime secrets.
+  no_log: true
+
+- name: Build site runtime secret payload from fleet-wide administrator credential
+  ansible.builtin.set_fact:
+    site_runtime_site_secrets_effective: >-
+      {{
+        site_secrets
+        | combine(
+            {
+              'truenas': (
+                site_secrets.truenas
+                | combine(
+                    {
+                      'human_admin_password':
+                        fleet_shared_secrets.truenas_human_admin_password
+                    },
+                    recursive=True
+                  )
+              )
+            },
+            recursive=True
+          )
+      }}
+  no_log: true
+
+- name: Select effective site secrets after fleet-wide credential injection
+  ansible.builtin.set_fact:
+    site_secrets: "{{ site_runtime_site_secrets_effective }}"
+  no_log: true
+  changed_when: false
+
+- name: Publish root-only site runtime secret envelope
+  ansible.builtin.copy:
+    dest: "{{ site_runner.runtime.secrets.remote_directory }}/{{ site.id }}.yml"
+    owner: root
+    group: root
+    mode: "0600"
+    content: >-
+      {{
+        {
+          'runtime_secrets': {
+            'schema_version': 1,
+            'site_id': site.id,
+            'site_secrets': site_runtime_site_secrets_effective
+          }
+        }
+        | to_nice_yaml(indent=2, sort_keys=False)
+      }}
+  delegate_to: pve_write_host
+  become: true
+  no_log: true
+  register: site_runtime_secret_publish
+
+- name: Verify published site runtime secret metadata
+  ansible.builtin.stat:
+    path: "{{ site_runner.runtime.secrets.remote_directory }}/{{ site.id }}.yml"
+  delegate_to: pve_write_host
+  become: true
+  register: site_runtime_secret_stat
+  changed_when: false
+  no_log: true
+
+- name: Assert root-only site runtime secret metadata
+  ansible.builtin.assert:
+    that:
+      - site_runtime_secret_stat.stat.exists
+      - site_runtime_secret_stat.stat.pw_name == "root"
+      - site_runtime_secret_stat.stat.gr_name == "root"
+      - site_runtime_secret_stat.stat.mode == "0600"
+    fail_msg: "Published site runtime secret file permissions are unsafe."
+  no_log: true
+
+- name: Report site runtime secret publication
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      result: PASS
+      changed: "{{ site_runtime_secret_publish.changed }}"
+      provider: pve_root_file
+      secret_values_reported: false

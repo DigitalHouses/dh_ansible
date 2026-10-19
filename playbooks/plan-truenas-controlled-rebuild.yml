@@ -1,0 +1,4 @@
+---
+- import_playbook: plan-truenas-provision.yml
+  vars:
+    truenas_controlled_rebuild: true

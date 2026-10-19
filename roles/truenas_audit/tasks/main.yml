@@ -1,0 +1,104 @@
+---
+- name: Validate TrueNAS audit contract
+  ansible.builtin.assert:
+    that:
+      - truenas is mapping
+      - truenas.host is defined
+      - truenas.port is defined
+      - truenas.endpoint is defined
+      - truenas.tls.sha256_fingerprint is defined
+      - truenas.auth.username is defined
+      - vault_truenas_audit_api_key is defined
+      - vault_truenas_audit_api_key | length > 0
+    fail_msg: "TrueNAS audit inventory or Vault contract is incomplete."
+
+- name: Read TrueNAS inventory over JSON-RPC
+  truenas_rpc:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.username }}"
+    api_key: "{{ vault_truenas_audit_api_key }}"
+    calls:
+      - name: system
+        method: system.info
+      - name: pools
+        method: pool.query
+        params: [[], {}]
+      - name: datasets
+        method: pool.dataset.query
+        params:
+          - []
+          - select:
+              - id
+              - type
+              - name
+              - pool
+              - mountpoint
+              - acltype
+              - encrypted
+              - locked
+            extra:
+              flat: true
+              properties:
+                - acltype
+              retrieve_user_props: false
+      - name: users
+        method: user.query
+        params:
+          - []
+          - select:
+              - id
+              - uid
+              - username
+              - builtin
+              - local
+              - roles
+              - password_disabled
+              - smb
+      - name: groups
+        method: group.query
+        params:
+          - []
+          - select:
+              - id
+              - gid
+              - name
+              - builtin
+              - local
+              - roles
+              - smb
+      - name: nfs_shares
+        method: sharing.nfs.query
+        params: [[], {}]
+      - name: smb_shares
+        method: sharing.smb.query
+        params: [[], {}]
+      - name: services
+        method: service.query
+        params: [[], {}]
+  register: truenas_audit
+  changed_when: false
+  no_log: true
+
+- name: Report TrueNAS audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      host: "{{ truenas.host }}"
+      version: "{{ truenas_audit.results.system.version | default('unknown') }}"
+      hostname: "{{ truenas_audit.results.system.hostname | default('unknown') }}"
+      pools_total: "{{ truenas_audit.results.pools | length }}"
+      pool_names: "{{ truenas_audit.results.pools | map(attribute='name') | list }}"
+      datasets_total: "{{ truenas_audit.results.datasets | length }}"
+      dataset_ids: "{{ truenas_audit.results.datasets | map(attribute='id') | list }}"
+      local_users_total: "{{ truenas_audit.results.users | selectattr('local', 'equalto', true) | rejectattr('builtin', 'equalto', true) | list | length }}"
+      local_usernames: "{{ truenas_audit.results.users | selectattr('local', 'equalto', true) | rejectattr('builtin', 'equalto', true) | map(attribute='username') | list }}"
+      local_groups_total: "{{ truenas_audit.results.groups | selectattr('local', 'equalto', true) | rejectattr('builtin', 'equalto', true) | list | length }}"
+      local_groupnames: "{{ truenas_audit.results.groups | selectattr('local', 'equalto', true) | rejectattr('builtin', 'equalto', true) | map(attribute='name') | list }}"
+      nfs_shares_total: "{{ truenas_audit.results.nfs_shares | length }}"
+      smb_shares_total: "{{ truenas_audit.results.smb_shares | length }}"
+      services_total: "{{ truenas_audit.results.services | length }}"
+      tls_fingerprint: "{{ truenas_audit.tls_sha256_fingerprint }}"
+      result: PASS

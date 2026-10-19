@@ -1,0 +1,98 @@
+---
+- name: Validate runner audit contract
+  ansible.builtin.assert:
+    that:
+      - site is mapping
+      - site.id is defined
+      - site_runner is mapping
+      - site_runner.hostname is defined
+      - site_runner.network.ipv4 is defined
+      - site_runner.runtime.ansible_core is defined
+      - site_runner.runtime.venv_path is defined
+      - site_runner.bootstrap.repository_path is defined
+    fail_msg: "Site runner inventory contract is incomplete."
+
+- name: Read hostname
+  ansible.builtin.command:
+    argv: [hostname]
+  register: runner_hostname
+  changed_when: false
+
+- name: Read systemd state
+  ansible.builtin.command:
+    argv: [systemctl, is-system-running]
+  register: runner_systemd
+  changed_when: false
+  failed_when: false
+
+- name: Read failed systemd units
+  ansible.builtin.command:
+    argv: [systemctl, --failed, --no-legend, --no-pager]
+  register: runner_failed_units
+  changed_when: false
+
+- name: Read global IPv4 addresses
+  ansible.builtin.command:
+    argv: [ip, -4, -o, addr, show, scope, global]
+  register: runner_ipv4
+  changed_when: false
+
+- name: Read repository HEAD
+  ansible.builtin.command:
+    argv: [git, -C, "{{ runner_audit_repository_path | default(site_runner.bootstrap.repository_path) }}", rev-parse, HEAD]
+  register: runner_git_head
+  changed_when: false
+
+- name: Read repository branch
+  ansible.builtin.command:
+    argv: [git, -C, "{{ runner_audit_repository_path | default(site_runner.bootstrap.repository_path) }}", branch, --show-current]
+  register: runner_git_branch
+  changed_when: false
+
+- name: Read repository origin
+  ansible.builtin.command:
+    argv: [git, -C, "{{ runner_audit_repository_path | default(site_runner.bootstrap.repository_path) }}", remote, get-url, origin]
+  register: runner_git_origin
+  changed_when: false
+
+- name: Read repository worktree state
+  ansible.builtin.command:
+    argv: [git, -C, "{{ runner_audit_repository_path | default(site_runner.bootstrap.repository_path) }}", status, --porcelain]
+  register: runner_git_status
+  changed_when: false
+
+- name: Read Ansible runtime version
+  ansible.builtin.command:
+    argv:
+      - "{{ site_runner.runtime.venv_path }}/bin/ansible"
+      - --version
+  register: runner_ansible_version
+  changed_when: false
+
+- name: Assert runner acceptance
+  ansible.builtin.assert:
+    that:
+      - runner_hostname.stdout == site_runner.hostname
+      - runner_systemd.rc == 0
+      - runner_systemd.stdout == "running"
+      - runner_failed_units.stdout | trim == ""
+      - site_runner.network.ipv4 in runner_ipv4.stdout
+      - runner_git_branch.stdout == runner_audit_repository_branch
+      - runner_git_origin.stdout == runner_audit_repository_origin
+      - runner_git_status.stdout | trim == ""
+      - ("core " ~ site_runner.runtime.ansible_core) in runner_ansible_version.stdout
+    fail_msg: "Runner audit failed. No remediation was attempted."
+
+- name: Report runner audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      hostname: "{{ runner_hostname.stdout }}"
+      systemd: "{{ runner_systemd.stdout }}"
+      failed_units: 0
+      ipv4: "{{ site_runner.network.ipv4 }}"
+      repository_head: "{{ runner_git_head.stdout }}"
+      repository_branch: "{{ runner_git_branch.stdout }}"
+      repository_worktree: clean
+      ansible_core: "{{ site_runner.runtime.ansible_core }}"
+      result: PASS

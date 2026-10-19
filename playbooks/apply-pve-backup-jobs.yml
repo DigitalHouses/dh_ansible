@@ -1,0 +1,64 @@
+---
+- name: Reconcile native PVE backup jobs
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_host.yml"
+
+    - name: Register pinned PVE host-write API transport
+      ansible.builtin.add_host:
+        name: pve_write_host
+        groups: pve_write_target
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+      changed_when: false
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_host_write_access
+    - role: pve_backup_jobs_audit
+    - role: pve_backup_jobs_plan
+    - role: pve_backup_jobs_apply
+
+  post_tasks:
+    - name: Re-audit PVE jobs independently after apply
+      ansible.builtin.include_role:
+        name: pve_backup_jobs_audit
+        allow_duplicates: true
+
+    - name: Recompute PVE job plan after apply
+      ansible.builtin.include_role:
+        name: pve_backup_jobs_plan
+        allow_duplicates: true
+
+    - name: Require exact post-apply convergence
+      ansible.builtin.assert:
+        that:
+          - (pve_backup_jobs_plan | selectattr('action', 'ne', 'NOOP') | list | length) == 0
+        fail_msg: "PVE backup jobs did not converge to exact NOOP."
+
+    - name: Report PVE backup job acceptance
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          managed_ids: "{{ pve.backup_jobs | map(attribute='id') | list }}"
+          post_apply: NOOP
+          result: PASS

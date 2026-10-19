@@ -1,0 +1,10 @@
+---
+# Pure read-only post-install acceptance. Run after deployment or reboot.
+- import_playbook: audit-truenas-apps.yml
+
+- name: Verify installed TrueNAS Apps against pinned site inventory
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  roles:
+    - role: truenas_apps_verify

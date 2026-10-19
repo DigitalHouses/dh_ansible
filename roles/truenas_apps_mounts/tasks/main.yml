@@ -1,0 +1,38 @@
+---
+- name: Validate site-specific TrueNAS Apps mount reconciliation contract
+  ansible.builtin.assert:
+    that:
+      - truenas.lifecycle_state == 'managed'
+      - truenas_apps.pool == truenas_provision.storage.pool.name
+      - truenas_apps.pool == site.owner_slug ~ '_pool'
+      - truenas.auth.write_username == 'ansimble'
+      - site_secrets.truenas.human_admin_password | length >= 8
+      - site_secrets.truenas.write_api_key | length > 0
+    fail_msg: "TrueNAS Apps identity or runtime secret contract is not ready."
+  no_log: true
+
+- name: Reconcile pinned Backrest and FileBrowser Quantum mounts via TrueNAS API
+  truenas_apps_mounts_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    app_password: "{{ site_secrets.truenas.human_admin_password }}"
+    applications: "{{ truenas_apps.applications }}"
+    pool_name: "{{ truenas_apps.pool }}"
+    apply: "{{ apps_mounts_apply | bool }}"
+    timeout: 30
+  register: truenas_apps_mounts_result
+  changed_when: truenas_apps_mounts_result.changed | bool
+  no_log: true
+
+- name: Report sanitized TrueNAS Apps mount reconciliation
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      action: "{{ 'APPLY' if apps_mounts_apply | bool else 'PLAN' }}"
+      result: "{{ truenas_apps_mounts_result.result }}"
+      apps: "{{ truenas_apps_mounts_result.plan }}"
+      secret_values_reported: false

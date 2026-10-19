@@ -1,0 +1,17 @@
+---
+# Synthetic fixture for public CI only. Never copy a real site inventory here.
+all:
+  vars:
+    site_id: ci-example
+    ansible_connection: local
+  children:
+    site_runner:
+      hosts:
+        runner:
+          ansible_connection: local
+          ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    pve:
+      hosts:
+        pve_example:
+          ansible_connection: local
+          ansible_host: 127.0.0.1

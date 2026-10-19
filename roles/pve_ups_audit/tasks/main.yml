@@ -1,0 +1,166 @@
+---
+- name: Validate PVE UPS audit contract
+  ansible.builtin.assert:
+    that:
+      - ups is mapping
+      - ups.device.transport == 'usb'
+      - ups.device.required is defined
+      - ups.device.vendor_id is defined
+      - ups.device.product_id is defined
+      - ups.device.manufacturer is defined
+      - ups.device.model is defined
+      - ups.nut.driver is defined
+      - ups.nut.port is defined
+      - ups.nut.ups_name is defined
+      - ups.nut.server.listen_host is defined
+      - ups.nut.server.port is defined
+      - ups.provisioning.always_install | bool
+      - ups.provisioning.control_user == 'dh_primary_user'
+      - ups.nut.fsd.enabled is defined
+      - (ups.nut.fsd.enabled | bool) == (ups.nut.monitor.expected_state == 'enabled')
+      - ups.audit.host_runtime_transport == 'restricted_ssh'
+    fail_msg: "PVE UPS/NUT baseline inventory contract is incomplete."
+
+- name: Read matching USB UPS devices from sysfs
+  ansible.builtin.shell:
+    cmd: |
+      for device in /sys/bus/usb/devices/*; do
+          [ -r "$device/idVendor" ] || continue
+          [ -r "$device/idProduct" ] || continue
+          vendor="$(cat "$device/idVendor" 2>/dev/null)"
+          product="$(cat "$device/idProduct" 2>/dev/null)"
+          if [ "$vendor" = "{{ ups.device.vendor_id }}" ] &&
+             [ "$product" = "{{ ups.device.product_id }}" ]; then
+              manufacturer="$(cat "$device/manufacturer" 2>/dev/null || true)"
+              model="$(cat "$device/product" 2>/dev/null || true)"
+              printf '%s|%s|%s|%s|%s\n' \
+                  "$(basename "$device")" \
+                  "$vendor" \
+                  "$product" \
+                  "$manufacturer" \
+                  "$model"
+          fi
+      done
+  args:
+    executable: /bin/bash
+  register: pve_ups_usb_matches
+  changed_when: false
+
+- name: Validate UPS USB population
+  ansible.builtin.assert:
+    that:
+      - pve_ups_usb_matches.stdout_lines | length <= 1
+      - >-
+        (not (ups.device.required | bool))
+        or
+        (pve_ups_usb_matches.stdout_lines | length == 1)
+    fail_msg: "UPS USB population is ambiguous or a required UPS is absent."
+
+- name: Validate connected UPS USB identity
+  ansible.builtin.assert:
+    that:
+      - pve_ups_usb_matches.stdout_lines[0].split('|')[1] == ups.device.vendor_id
+      - pve_ups_usb_matches.stdout_lines[0].split('|')[2] == ups.device.product_id
+      - pve_ups_usb_matches.stdout_lines[0].split('|')[3] == ups.device.manufacturer
+      - pve_ups_usb_matches.stdout_lines[0].split('|')[4] | trim == ups.device.model
+    fail_msg: "Connected UPS USB identity does not match the site inventory."
+  when: pve_ups_usb_matches.stdout_lines | length == 1
+
+- name: Validate UPS is not configured for QEMU USB passthrough
+  ansible.builtin.assert:
+    that:
+      - (ups.device.vendor_id ~ ':' ~ ups.device.product_id) not in (pve_usb_passthrough_entries | default([]) | to_json)
+    fail_msg: "The adopted UPS is configured for QEMU USB passthrough; host ownership cannot be accepted."
+  when:
+    - ups.audit.require_ups_not_passed_to_qemu | bool
+    - pve_ups_usb_matches.stdout_lines | length == 1
+
+- name: Check that NUT server is not exposed on the PVE LAN address
+  ansible.builtin.wait_for:
+    host: "{{ pve.host }}"
+    port: "{{ ups.nut.server.port }}"
+    state: stopped
+    connect_timeout: "{{ pve_ups_audit_connect_timeout }}"
+    timeout: "{{ pve_ups_audit_connect_timeout }}"
+  changed_when: false
+  when: ups.audit.require_nut_not_exposed_on_lan | bool
+
+- name: Validate always-installed host NUT baseline
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit_facts.nut.mode == ups.nut.mode
+      - pve_host_audit_facts.nut.server_active == 'active'
+      - >-
+        ((ups.nut.fsd.enabled | bool) and pve_host_audit_facts.nut.monitor_active == 'active')
+        or
+        ((not ups.nut.fsd.enabled | bool) and pve_host_audit_facts.nut.monitor_active == 'inactive')
+      - >-
+        ((ups.nut.fsd.enabled | bool) and pve_host_audit_facts.nut.monitor_enabled in ['enabled', 'enabled-runtime'])
+        or
+        ((not ups.nut.fsd.enabled | bool) and pve_host_audit_facts.nut.monitor_enabled in ['disabled', 'masked'])
+      - pve_host_audit_facts.nut.listeners == [ups.nut.server.listen_host ~ ':' ~ (ups.nut.server.port | string)]
+      - not (pve_host_audit_facts.nut.killpower_present | bool)
+    fail_msg: "Live PVE NUT baseline does not match the desired native NUT contract."
+  when:
+    - pve_host_audit is defined
+    - pve_host_audit.enabled | bool
+
+- name: Validate native NUT PRIMARY MONITOR identity if available
+  ansible.builtin.assert:
+    that:
+      - >-
+        (
+          ({
+            'system': ups.nut.ups_name ~ '@' ~ ups.nut.server.listen_host,
+            'power_value': '1',
+            'role': 'primary'
+          }) in pve_host_audit_facts.nut.monitor_entries
+        )
+        if (ups.nut.fsd.enabled | bool)
+        else (pve_host_audit_facts.nut.monitor_entries | length == 0)
+    fail_msg: "Live NUT PRIMARY MONITOR entry does not match site inventory."
+  when:
+    - pve_host_audit is defined
+    - pve_host_audit.enabled | bool
+    - pve_host_audit_facts.nut.monitor_entries is defined
+
+- name: Validate connected UPS NUT telemetry
+  ansible.builtin.assert:
+    that:
+      - pve_host_audit_facts.nut.driver_active == 'active'
+      - pve_host_audit_facts.nut.ups_names == [ups.nut.ups_name]
+      - pve_host_audit_facts.nut.ups_config.driver == ups.nut.driver
+      - pve_host_audit_facts.nut.upsc_ok | bool
+      - >-
+        (
+          pve_host_audit_facts.nut.upsc.get('device.mfr', '')
+          | default(pve_host_audit_facts.nut.upsc.get('ups.mfr', ''), true)
+        ) == ups.device.manufacturer
+      - >-
+        (
+          pve_host_audit_facts.nut.upsc.get('device.model', '')
+          | default(pve_host_audit_facts.nut.upsc.get('ups.model', ''), true)
+          | trim
+        ) == ups.device.model
+    fail_msg: "Connected UPS telemetry does not match the desired NUT contract."
+  when:
+    - pve_host_audit is defined
+    - pve_host_audit.enabled | bool
+    - pve_ups_usb_matches.stdout_lines | length == 1
+
+- name: Report PVE UPS/NUT baseline audit
+  ansible.builtin.debug:
+    msg:
+      always_installed: "{{ ups.provisioning.always_install }}"
+      ups_present: "{{ pve_ups_usb_matches.stdout_lines | length == 1 }}"
+      usb_identity: "{{ pve_ups_usb_matches.stdout_lines[0] if (pve_ups_usb_matches.stdout_lines | length == 1) else 'ABSENT_ALLOWED' }}"
+      nut_driver_expected: "{{ ups.nut.driver }}"
+      nut_ups_name_expected: "{{ ups.nut.ups_name }}"
+      nut_server_expected: "{{ ups.nut.server.listen_host }}:{{ ups.nut.server.port }}"
+      nut_lan_exposure: "blocked"
+      nut_monitor_expected: "{{ ups.nut.monitor.expected_state }}"
+      native_nut_primary_enabled: "{{ ups.nut.fsd.enabled }}"
+      native_monitor_identity_checked: "{{ pve_host_audit_facts.nut.monitor_entries is defined if (pve_host_audit is defined and pve_host_audit.enabled | bool) else false }}"
+      pve_agent_integration_expected: "{{ ups.pve_agent.integration_expected }}"
+      host_nut_runtime: "{{ 'PASS' if (pve_host_audit is defined and pve_host_audit.enabled | bool) else 'UNKNOWN' }}"
+      result: "{{ 'PASS' if (pve_host_audit is defined and pve_host_audit.enabled | bool) else 'PARTIAL' }}"

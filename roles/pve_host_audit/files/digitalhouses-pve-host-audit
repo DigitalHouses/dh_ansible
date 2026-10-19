@@ -1,0 +1,198 @@
+#!/usr/bin/python3
+"""Restricted read-only host audit helper for DigitalHouses PVE nodes."""
+
+from __future__ import annotations
+
+import json
+import os
+import pwd
+import re
+import socket
+import subprocess
+from pathlib import Path
+
+
+ALLOWED_UPSC_KEYS = {
+    "device.mfr",
+    "device.model",
+    "ups.mfr",
+    "ups.model",
+    "ups.status",
+    "ups.load",
+    "ups.beeper.status",
+    "battery.charge",
+    "battery.runtime",
+    "input.voltage",
+    "output.voltage",
+}
+
+
+def run(args: list[str]) -> tuple[int, str]:
+    completed = subprocess.run(
+        args,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        check=False,
+        timeout=5,
+    )
+    return completed.returncode, completed.stdout.strip()
+
+
+def systemctl_state(action: str, unit: str) -> str:
+    rc, output = run(["/usr/bin/systemctl", action, unit])
+    if output:
+        return output.splitlines()[0].strip()
+    return "unknown" if rc else "unknown"
+
+
+def read_simple_assignment(path: Path, key: str) -> str | None:
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return None
+    pattern = re.compile(rf"^\s*{re.escape(key)}\s*=\s*(.*?)\s*$")
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        match = pattern.match(line)
+        if match:
+            return match.group(1).strip().strip('"').strip("'")
+    return None
+
+
+def read_ups_section(path: Path, section: str) -> dict[str, str]:
+    wanted = {"driver", "port", "vendorid", "productid", "desc"}
+    result: dict[str, str] = {}
+    current: str | None = None
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return result
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            current = line[1:-1].strip()
+            continue
+        if current != section or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key in wanted:
+            result[key] = value.strip().strip('"').strip("'")
+    return result
+
+
+def read_upsd_listeners(path: Path) -> list[str]:
+    listeners: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return listeners
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 3 and parts[0].upper() == "LISTEN":
+            listeners.append(f"{parts[1]}:{parts[2]}")
+    return listeners
+
+
+
+def read_upsmon_monitors(path: Path) -> list[dict[str, str]]:
+    result: list[dict[str, str]] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return result
+    for raw in lines:
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.split()
+        if len(parts) >= 6 and parts[0].upper() == "MONITOR":
+            result.append(
+                {
+                    "system": parts[1],
+                    "power_value": parts[2],
+                    "role": parts[5].lower(),
+                }
+            )
+    return result
+
+
+def read_upsc() -> tuple[list[str], dict[str, str], bool]:
+    rc, listed = run(["/usr/bin/upsc", "-l", "127.0.0.1"])
+    if rc != 0:
+        return [], {}, False
+
+    names = [line.strip() for line in listed.splitlines() if line.strip()]
+    if len(names) != 1:
+        return names, {}, False
+
+    rc, raw = run(["/usr/bin/upsc", f"{names[0]}@127.0.0.1"])
+    if rc != 0:
+        return names, {}, False
+
+    facts: dict[str, str] = {}
+    for line in raw.splitlines():
+        if ": " not in line:
+            continue
+        key, value = line.split(": ", 1)
+        if key in ALLOWED_UPSC_KEYS:
+            facts[key] = value.strip()
+    return names, facts, True
+
+
+def main() -> None:
+    uid = os.geteuid()
+    username = pwd.getpwuid(uid).pw_name
+    groups = sorted(
+        group.gr_name
+        for group in __import__("grp").getgrall()
+        if username in group.gr_mem or group.gr_gid == os.getegid()
+    )
+
+    ups_names, upsc, upsc_ok = read_upsc()
+    selected = ups_names[0] if len(ups_names) == 1 else ""
+
+    payload = {
+        "schema": 1,
+        "hostname": socket.gethostname(),
+        "machine_id": Path("/etc/machine-id").read_text().strip(),
+        "effective_uid": uid,
+        "username": username,
+        "groups": groups,
+        "ssh_source_ip": os.environ.get("SSH_CONNECTION", "").split(" ", 1)[0],
+        "nut": {
+            "mode": read_simple_assignment(Path("/etc/nut/nut.conf"), "MODE"),
+            "driver_active": systemctl_state("is-active", f"nut-driver@{selected}.service")
+            if selected
+            else "unknown",
+            "server_active": systemctl_state("is-active", "nut-server.service"),
+            "monitor_active": systemctl_state("is-active", "nut-monitor.service"),
+            "monitor_enabled": systemctl_state("is-enabled", "nut-monitor.service"),
+            "monitor_entries": read_upsmon_monitors(Path("/etc/nut/upsmon.conf")),
+            "shutdown_policy_active": systemctl_state(
+                "is-active", "digitalhouses-nut-shutdown-policy.service"
+            ),
+            "shutdown_policy_enabled": systemctl_state(
+                "is-enabled", "digitalhouses-nut-shutdown-policy.service"
+            ),
+            "ups_names": ups_names,
+            "ups_config": read_ups_section(Path("/etc/nut/ups.conf"), selected)
+            if selected
+            else {},
+            "listeners": read_upsd_listeners(Path("/etc/nut/upsd.conf")),
+            "upsc_ok": upsc_ok,
+            "upsc": upsc,
+            "killpower_present": Path("/etc/killpower").exists(),
+        },
+    }
+    print(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,18 @@
+---
+- name: Reconcile NUT driver services
+  ansible.builtin.command:
+    argv:
+      - /usr/sbin/upsdrvsvcctl
+      - resync
+  register: pve_nut_handler_resync
+  changed_when: pve_nut_handler_resync.rc == 42
+  failed_when: pve_nut_handler_resync.rc not in [0, 42]
+
+- name: Restart NUT server
+  ansible.builtin.systemd_service:
+    name: nut-server.service
+    state: restarted
+
+- name: Reload systemd
+  ansible.builtin.systemd_service:
+    daemon_reload: true

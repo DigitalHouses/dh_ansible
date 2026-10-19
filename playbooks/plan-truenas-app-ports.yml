@@ -1,0 +1,19 @@
+---
+- name: Plan Amir TrueNAS Web port publication after Access/DNS
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps.yml"
+    - ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/truenas_apps_ports.yml"
+  roles:
+    - role: fleet_secrets
+    - role: truenas_apps_ports
+      vars:
+        apps_ports_apply: false

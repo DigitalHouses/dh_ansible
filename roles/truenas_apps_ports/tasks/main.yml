@@ -1,0 +1,52 @@
+---
+- name: Assert TrueNAS Apps network publication scope
+  ansible.builtin.assert:
+    that:
+      - site.id is defined
+      - site.id | length > 0
+      - truenas.lifecycle_state == 'managed'
+      - truenas.host is defined
+      - truenas.host | length > 0
+      - truenas_apps.pool is defined
+      - truenas_apps.pool | length > 0
+      - truenas_apps_ports.source_ip == truenas.host
+      - truenas.auth.write_username == 'ansimble'
+      - truenas_apps_ports.publication | length == 2
+      - truenas_apps_ports.guard.cf_access_and_dns_required | bool
+      - site_secrets.truenas.write_api_key | length > 16
+    fail_msg: "Apps publication requires a valid site-scoped Access-gated contract."
+  no_log: true
+
+- name: Build approved isolated app network transition targets
+  ansible.builtin.set_fact:
+    apps_ports_targets: "{{ (apps_ports_targets | default([])) + [item | combine({'values': {'network': {'web_port': {'bind_mode': 'published', 'port_number': item['values']['network']['web_port']['port_number'], 'host_ips': [truenas_apps_ports.source_ip]}}}}, recursive=True)] }}"
+  loop: "{{ truenas_apps.applications | selectattr('name', 'in', (truenas_apps_ports.publication | map(attribute='name') | list)) | list }}"
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: false
+  no_log: true
+
+- name: Reconcile exactly two TrueNAS app host-port publications
+  truenas_apps_ports_reconcile:
+    host: "{{ truenas.host }}"
+    port: "{{ truenas.port }}"
+    endpoint: "{{ truenas.endpoint }}"
+    tls_sha256_fingerprint: "{{ truenas.tls.sha256_fingerprint }}"
+    username: "{{ truenas.auth.write_username }}"
+    api_key: "{{ site_secrets.truenas.write_api_key }}"
+    apps: "{{ apps_ports_targets }}"
+    pool_name: "{{ truenas_apps.pool }}"
+    apply: "{{ apps_ports_apply | bool }}"
+    timeout: 30
+  register: apps_ports_reconcile_result
+  # The module masks api_key itself (no_log argument_spec). Surface only\n  # sanitized reason codes so a blocked plan can be diagnosed without\n  # accessing secrets or weakening Fleet Vault logging.\n  no_log: false
+
+- name: Report sanitized app port plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      mode: "{{ 'APPLY' if apps_ports_apply | bool else 'READ_ONLY_PLAN' }}"
+      result: "{{ apps_ports_reconcile_result.result }}"
+      ports: "{{ apps_ports_reconcile_result.plan }}"
+      origin_bind_exposure: "TrueNAS_LAN_IP_ONLY"
+      secret_values_reported: false

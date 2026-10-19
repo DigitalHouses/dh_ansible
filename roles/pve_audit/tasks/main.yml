@@ -1,0 +1,320 @@
+---
+- name: Validate PVE audit contract
+  ansible.builtin.assert:
+    that:
+      - pve is mapping
+      - pve.host is defined
+      - pve.port is defined
+      - pve.node is defined
+      - pve.tls.sha256_fingerprint is defined
+      - pve.auth.user is defined
+      - pve.auth.token_id is defined
+    fail_msg: "PVE audit inventory contract is incomplete."
+
+- name: Read PVE TLS certificate fingerprint
+  ansible.builtin.shell:
+    cmd: >-
+      openssl s_client
+      -connect {{ pve.host }}:{{ pve.port }}
+      -servername {{ pve.host }}
+      </dev/null 2>/dev/null
+      | openssl x509 -noout -fingerprint -sha256
+  register: pve_tls_fingerprint
+  changed_when: false
+
+- name: Assert pinned PVE TLS identity
+  ansible.builtin.assert:
+    that:
+      - ("sha256 Fingerprint=" ~ pve.tls.sha256_fingerprint) in pve_tls_fingerprint.stdout
+    fail_msg: "PVE TLS fingerprint mismatch. API requests were not attempted."
+
+- name: Resolve PVE audit token secret
+  ansible.builtin.set_fact:
+    pve_audit_secret: >-
+      {{
+        pve_audit_token_secret_effective
+        | default(vault_pve_audit_token_secret | default(''))
+      }}
+  no_log: true
+  changed_when: false
+
+- name: Require PVE audit token secret
+  ansible.builtin.assert:
+    that:
+      - pve_audit_secret | length > 0
+    fail_msg: >-
+      PVE audit is BLOCKED: read-only API token secret is not available
+      as vault_pve_audit_token_secret.
+
+- name: Read PVE version
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/version"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_version
+  changed_when: false
+  no_log: true
+
+- name: Read PVE node status
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/status"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_node_status
+  changed_when: false
+  no_log: true
+
+- name: Read PVE datacenter options
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/cluster/options"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_datacenter_options
+  changed_when: false
+  no_log: true
+
+- name: Read PVE guests
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/cluster/resources?type=vm"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_guests
+  changed_when: false
+  no_log: true
+
+- name: Read PVE QEMU configurations
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/qemu/{{ item.vmid }}/config"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  loop: >-
+    {{
+      pve_guests.json.data
+      | selectattr('type', 'equalto', 'qemu')
+      | selectattr('node', 'equalto', pve.node)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.vmid }}"
+  register: pve_qemu_configs
+  changed_when: false
+  no_log: true
+
+- name: Read PVE LXC configurations
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/lxc/{{ item.vmid }}/config"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  loop: >-
+    {{
+      pve_guests.json.data
+      | selectattr('type', 'equalto', 'lxc')
+      | selectattr('node', 'equalto', pve.node)
+      | list
+    }}
+  loop_control:
+    label: "{{ item.vmid }}"
+  register: pve_lxc_configs
+  changed_when: false
+  no_log: true
+
+- name: Initialize sanitized PVE lifecycle inventory
+  ansible.builtin.set_fact:
+    pve_lifecycle_entries: []
+  changed_when: false
+
+- name: Build sanitized QEMU lifecycle inventory
+  ansible.builtin.set_fact:
+    pve_lifecycle_entries: >-
+      {{
+        pve_lifecycle_entries
+        +
+        [
+          {
+            'vmid': item.item.vmid | int,
+            'type': 'qemu',
+            'name': item.item.name | default(item.json.data.name | default('')),
+            'status': item.item.status | default('unknown'),
+            'onboot': item.json.data.onboot | default(0) | int,
+            'startup': item.json.data.startup | default(''),
+            'qemu_agent': item.json.data.agent | default('0') | string,
+            'template': item.json.data.template | default(0) | int,
+            'protection': item.json.data.protection | default(0) | int
+          }
+        ]
+      }}
+  loop: "{{ pve_qemu_configs.results }}"
+  loop_control:
+    label: "{{ item.item.vmid }}"
+  changed_when: false
+  no_log: true
+
+- name: Build sanitized LXC lifecycle inventory
+  ansible.builtin.set_fact:
+    pve_lifecycle_entries: >-
+      {{
+        pve_lifecycle_entries
+        +
+        [
+          {
+            'vmid': item.item.vmid | int,
+            'type': 'lxc',
+            'name': item.item.name | default(item.json.data.hostname | default('')),
+            'status': item.item.status | default('unknown'),
+            'onboot': item.json.data.onboot | default(0) | int,
+            'startup': item.json.data.startup | default(''),
+            'qemu_agent': 'n/a',
+            'template': item.json.data.template | default(0) | int,
+            'protection': item.json.data.protection | default(0) | int
+          }
+        ]
+      }}
+  loop: "{{ pve_lxc_configs.results }}"
+  loop_control:
+    label: "{{ item.item.vmid }}"
+  changed_when: false
+  no_log: true
+
+- name: Sort sanitized PVE lifecycle inventory
+  ansible.builtin.set_fact:
+    pve_lifecycle_entries: "{{ pve_lifecycle_entries | sort(attribute='vmid') }}"
+  changed_when: false
+
+- name: Report PVE lifecycle inventory
+  ansible.builtin.debug:
+    msg:
+      lifecycle_entries: "{{ pve_lifecycle_entries }}"
+      result: PASS
+
+- name: Build sanitized PVE USB passthrough inventory
+  ansible.builtin.set_fact:
+    pve_usb_passthrough_entries: >-
+      {{
+        (pve_usb_passthrough_entries | default([]))
+        +
+        (
+          [
+            {
+              'vmid': item.item.vmid,
+              'entries': (
+                item.json.data
+                | dict2items
+                | selectattr('key', 'match', '^usb[0-9]+$')
+                | list
+              )
+            }
+          ]
+          if (
+            item.json.data
+            | dict2items
+            | selectattr('key', 'match', '^usb[0-9]+$')
+            | list
+            | length
+          ) > 0
+          else []
+        )
+      }}
+  loop: "{{ pve_qemu_configs.results }}"
+  loop_control:
+    label: "{{ item.item.vmid }}"
+  changed_when: false
+  no_log: true
+
+- name: Report PVE USB passthrough inventory
+  ansible.builtin.debug:
+    msg:
+      usb_passthrough_entries: "{{ pve_usb_passthrough_entries | default([]) }}"
+      result: PASS
+
+- name: Read PVE node storage
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/storage"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_storage
+  changed_when: false
+  no_log: true
+
+- name: Read PVE backup jobs
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/cluster/backup"
+    method: GET
+    headers:
+      Authorization: >-
+        PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}
+    return_content: true
+    validate_certs: false
+    status_code: 200
+    timeout: "{{ pve_audit_timeout }}"
+  register: pve_backup_jobs
+  changed_when: false
+  no_log: true
+
+- name: Report PVE audit
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      host: "{{ pve.host }}"
+      node: "{{ pve.node }}"
+      version: "{{ pve_version.json.data.version }}"
+      release: "{{ pve_version.json.data.release }}"
+      pveversion: "{{ pve_node_status.json.data.pveversion }}"
+      uptime_seconds: "{{ pve_node_status.json.data.uptime }}"
+      configured_max_workers: "{{ pve_datacenter_options.json.data.max_workers | default('default') }}"
+      cpu_count: "{{ pve_node_status.json.data.cpuinfo.cpus | default('unknown') }}"
+      effective_shutdown_workers: >-
+        {{
+          pve_datacenter_options.json.data.max_workers
+          | default(pve_node_status.json.data.cpuinfo.cpus | default(1))
+          | int
+        }}
+      guests_total: "{{ pve_guests.json.data | length }}"
+      qemu_total: "{{ pve_guests.json.data | selectattr('type', 'equalto', 'qemu') | list | length }}"
+      lxc_total: "{{ pve_guests.json.data | selectattr('type', 'equalto', 'lxc') | list | length }}"
+      guests_running: "{{ pve_guests.json.data | selectattr('status', 'equalto', 'running') | list | length }}"
+      storages_total: "{{ pve_storage.json.data | length }}"
+      backup_jobs_total: "{{ pve_backup_jobs.json.data | length }}"
+      tls_fingerprint: "{{ pve.tls.sha256_fingerprint }}"
+      result: PASS
