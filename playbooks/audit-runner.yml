@@ -1,7 +1,7 @@
 ---
 # Reusable read-only local runner audit for Semaphore and standard local Ansible.
-# Determines site_id from the verified runner hostname, never from hard-coded IPs.
-- name: Audit local DigitalHouses Ansimble runner
+# Runner hostname uses owner_slug; full site ID comes from private inventory.
+- name: Audit local DigitalHouses Ansible runner
   hosts: all
   gather_facts: false
   become: false
@@ -25,12 +25,28 @@
     - name: Validate runner hostname format
       ansible.builtin.assert:
         that:
-          - runner_audit_local_hostname.stdout is match('^ansimble-[a-z0-9_-]+$')
-        fail_msg: "Expected ansimble-<site_id> hostname."
+          - runner_audit_local_hostname.stdout is match('^ansible-[a-z][a-z0-9-]*
 
-    - name: Resolve site id
-      ansible.builtin.set_fact:
-        site_id_effective: "{{ runner_audit_local_hostname.stdout | regex_replace('^ansimble-', '') }}"
+    - name: Load site identity from the private inventory repository
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load desired runner state from the private inventory repository
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/runner.yml"
+
+    - name: Check inventory identity matches local site
+      ansible.builtin.assert:
+        that:
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - runner_audit_local_hostname.stdout == 'ansible-' ~ site.owner_slug
+          - site_runner.hostname == runner_audit_local_hostname.stdout
+        fail_msg: "Site identity conflicts with local runner; audit blocked."
+
+  roles:
+    - role: runner_audit
+)
+        fail_msg: "Expected ansible-<owner_slug> hostname."
 
     - name: Load site identity from the private inventory repository
       ansible.builtin.include_vars:

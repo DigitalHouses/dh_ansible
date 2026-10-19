@@ -50,7 +50,19 @@ REMOTE_INSTALL_FILES = tuple(item for item in CODE_FILES
                              if item.startswith(("playbooks/apply-runner-remote-commander.yml",
                                                  "roles/runner_remote_commander/")))
 REMOTE_BOOTSTRAP_DIR = "/opt/digitalhouses/bootstrap/remote-commander"
-EXPECTED_NAME = "ansimble"
+EXPECTED_NAME = "ansible"
+
+
+def runner_hostname(site: str) -> str:
+    """Canonical LXC hostname is ansible-<owner_slug>, not ansimble-<site_id>.
+
+    Owner slug comes from the validated <owner>-<type> site ID. The private
+    Fleet metadata is independently verified before any guest creation.
+    """
+    match = re.fullmatch(r"([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-([a-z][a-z0-9]*)", site)
+    if not match:
+        raise Blocked("Canonical site ID must be <owner>-<type>")
+    return f"{EXPECTED_NAME}-{match.group(1)}"
 GH_VERSION = "2.102.0"
 GH_URL = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
 GH_SHA256 = "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
@@ -157,7 +169,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
         if code("qm", "config", str(CTID)) == 0:
             raise Blocked("VM1231 exists; refusing LXC resume")
         keys = dict(line.split(": ", 1) for line in existing.splitlines() if ": " in line)
-        if (keys.get("hostname") != f"ansimble-{site}"
+        if (keys.get("hostname") != runner_hostname(site)
                 or keys.get("unprivileged") != "1"
                 or keys.get("ostype") != "debian"
                 or keys.get("onboot") != "0"
@@ -175,7 +187,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
             raise Blocked("CT1231 identity/resources differ from fresh pilot; manual audit required")
         if run("pct", "status", str(CTID)) != "status: running":
             raise Blocked("CT1231 must be running for controlled resume")
-        if pct_guest("hostname") != f"ansimble-{site}":
+        if pct_guest("hostname") != runner_hostname(site):
             raise Blocked("Guest hostname differs from expected site")
         guest_network = pct_guest("ip", "-4", "-o", "addr", "show", "dev", "eth0")
         if str(ip.ip) not in guest_network:
@@ -667,19 +679,19 @@ def verify_fresh_system_bus(*, attempts=30, delay_seconds=2):
 def create_runner(site, cidr, gateway, template):
     print("CT_CREATE=START", flush=True)
     run("pct", "create", str(CTID), template,
-        "--hostname", f"{EXPECTED_NAME}-{site}",
+        "--hostname", runner_hostname(site),
         "--ostype", "debian", "--cores", "1", "--memory", "1024",
         "--swap", "512", "--rootfs", "local-lvm:16",
         "--unprivileged", "1", "--features", "nesting=1",
         "--net0", f"name=eth0,bridge={BRIDGE},ip={cidr},gw={gateway}",
         "--onboot", "0", "--protection", "1", "--start", "0", timeout=300)
     config = run("pct", "config", str(CTID))
-    if f"hostname: ansimble-{site}" not in config or f"ip={cidr}" not in config:
+    if f"hostname: {runner_hostname(site)}" not in config or f"ip={cidr}" not in config:
         raise Blocked("CT config mismatch. Manual recovery required.")
     ensure_debian_etc_before_first_boot()
     run("pct", "start", str(CTID), timeout=90)
     verify_fresh_system_bus()
-    if pct_guest("hostname") != f"ansimble-{site}":
+    if pct_guest("hostname") != runner_hostname(site):
         raise Blocked("Guest hostname wrong")
     print("CT_CREATE=PASS", flush=True)
 
@@ -730,7 +742,7 @@ def stage_runner_remote_commander(site, checkout):
     """
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", site):
         raise Blocked("Invalid Remote Commander site")
-    if pct_guest("hostname") != f"ansimble-{site}":
+    if pct_guest("hostname") != runner_hostname(site):
         raise Blocked("Remote Commander runner hostname mismatch")
 
     base = REMOTE_BOOTSTRAP_DIR
@@ -791,7 +803,7 @@ def seed_semaphore(site, project_title):
 
 
 def creation_confirmed(answer: str, site: str) -> bool:
-    """Only the exact reserved CTID, or legacy fully qualified text, authorizes creation."""
+    """Only the exact reserved CTID or canonical runner name authorizes creation."""
     return answer in {f"CREATE CT{CTID}", f"CREATE CT{CTID} ansimble-{site}"}
 
 

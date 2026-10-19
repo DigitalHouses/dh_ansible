@@ -267,7 +267,8 @@ def main(argv=None):
         raise Blocked("Run as root inside CT runner, not on PVE")
     if Path("/etc/pve/user.cfg").exists():
         raise Blocked("Never run Seeder on PVE host")
-    if os.uname().nodename != f"ansimble-{args.site}":
+    owner = args.site.rsplit("-", 1)[0]
+    if os.uname().nodename != f"ansible-{owner}":
         raise Blocked("Unexpected guest hostname")
     password = secure_file(args.admin_password_file)
     api = API()

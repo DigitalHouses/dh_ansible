@@ -9,7 +9,7 @@ def test_request_is_local_and_unprivileged():
     assert p["hosts"] == "site_runner"
     assert p["become"] is False
     assert p["gather_facts"] is False
-    assert "remote_request_hostname.stdout == 'ansimble-' ~ site.id" in src
+    assert "remote_request_hostname.stdout == 'ansible-' ~ site.owner_slug" in src
     assert "dh-remote-commander-install.path" in src
     assert 'content: "INSTALL\\n"' in src
     assert "sudo" not in src

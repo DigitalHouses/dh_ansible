@@ -60,10 +60,10 @@ def test_guest_acceptance_information_is_printed_to_operator():
 def test_short_exact_create_confirmation_and_explicit_rejection():
     m=load()
     assert m.creation_confirmed("CREATE CT1231", "demo-office")
-    assert m.creation_confirmed("CREATE CT1231 ansimble-demo-office", "demo-office")
+    assert m.creation_confirmed("CREATE CT1231 ansible-demo", "demo-office")
     assert not m.creation_confirmed("CREATE CT123", "demo-office")
     assert not m.creation_confirmed("yes", "demo-office")
-    assert not m.creation_confirmed("CREATE CT1231 ansimble-other", "demo-office")
+    assert not m.creation_confirmed("CREATE CT1231 ansible-other", "demo-office")
     assert not m.creation_confirmed("", "demo-office")
     assert 'Type CREATE CT{CTID} to continue: ' in SRC.read_text()
 
@@ -113,7 +113,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
     m=load()
     # Existing CT is correctly identified but Semaphore configuration already exists.
     config_lines=[
-        "hostname: ansimble-lab", "unprivileged: 1", "ostype: debian",
+        "hostname: ansible-demo", "unprivileged: 1", "ostype: debian",
         "onboot: 0", "protection: 1", "cores: 1", "memory: 1024",
         "swap: 512", "features: nesting=1",
         "rootfs: local-lvm:vm-1231-disk-0,size=16G",
@@ -127,7 +127,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
         if args[:2]==("pveam","list"): return "debian-13-standard_13.6-1_amd64.tar.zst"
         return ""
     monkeypatch.setattr(m,"run",fake_run)
-    monkeypatch.setattr(m,"pct_guest",lambda *a,**k: "ansimble-lab" if a==("hostname",) else "198.51.100.231/24")
+    monkeypatch.setattr(m,"pct_guest",lambda *a,**k: "ansible-demo" if a==("hostname",) else "198.51.100.231/24")
     monkeypatch.setattr(m,"code",lambda *a,**k: 1 if a[:2]==("qm","config") else (0 if a[:3]==("pct","exec","1231") else 1))
     monkeypatch.setattr(m.os,"geteuid",lambda:0)
     # This test documents rejection of detected installed marker, independent of runtime config mocks.
@@ -138,7 +138,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
     monkeypatch.setattr(pathlib.Path,"is_file",lambda p: True if str(p).endswith("pve_host_write_ed25519") or str(p).endswith("pve-identities-home-pending.json") else False)
     # Skip dynamic read-only escrow conditions in this isolated test by using a non-pilot site.
     with pytest.raises(m.Blocked,match="partial Semaphore runtime"):
-        m.host_preflight("lab","198.51.100.231/24","198.51.100.1","198.51.100.30",resume=True)
+        m.host_preflight("demo-office","198.51.100.231/24","198.51.100.1","198.51.100.30",resume=True)
 
 def test_host_apt_refresh_rejects_partial_indexes():
     src=SRC.read_text()
@@ -495,7 +495,7 @@ def test_remote_commander_stages_fixed_root_watcher(monkeypatch, tmp_path):
     def fake_guest(*args, **kwargs):
         writes.append(("guest", args))
         if args == ("hostname",):
-            return "ansimble-" + site
+            return m.runner_hostname(site)
         if args == ("systemctl", "is-active", "dh-remote-commander-install.path"):
             return "active"
         return ""
@@ -578,3 +578,14 @@ def test_site_escrow_blocks_path_traversal(monkeypatch, tmp_path):
     monkeypatch.setattr(m, "ROOT_STAGE", tmp_path)
     with pytest.raises(m.Blocked, match="Unsafe relative site escrow path"):
         m.verify_site_escrow(tmp_path / "source", "demo-office")
+
+
+def test_runner_hostname_uses_owner_slug_not_site_slug():
+    m = load()
+    assert m.runner_hostname("serzhan-home") == "ansible-serzhan"
+    assert m.runner_hostname("amir-office") == "ansible-amir"
+    assert m.runner_hostname("multi-owner-office") == "ansible-multi-owner"
+    with pytest.raises(m.Blocked):
+        m.runner_hostname("serzhan")
+    with pytest.raises(m.Blocked):
+        m.runner_hostname("serzhan_home")

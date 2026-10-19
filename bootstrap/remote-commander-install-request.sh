@@ -16,10 +16,27 @@ trap on_exit EXIT
 [[ "$(wc -c < "$REQUEST")" -eq 8 ]] || exit 2
 rm -f -- "$REQUEST"
 HOST="$(hostname)"
-[[ "$HOST" =~ ^ansimble-([a-z][a-z0-9]*(-[a-z0-9]+)+)$ ]] || exit 2
-SITE="${BASH_REMATCH[1]}"
-INVENTORY="/var/lib/ansimble/site-data/$SITE/hosts.yml"
-[[ -f "$INVENTORY" && ! -L "$INVENTORY" ]] || exit 2
+[[ "$HOST" =~ ^ansible-([a-z][a-z0-9]*(-[a-z0-9]+)*)$ ]] || exit 2
+OWNER="${BASH_REMATCH[1]}"
+SITE_DIR="/var/lib/ansimble/site-data"
+[[ -d "$SITE_DIR" && ! -L "$SITE_DIR" ]] || exit 2
+# Exactly one canonical site inventory per runner; never infer site_id
+# from the shorter owner-only hostname.
+mapfile -d '' -t SITE_DIRS < <(
+  find "$SITE_DIR" -mindepth 1 -maxdepth 1 -type d -print0
+)
+[[ "${#SITE_DIRS[@]}" -eq 1 ]] || exit 2
+SITE="${SITE_DIRS[0]##*/}"
+[[ "$SITE" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || exit 2
+[[ "${SITE%-*}" == "$OWNER" ]] || exit 2
+META="$SITE_DIR/$SITE/group_vars/all.yml"
+INVENTORY="$SITE_DIR/$SITE/hosts.yml"
+for file in "$META" "$INVENTORY"; do
+  [[ -f "$file" && ! -L "$file" ]] || exit 2
+  [[ "$(stat -c '%u' "$file")" == "0" ]] || exit 2
+done
+grep -Fxq "  id: $SITE" "$META" || exit 2
+grep -Fxq "  owner_slug: $OWNER" "$META" || exit 2
 for path in "$BASE" "$BASE/playbooks" "$BASE/roles" \
     "$BASE/roles/runner_remote_commander" \
     "$BASE/playbooks/apply-runner-remote-commander.yml"; do

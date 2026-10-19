@@ -65,3 +65,7 @@ Slug задаётся в аргументе или вводится интера
 19 октября 2026: **Fresh Bootstrap E2E домашнего pilot runner принят** — официальный Debian 13 с нуля, HTTPS Semaphore 2.19.16, Ansible Core 2.21.4, два UI smoke-аудита SUCCESS и read-only повторный seeder PASS. Это **не** разрешение на инфраструктурные write-операции или массовое развёртывание.
 
 Новый flow подтверждения slug и on-demand Remote Commander проверяется отдельно CI и контролируемым `--resume-semaphore` на действующем тестовом CT; повторный destructive E2E для их применения не нужен. Production объекты не менять без отдельной приёмки.
+
+## Имя локального runner
+
+Hostname LXC: `ansible-<owner_slug>` (например, `ansible-serzhan`). Не путать с `site.id` (`serzhan-home`): он остаётся полным ключом Fleet, Semaphore inventory и Vault. CTID/IP по прежнему стандарту 1231 / .231. Bootstrap сверяет owner_slug из PRIVATE site metadata до создания гостя. Переход на новое имя применяется только при следующем Fresh E2E, старые работающие CT не переименовываются автоматически.

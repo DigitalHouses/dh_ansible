@@ -15,6 +15,8 @@
           - inventory_hostname in ['runner', 'localhost']
           - (ansible_connection | default('')) == 'local'
           - site.id is defined
+          - site.owner_slug is defined
+          - site.type is defined
     - name: Read local runner hostname
       ansible.builtin.command:
         argv: [hostname]
@@ -24,7 +26,8 @@
     - name: Require matching site slug
       ansible.builtin.assert:
         that:
-          - remote_request_hostname.stdout == 'ansimble-' ~ site.id
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - remote_request_hostname.stdout == 'ansible-' ~ site.owner_slug
     - name: Check fixed-purpose root watcher
       ansible.builtin.command:
         argv: [systemctl, is-active, dh-remote-commander-install.path]

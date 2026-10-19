@@ -1,17 +1,23 @@
 ---
 # Local runner only; no SSH to PVE, no other homes and no new user accounts.
-- name: Install and manage Desktop Commander Remote on this Ansimble runner
+- name: Install and manage Desktop Commander Remote on this Ansible runner
   hosts: site_runner
   gather_facts: false
   become: false
 
   pre_tasks:
+    - name: Load site metadata from the local inventory
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
     - name: Require exactly one local runner
       ansible.builtin.assert:
         that:
           - ansible_play_hosts_all | length == 1
           - inventory_hostname in ['runner', 'localhost']
           - (ansible_connection | default('')) == 'local'
+          - site.id is defined
+          - site.owner_slug is defined
+          - site.type is defined
         fail_msg: "Remote Commander can be installed only on a local site runner."
 
     - name: Read runner hostname
@@ -21,11 +27,12 @@
       changed_when: false
       check_mode: false
 
-    - name: Require Ansimble runner identity
+    - name: Require canonical Ansible owner identity
       ansible.builtin.assert:
         that:
-          - remote_commander_hostname.stdout is match('^ansimble-[a-z0-9_-]+$')
-        fail_msg: "This is not an Ansimble site runner."
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - remote_commander_hostname.stdout == 'ansible-' ~ site.owner_slug
+        fail_msg: "This is not the expected Ansible site runner."
 
   roles:
     - role: runner_remote_commander

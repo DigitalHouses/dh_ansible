@@ -18,7 +18,7 @@ def test_example_runner_inventory_identity_and_reserved_address():
     assert site == "ci-example"
     assert all_vars["site"]["owner_slug"] + "-" + all_vars["site"]["type"] == site
     assert runner["vmid"] == 1231
-    assert runner["hostname"] == f"ansimble-{site}"
+    assert runner["hostname"] == f"ansible-{all_vars['site']['owner_slug']}"
     assert runner["network"]["ipv4"] == "198.51.100.231/24"
     assert pve["host"] == "198.51.100.30"
     assert runner["management"]["write_ready"] is False
@@ -37,7 +37,7 @@ def test_runner_audit_reuses_shared_role_and_private_inventory_dir():
     assert "{{ playbook_dir }}/../inventories/" not in playbook
     assert "ansible_connection" in playbook
     assert "inventory_hostname in ['runner', 'localhost']" in playbook
-    assert "ansimble-[a-z0-9_-]+" in playbook
+    assert "ansible-[a-z][a-z0-9-]*" in playbook
     assert "changed_when: false" in playbook
     assert "ansible.builtin.uri" not in playbook
     assert "ansible.builtin.shell" not in playbook
