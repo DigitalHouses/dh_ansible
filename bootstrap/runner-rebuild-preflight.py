@@ -73,7 +73,7 @@ def audit(args):
     if rc != 0:
         return False
     cfg = parse_pve_config(raw)
-    identity_ok = (cfg.get("hostname") == f"ansimble-{args.site}"
+    identity_ok = (cfg.get("hostname") == f"ansible-{args.site}"
                    and cfg.get("unprivileged") == "1"
                    and f"ip={expected}" in cfg.get("net0", "")
                    and "nesting=1" in cfg.get("features", ""))
