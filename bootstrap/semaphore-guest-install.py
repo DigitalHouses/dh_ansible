@@ -118,7 +118,7 @@ def password_file(password):
         os.fsync(stream.fileno())
 
 
-def setup_files(runner_ip, service):
+def setup_files(site, runner_ip, service):
     CONFIG.parent.mkdir(mode=0o750, exist_ok=True)
     os.chown(CONFIG.parent, 0, service.pw_gid)
     os.chmod(CONFIG.parent, 0o750)
@@ -218,7 +218,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
         service = pwd.getpwnam("semaphore")
     if service.pw_uid == 0:
         raise Blocked("Unsafe service user")
-    setup_files(runner_ip, service)
+    setup_files(site, runner_ip, service)
     command("runuser", "-u", "semaphore", "--", "/usr/bin/semaphore",
             "migrate", "--config", str(CONFIG), timeout=90)
     password = secrets.token_urlsafe(32)
