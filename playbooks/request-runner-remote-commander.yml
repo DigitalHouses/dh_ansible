@@ -1,5 +1,5 @@
 ---
-# A user-triggered local request: no sudo from Semaphore, no remote hosts.
+# A user-triggered local request with no elevation from Semaphore and no remote hosts.
 - name: Request on-demand Remote Desktop Commander installation
   hosts: site_runner
   gather_facts: false
