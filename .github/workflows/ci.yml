@@ -38,6 +38,7 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-runner.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-runner-remote-commander.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-runner-remote-commander.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-nut-baseline.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-provision.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-base.yml
