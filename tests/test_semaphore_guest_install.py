@@ -126,6 +126,9 @@ def test_tls_setup_uses_explicit_site_id_not_unbound_global(monkeypatch, tmp_pat
     monkeypatch.setattr(m, "CERT", tmp_path / "etc/semaphore/tls.crt")
     monkeypatch.setattr(m, "KEY", tmp_path / "etc/semaphore/tls.key")
     monkeypatch.setattr(m.os, "chown", lambda *args: None)
+    # Real Debian already has /etc and /var/lib; emulate those parents here.
+    m.CONFIG.parent.parent.mkdir(parents=True, exist_ok=True)
+    m.BASE.parent.mkdir(parents=True, exist_ok=True)
     openssl_calls = []
 
     def mock_command(*args, **kwargs):
