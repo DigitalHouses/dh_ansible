@@ -32,6 +32,7 @@ jobs:
       - name: Validate PVE installer and release launcher shell syntax
         run: |
           bash -n bootstrap/install.sh
+          bash -n bootstrap/remote-commander-install-request.sh
           bash -n bootstrap/semaphore-launch.sh
       - name: Validate Ansible syntax
         run: |
