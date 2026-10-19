@@ -35,7 +35,7 @@ if digest != sys.argv[2]:
 print("INSTALLER_GIT_BLOB=VERIFIED")
 PY
   bash -n "$DEST" || return 2
-  bash "$DEST" "demo-office"
+  bash "$DEST"
   local RC=$?
   echo "INSTALLER_RC=$RC"
   return "$RC"
@@ -44,7 +44,7 @@ dh_install
 echo "TERMINAL REMAINS OPEN"
 ```
 
-Slug задаётся в аргументе или вводится интерактивно. **Для обоих способов обязательно подтверждение `y/n` до OAuth, чтения Vault и любых изменений PVE**. После подтверждения slug передаётся как `--site` в pinned Bootstrap, который проверяет идентичность с PRIVATE Fleet inventory. Существующий CT не удаляется и не перезаписывается без отдельного разрешения; допустимые режимы продолжения: `--resume`, `--resume-fresh`, `--resume-ansible`, `--resume-semaphore`.
+При каждом запуске установщик **обязательно запрашивает Site ID интерактивно** (например, `serzhan-home`) и предлагает подтвердить `y/n`. `n` возвращает к повторному вводу Site ID; некорректный формат также позволяет повторить ввод. `y` фиксирует окончательный ID, который передаётся как `--site` в pinned Bootstrap для проверки с PRIVATE Fleet inventory. Ввод через аргумент отключён во избежание случайного выбора неверного объекта. EOF/Ctrl+D до подтверждения блокирует установку; Ctrl+C прерывает её. **Подтверждение происходит до OAuth, чтения Vault и любых изменений PVE.** Существующий CT не удаляется и не перезаписывается без отдельного разрешения; допустимые режимы продолжения: `--resume`, `--resume-fresh`, `--resume-ansible`, `--resume-semaphore`.
 
 В установщике закреплены SHA публичного Bootstrap, SHA его Git blob, версия/checksum GitHub CLI и независимо закреплённый Fleet commit. Ввод Vault master остаётся только на PVE. Отказ или неверный slug блокируют установку.
 
