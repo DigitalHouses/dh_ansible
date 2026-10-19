@@ -133,7 +133,7 @@ def test_installer_journal_excludes_auth_codes_and_unstructured_output():
     allow = re.compile(pattern.group(1))
     assert allow.fullmatch("SEMAPHORE_SYSTEMD=PASS")
     assert allow.fullmatch("SITE_INVENTORY_DIR_CREATE=/safe/example")
-    assert allow.fullmatch("PCT_EXEC_FAILURE=command:install rc:129") is None
+    assert allow.fullmatch("PCT_EXEC_FAILURE=command:install rc:129")
     assert not allow.match("! First copy your one-time code: ABCD-EFGH")
     assert not allow.match("OWNER: Fleet master password (hidden): example")
     assert not allow.match("GH_TOKEN=anything")
