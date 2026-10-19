@@ -39,7 +39,7 @@ if [ ! -d "$FLEET_ROOT/.git" ] || [ -L "$FLEET_ROOT" ]; then
 fi
 FLEET_ORIGIN="$(git -C "$FLEET_ROOT" remote get-url origin)"
 case "$FLEET_ORIGIN" in
-  "git@github.com:DigitalHouses/dh_ansimble_fleet_detail.git"|"https://github.com/DigitalHouses/dh_ansimble_fleet_detail.git") ;;
+  "git@github.com:DigitalHouses/dh_ansible_fleet_detail.git"|"https://github.com/DigitalHouses/dh_ansible_fleet_detail.git") ;;
   *) echo "Unexpected Fleet Detail origin." >&2; exit 3 ;;
 esac
 INVENTORY="$FLEET_ROOT/inventories/$SITE/hosts.yml"

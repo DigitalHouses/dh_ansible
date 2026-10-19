@@ -28,7 +28,7 @@ import urllib.request
 
 CTID = 1231
 CODE_REPO = "DigitalHouses/dh_ansible"
-FLEET_REPO = "DigitalHouses/dh_ansimble_fleet_detail"
+FLEET_REPO = "DigitalHouses/dh_ansible_fleet_detail"
 BRIDGE = "vmbr0"
 SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
 ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")

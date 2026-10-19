@@ -5,7 +5,7 @@ The project contains **one generic codebase**, not per-site implementations.
 ## Repository boundary
 
 - `DigitalHouses/dh_ansible` — reusable Ansible roles, modules, playbooks, Semaphore bootstrap, synthetic tests, CI and public-safe documentation.
-- `DigitalHouses/dh_ansimble_fleet_detail` — **private**, data-only: `inventories/<site>/` and encrypted `secrets/fleet.vault.yml`. No executable source or GitHub Actions workflows.
+- `DigitalHouses/dh_ansible_fleet_detail` — **private**, data-only: `inventories/<site>/` and encrypted `secrets/fleet.vault.yml`. No executable source or GitHub Actions workflows.
 
 A site differs by declarative data, **not code**.
 

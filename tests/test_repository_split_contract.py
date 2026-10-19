@@ -30,7 +30,7 @@ def test_runner_requires_separate_private_checkout_and_pins_both_revisions():
 def test_bootstrap_fetches_code_and_fleet_from_independent_commits():
     script = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
     assert 'CODE_REPO = "DigitalHouses/dh_ansible"' in script
-    assert 'FLEET_REPO = "DigitalHouses/dh_ansimble_fleet_detail"' in script
+    assert 'FLEET_REPO = "DigitalHouses/dh_ansible_fleet_detail"' in script
     assert "--expected-commit" in script
     assert "--expected-fleet-commit" in script
     assert 'repository=CODE_REPO' in script

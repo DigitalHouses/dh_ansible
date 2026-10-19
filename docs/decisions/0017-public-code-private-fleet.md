@@ -1,11 +1,11 @@
 # ADR 0017 · Public code / private Fleet Detail
 
-**Status:** migration staging; **not accepted for production**.
+**Status (2026-10-19):** public code repository has passed publication checks; private Fleet repository renamed. Full clean Bootstrap E2E **not accepted**. Sections below retain earlier migration decisions and historical staging guidance.
 
 ## Repositories
 
 - `DigitalHouses/dh_ansible`: universal Ansible roles/playbooks/plugins, bootstrap, Semaphore seeder, CI, tests, generic examples and documentation. Intended PUBLIC **only after history-wide data and credential audit**.
-- `DigitalHouses/dh_ansimble_fleet_detail`: PRIVATE data-only repository. Target layout: `inventories/<site>/...` and one encrypted `secrets/<site>/vault.yml` per site. The existing `secrets/fleet.vault.yml` is legacy staging data until safely migrated; no implicit rename or deletion. No executable code, CI workflows or billed automation.
+- `DigitalHouses/dh_ansible_fleet_detail`: PRIVATE data-only repository. Target layout: `inventories/<site>/...` and one encrypted `secrets/<site>/vault.yml` per site. The existing `secrets/fleet.vault.yml` is legacy staging data until safely migrated; no implicit rename or deletion. No executable code, CI workflows or billed automation.
 
 **One codebase. A home differs by data, not code.** No per-home branches, duplicate roles or per-home repositories.
 

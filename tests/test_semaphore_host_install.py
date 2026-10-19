@@ -31,7 +31,7 @@ def test_git_oauth_fleet_gate_precedes_guest_create():
     assert "--expected-commit" in s
     assert "--expected-fleet-commit" in s
     assert 'CODE_REPO = "DigitalHouses/dh_ansible"' in s
-    assert 'FLEET_REPO = "DigitalHouses/dh_ansimble_fleet_detail"' in s
+    assert 'FLEET_REPO = "DigitalHouses/dh_ansible_fleet_detail"' in s
     assert '"--web"' in s
     assert "def register_deploy_key(" not in s
     assert "install_site_inventory(" in s
