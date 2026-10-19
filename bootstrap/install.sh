@@ -4,10 +4,6 @@ set -Eeuo pipefail
 umask 077
 
 SITE=""
-if (( $# > 0 )) && [[ "${1}" != --* ]]; then
-  SITE="$1"
-  shift
-fi
 CODE_RELEASE="46ef2229881535c3e5553a0e4261b6d7d68974b3"
 CODE_INSTALLER_BLOB="f7b0fe1ca6a4ab656dbcec47a4a39279ba8ba894"
 FLEET_RELEASE="8a005e0df0be97b0d67048236e2153dd5cdaebaf"
@@ -18,19 +14,10 @@ RESUME_ARGS=()
 if (( $# == 1 )); then
   case "$1" in
     --resume|--resume-fresh|--resume-ansible|--resume-semaphore) RESUME_ARGS=("$1") ;;
-    *) echo "BLOCKED: unknown operation" >&2; exit 2 ;;
+    *) echo "BLOCKED: unknown argument. Site ID is entered interactively." >&2; exit 2 ;;
   esac
 elif (( $# != 0 )); then
-  echo "BLOCKED: usage: install.sh [<owner>-<type>] [--resume|--resume-fresh|--resume-ansible|--resume-semaphore]" >&2
-  exit 2
-fi
-if [[ -z "$SITE" ]]; then
-  if ! IFS= read -r -p "Введите slug объекта (<owner>-<type>): " SITE; then
-    echo "BLOCKED: site slug input missing" >&2; exit 2
-  fi
-fi
-if [[ ! "$SITE" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]]; then
-  echo "BLOCKED: invalid site ID" >&2
+  echo "BLOCKED: usage: install.sh [--resume|--resume-fresh|--resume-ansible|--resume-semaphore]" >&2
   exit 2
 fi
 if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
@@ -38,17 +25,43 @@ if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
   exit 2
 fi
 
-echo "=== CANONICAL SITE CONFIRMATION ==="
-echo "OBJECT_SLUG=$SITE"
-echo "DOWNSTREAM_SITE=$SITE"
-if ! IFS= read -r -p "Подтвердить объект '$SITE' для всех этапов (y/n): " CONFIRM_SITE; then
-  echo "BLOCKED: confirmation missing; no actions performed" >&2; exit 2
-fi
-case "$CONFIRM_SITE" in
-  y|Y) echo "SITE_CONFIRMATION=YES $SITE" ;;
-  n|N) echo "CANCELLED: site not confirmed; no actions performed"; exit 0 ;;
-  *) echo "BLOCKED: answer must be y or n" >&2; exit 2 ;;
-esac
+confirm_site_id() {
+  local candidate answer
+  echo "=== CANONICAL SITE CONFIRMATION ==="
+  while true; do
+    if ! IFS= read -r -p "Введите Site ID (<owner>-<type>): " candidate; then
+      echo "BLOCKED: Site ID input interrupted; no actions performed" >&2
+      return 2
+    fi
+    if [[ ! "$candidate" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]]; then
+      echo "Некорректный Site ID. Формат: <owner>-<type> (например, serzhan-home). Повторите ввод."
+      continue
+    fi
+    echo "OBJECT_SLUG=$candidate"
+    echo "DOWNSTREAM_SITE=$candidate"
+    while true; do
+      if ! IFS= read -r -p "Site ID '$candidate' указан верно? (y/n): " answer; then
+        echo "BLOCKED: Site ID confirmation interrupted; no actions performed" >&2
+        return 2
+      fi
+      case "$answer" in
+        y|Y)
+          SITE="$candidate"
+          echo "SITE_CONFIRMATION=YES $SITE"
+          return 0
+          ;;
+        n|N)
+          echo "Повторный ввод Site ID."
+          break
+          ;;
+        *)
+          echo "Ответьте y или n."
+          ;;
+      esac
+    done
+  done
+}
+confirm_site_id || exit 2
 
 WORK=$(mktemp -d /root/ansimble-network.XXXXXX)
 trap 'rc=$?; rm -rf "$WORK"; echo "RESULT_RC=$rc"; echo "TERMINAL STAYS OPEN"' EXIT
