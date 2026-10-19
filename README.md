@@ -1,11 +1,25 @@
 # DigitalHouses · DH Ansible
 
-Universal infrastructure-as-code for DigitalHouses sites.
+Публичный универсальный код инфраструктуры DigitalHouses (Ansible, роли, playbooks, bootstrap и тесты).
 
-> MIGRATION IN PROGRESS — PRIVATE staging. Do not change visibility to Public until full source, test fixture, historical-content, workflow, and credential audit is accepted.
+## Источники
 
-Code and generic documentation only. Real site inventories and Fleet Vault are maintained in the separate private `DigitalHouses/dh_ansimble_fleet_detail` repository.
+| Назначение | Репозиторий |
+| --- | --- |
+| Универсальный код | `DigitalHouses/dh_ansible` (PUBLIC) |
+| Данные и Vault каждого объекта | `DigitalHouses/dh_ansimble_fleet_detail` (**PRIVATE**) |
+| Публичная точка входа на PVE | `DigitalHouses/ansimble-installer` (PUBLIC) |
 
-Bootstrap source: this repository; site inventory and encrypted credentials: `DigitalHouses/dh_ansimble_fleet_detail`. The publicly accessible installer is `DigitalHouses/ansimble-installer`. Do not depend on retired repository locations.
+Код не должен содержать реальных инвентаризаций, адресов домов, паролей, ключей и Vault plaintext. Инвентаризации запрашиваются из приватного Fleet Detail только для выбранного site ID. В тестах и примерах используются исключительно синтетические объекты.
 
-The clean PVE→runner→Semaphore E2E remains pending; do not remove rollback data until acceptance.
+## Bootstrap
+
+Установщик фиксирует Git commit кода, SHA Git blob bootstrap-файла и отдельный commit Fleet Detail; недоверенные или несовпадающие объекты должны блокировать установку. Переменные и шаги установки описаны в репозитории `ansimble-installer`.
+
+Целевая схема: PVE → один Debian 13 LXC runner → Ansible + Semaphore. В Semaphore Git-репозиторий кода публичный; локальная инвентаризация передаётся только для текущего объекта. Общий Fleet Vault и GitHub OAuth владельца на runner не передаются.
+
+## Статус принятия
+
+Проверки GitHub CI, локальных unit/offline тестов и синтаксиса playbooks **не равнозначны** полному Bootstrap E2E. Полное принятие требует контролируемого запуска на чистой тестовой площадке, проверки авторизации, инвентаризации, Semaphore API, smoke, идемпотентности и отсутствия побочных изменений.
+
+До отдельного разрешения действующие PVE/LXC/VM, шаблоны Debian, другие дома и legacy-репозитории не удаляются и не пересоздаются.
