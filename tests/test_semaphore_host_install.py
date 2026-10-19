@@ -610,17 +610,17 @@ def test_guest_failure_allows_safe_hostname_error_but_not_secret_output():
 def test_safe_progress_of_guest_setup_is_allowlisted():
     m = load()
     raw = (
-        "SEMAPHORE_PACKAGE=PASS\\n"
-        "SEMAPHORE_TLS_SETUP=START\\n"
-        "SEMAPHORE_TLS_SETUP=PASS\\n"
-        "SEMAPHORE_DB_MIGRATION=PASS\\n"
-        "SEMAPHORE_ADMIN_CREATE=PASS\\n"
-        "SEMAPHORE_SYSTEMD=PASS\\n"
-        "SECRET_MUST_NEVER_PRINT=unsafe\\n"
+        "SEMAPHORE_PACKAGE=PASS\n"
+        "SEMAPHORE_TLS_SETUP=START\n"
+        "SEMAPHORE_TLS_SETUP=PASS\n"
+        "SEMAPHORE_DB_MIGRATION=PASS\n"
+        "SEMAPHORE_ADMIN_CREATE=PASS\n"
+        "SEMAPHORE_SYSTEMD=PASS\n"
+        "SECRET_MUST_NEVER_PRINT=unsafe\n"
     )
     argv = ("pct", "exec", "1231", "--", "python3",
             "/opt/digitalhouses/bootstrap/semaphore-guest-install.py")
     lines = m.safe_guest_failure_lines(argv, raw, "")
     assert len(lines) == 6
     assert lines[-1] == "SEMAPHORE_SYSTEMD=PASS"
-    assert "SECRET_MUST_NEVER_PRINT" not in "\\n".join(lines)
+    assert "SECRET_MUST_NEVER_PRINT" not in "\n".join(lines)
