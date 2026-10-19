@@ -29,7 +29,7 @@ import hashlib
 import pathlib
 import sys
 raw = pathlib.Path(sys.argv[1]).read_bytes()
-digest = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\\0" + raw).hexdigest()
+digest = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
 if digest != sys.argv[2]:
     raise SystemExit("BLOCKED: unexpected installer content")
 print("INSTALLER_GIT_BLOB=VERIFIED")
