@@ -23,7 +23,7 @@ def test_installer_is_present_and_pins_independent_immutable_inputs():
     assert "read -r -p \"Подтвердить объект" in s
     assert 'case "$CONFIRM_SITE"' in s
     assert '  --site "$SITE"' in s
-    assert "OBJECT_SLUG=%s" in s
+    assert 'echo "OBJECT_SLUG=$SITE"' in s
 
 
 def test_installer_blocks_occupied_ct_and_has_no_destructive_actions():

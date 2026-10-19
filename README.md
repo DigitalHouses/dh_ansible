@@ -24,12 +24,16 @@ dh_install() {
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
     -o "$DEST" || return 1
-  local ACTUAL
-  ACTUAL="$(git hash-object "$DEST")" || return 1
-  if [ "$ACTUAL" != "$SHA" ]; then
-    echo "BLOCKED: unexpected installer content"
-    return 2
-  fi
+  python3 - "$DEST" "$SHA" <<'PY' || return 2
+import hashlib
+import pathlib
+import sys
+raw = pathlib.Path(sys.argv[1]).read_bytes()
+digest = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\\0" + raw).hexdigest()
+if digest != sys.argv[2]:
+    raise SystemExit("BLOCKED: unexpected installer content")
+print("INSTALLER_GIT_BLOB=VERIFIED")
+PY
   bash -n "$DEST" || return 2
   bash "$DEST" "demo-office"
   local RC=$?
