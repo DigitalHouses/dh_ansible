@@ -78,10 +78,6 @@ def runner_exec(ctid: str, *cmd: str) -> str:
     return run("pct", "exec", ctid, "--", *cmd)
 
 
-def runner_user_exec(ctid: str, *cmd: str) -> str:
-    return runner_exec(ctid, "runuser", "-u", HOST_USER, "--", *cmd)
-
-
 def prepare_runner_key(ctid: str, site: str) -> str:
     runner_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansimble/.ssh")
     pub_path = KEY_PATH + ".pub"
@@ -98,6 +94,10 @@ def prepare_runner_key(ctid: str, site: str) -> str:
     key = runner_exec(ctid, "cat", pub_path).strip()
     if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?", key):
         fail("Invalid runner ED25519 public key")
+    # Semaphore cannot read the PVE host-write private key.
+    mode = runner_exec(ctid, "stat", "-c", "%a:%u:%g", KEY_PATH)
+    if mode != "600:0:0":
+        fail("BLOCKED: Runner host-write private key must remain root-only")
     return key
 
 
