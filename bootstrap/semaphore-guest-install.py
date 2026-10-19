@@ -84,7 +84,7 @@ def validate(site, runner_ip, *, resume_ansible=False):
         raise Blocked("Run as root inside LXC, not on PVE host")
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", site):
         raise Blocked("Invalid site")
-    if command("hostname") != f"ansimble-{site}":
+    if command("hostname") != f"ansible-{site}":
         raise Blocked("Runner hostname mismatch")
     if not re.fullmatch(r"(?:[0-9]{1,3}\.){3}231", runner_ip):
         raise Blocked("Nonstandard runner IP")
@@ -131,7 +131,7 @@ def setup_files(runner_ip, service):
     command("openssl", "req", "-x509", "-newkey", "ec",
             "-pkeyopt", "ec_paramgen_curve:P-256", "-nodes", "-days", "365",
             "-keyout", str(KEY), "-out", str(CERT),
-            "-subj", f"/CN=ansimble-runner",
+            "-subj", f"/CN=ansible-{site}",
             "-addext", f"subjectAltName=IP:{runner_ip},IP:127.0.0.1",
             timeout=60)
     for file, mode in ((CERT, 0o640), (KEY, 0o600)):

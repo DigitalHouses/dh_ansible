@@ -54,15 +54,15 @@ EXPECTED_NAME = "ansible"
 
 
 def runner_hostname(site: str) -> str:
-    """Canonical LXC hostname is ansible-<owner_slug>, independent of site_id.
+    """Canonical LXC hostname is ansible-<site_id> for unique site identity.
 
-    Owner slug comes from the validated <owner>-<type> site ID. The private
-    Fleet metadata is independently verified before any guest creation.
+    The <owner>-<type> Site ID and PRIVATE Fleet metadata are verified
+    before any guest creation.
     """
     match = re.fullmatch(r"([a-z][a-z0-9]*(?:-[a-z0-9]+)*)-([a-z][a-z0-9]*)", site)
     if not match:
         raise Blocked("Canonical site ID must be <owner>-<type>")
-    return f"{EXPECTED_NAME}-{match.group(1)}"
+    return f"{EXPECTED_NAME}-{site}"
 GH_VERSION = "2.102.0"
 GH_URL = "https://github.com/cli/cli/releases/download/v2.102.0/gh_2.102.0_linux_amd64.tar.gz"
 GH_SHA256 = "bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
@@ -79,7 +79,7 @@ def safe_guest_failure_lines(argv, stdout, stderr):
     if not any(str(arg).endswith("/semaphore-guest-install.py") for arg in argv):
         return []
     lines = (stdout or "").splitlines() + (stderr or "").splitlines()
-    allowed = re.compile(r"^(?:INSTALL=BLOCKED: Command failed: [a-zA-Z0-9_.-]+, rc=[0-9]+|SEMAPHORE_GUEST_PREFLIGHT=PASS|SEMAPHORE_GUEST_RESUME=EXISTING_ANSIBLE_ONLY|GUEST_LOCALE=PASS C\.UTF-8|OS_DEPENDENCIES=START|ANSIBLE_RUNTIME_PERMISSIONS=PASS|ANSIBLE_RUNTIME=PASS|SEMAPHORE_PACKAGE=PASS)$")
+    allowed = re.compile(r"^(?:INSTALL=BLOCKED: Command failed: [a-zA-Z0-9_.-]+, rc=[0-9]+|INSTALL=BLOCKED: Runner hostname mismatch|SEMAPHORE_GUEST_PREFLIGHT=PASS|SEMAPHORE_GUEST_RESUME=EXISTING_ANSIBLE_ONLY|GUEST_LOCALE=PASS C\.UTF-8|OS_DEPENDENCIES=START|ANSIBLE_RUNTIME_PERMISSIONS=PASS|ANSIBLE_RUNTIME=PASS|SEMAPHORE_PACKAGE=PASS)$")
     return [line for line in lines if len(line) < 180 and allowed.fullmatch(line)][-8:]
 
 def run(*argv, timeout=120, env=None, reveal=False):

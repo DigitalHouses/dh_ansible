@@ -94,3 +94,22 @@ def test_https_readiness_waits_with_certificate_validation_and_fails_closed():
     assert 'raise Blocked("Semaphore HTTPS endpoint not ready within 60 seconds")' in source
     assert 'os.chmod(UNIT, 0o644)' in source
 
+
+def test_guest_rejects_legacy_hostname_and_accepts_full_site_id(monkeypatch):
+    m = module()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(m.Path, "exists", lambda p: False)
+    calls = []
+
+    def fake_cmd(*args, **kwargs):
+        calls.append(args)
+        if args == ("hostname",):
+            return "ansible-serzhan-home"
+        if args == ("ip", "-4", "-o", "addr", "show"):
+            return "inet 192.168.11.231/24"
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_cmd)
+    # External state is deliberately mocked; only hostname binding tested.
+    m.validate("serzhan-home", "192.168.11.231")
+    assert ("hostname",) in calls

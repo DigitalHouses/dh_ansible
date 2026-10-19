@@ -96,3 +96,16 @@ def test_site_confirmation_eof_blocks_without_downstream():
         assert result.returncode != 0
         assert "CONFIRMED_SITE=" not in result.stdout
         assert "BLOCKED:" in result.stderr
+
+def test_site_id_trims_only_edge_whitespace():
+    result = _run_site_confirm("  serzhan-home  \\r\\ny\\n")
+    assert result.returncode == 0, result.stderr
+    assert "SITE_INPUT_TRIMMED=YES" in result.stdout
+    assert "CONFIRMED_SITE=serzhan-home" in result.stdout
+
+
+def test_site_id_never_normalizes_inner_spaces():
+    result = _run_site_confirm("serzhan -home\\nserzhan-home\\ny\\n")
+    assert result.returncode == 0, result.stderr
+    assert "Некорректный Site ID" in result.stdout
+    assert "CONFIRMED_SITE=serzhan-home" in result.stdout

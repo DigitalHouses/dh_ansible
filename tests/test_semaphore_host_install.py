@@ -60,7 +60,7 @@ def test_guest_acceptance_information_is_printed_to_operator():
 def test_short_exact_create_confirmation_and_explicit_rejection():
     m=load()
     assert m.creation_confirmed("CREATE CT1231", "demo-office")
-    assert m.creation_confirmed("CREATE CT1231 ansible-demo", "demo-office")
+    assert m.creation_confirmed("CREATE CT1231 ansible-demo-office", "demo-office")
     assert not m.creation_confirmed("CREATE CT123", "demo-office")
     assert not m.creation_confirmed("yes", "demo-office")
     assert not m.creation_confirmed("CREATE CT1231 ansible-other", "demo-office")
@@ -113,7 +113,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
     m=load()
     # Existing CT is correctly identified but Semaphore configuration already exists.
     config_lines=[
-        "hostname: ansible-demo", "unprivileged: 1", "ostype: debian",
+        "hostname: ansible-demo-office", "unprivileged: 1", "ostype: debian",
         "onboot: 0", "protection: 1", "cores: 1", "memory: 1024",
         "swap: 512", "features: nesting=1",
         "rootfs: local-lvm:vm-1231-disk-0,size=16G",
@@ -127,7 +127,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
         if args[:2]==("pveam","list"): return "debian-13-standard_13.6-1_amd64.tar.zst"
         return ""
     monkeypatch.setattr(m,"run",fake_run)
-    monkeypatch.setattr(m,"pct_guest",lambda *a,**k: "ansible-demo" if a==("hostname",) else "198.51.100.231/24")
+    monkeypatch.setattr(m,"pct_guest",lambda *a,**k: "ansible-demo-office" if a==("hostname",) else "198.51.100.231/24")
     monkeypatch.setattr(m,"code",lambda *a,**k: 1 if a[:2]==("qm","config") else (0 if a[:3]==("pct","exec","1231") else 1))
     monkeypatch.setattr(m.os,"geteuid",lambda:0)
     # This test documents rejection of detected installed marker, independent of runtime config mocks.
@@ -580,12 +580,25 @@ def test_site_escrow_blocks_path_traversal(monkeypatch, tmp_path):
         m.verify_site_escrow(tmp_path / "source", "demo-office")
 
 
-def test_runner_hostname_uses_owner_slug_not_site_slug():
+def test_runner_hostname_uses_full_site_slug():
     m = load()
-    assert m.runner_hostname("serzhan-home") == "ansible-serzhan"
-    assert m.runner_hostname("amir-office") == "ansible-amir"
-    assert m.runner_hostname("multi-owner-office") == "ansible-multi-owner"
+    assert m.runner_hostname("serzhan-home") == "ansible-serzhan-home"
+    assert m.runner_hostname("amir-office") == "ansible-amir-office"
+    assert m.runner_hostname("multi-owner-office") == "ansible-multi-owner-office"
     with pytest.raises(m.Blocked):
         m.runner_hostname("serzhan")
     with pytest.raises(m.Blocked):
         m.runner_hostname("serzhan_home")
+
+def test_guest_failure_allows_safe_hostname_error_but_not_secret_output():
+    m = load()
+    stdout = "GUEST_LOCALE=PASS C.UTF-8\\n"
+    stderr = "INSTALL=BLOCKED: Runner hostname mismatch\\nsecret=DO_NOT_SHOW"
+    lines = m.safe_guest_failure_lines(
+        ["pct", "exec", "1231", "--",
+         "python3", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py"],
+        stdout, stderr,
+    )
+    assert "GUEST_LOCALE=PASS C.UTF-8" in lines
+    assert "INSTALL=BLOCKED: Runner hostname mismatch" in lines
+    assert not any("secret" in line for line in lines)

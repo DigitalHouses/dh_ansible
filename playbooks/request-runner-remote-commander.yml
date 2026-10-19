@@ -27,7 +27,7 @@
       ansible.builtin.assert:
         that:
           - site.id == site.owner_slug ~ '-' ~ site.type
-          - remote_request_hostname.stdout == 'ansible-' ~ site.owner_slug
+          - remote_request_hostname.stdout == 'ansible-' ~ site.id
     - name: Check fixed-purpose root watcher
       ansible.builtin.command:
         argv: [systemctl, is-active, dh-remote-commander-install.path]

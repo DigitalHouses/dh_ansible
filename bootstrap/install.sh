@@ -26,12 +26,24 @@ if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
 fi
 
 confirm_site_id() {
-  local candidate answer
+  local candidate answer original
   echo "=== CANONICAL SITE CONFIRMATION ==="
   while true; do
     if ! IFS= read -r -p "Введите Site ID (<owner>-<type>): " candidate; then
       echo "BLOCKED: Site ID input interrupted; no actions performed" >&2
       return 2
+    fi
+    # Pasted terminal text can carry trailing spaces, TAB or CR (Windows).
+    # Trim only edge whitespace; never silently modify the Site ID itself.
+    original="$candidate"
+    while [[ -n "$candidate" && "${candidate:0:1}" =~ [[:space:]] ]]; do
+      candidate="${candidate:1}"
+    done
+    while [[ -n "$candidate" && "${candidate: -1}" =~ [[:space:]] ]]; do
+      candidate="${candidate:0:${#candidate}-1}"
+    done
+    if [[ "$original" != "$candidate" ]]; then
+      echo "SITE_INPUT_TRIMMED=YES (краевые пробельные символы удалены)"
     fi
     if [[ ! "$candidate" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]]; then
       echo "Некорректный Site ID. Формат: <owner>-<type> (например, serzhan-home). Повторите ввод."

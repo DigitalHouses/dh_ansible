@@ -16,8 +16,8 @@ trap on_exit EXIT
 [[ "$(wc -c < "$REQUEST")" -eq 8 ]] || exit 2
 rm -f -- "$REQUEST"
 HOST="$(hostname)"
-[[ "$HOST" =~ ^ansible-([a-z][a-z0-9]*(-[a-z0-9]+)*)$ ]] || exit 2
-OWNER="${BASH_REMATCH[1]}"
+[[ "$HOST" =~ ^ansible-([a-z][a-z0-9]*(-[a-z0-9]+)+)$ ]] || exit 2
+HOST_SITE="${BASH_REMATCH[1]}"
 SITE_DIR="/var/lib/ansimble/site-data"
 [[ -d "$SITE_DIR" && ! -L "$SITE_DIR" ]] || exit 2
 # Exactly one canonical site inventory per runner; never infer site_id
@@ -27,8 +27,9 @@ mapfile -d '' -t SITE_DIRS < <(
 )
 [[ "${#SITE_DIRS[@]}" -eq 1 ]] || exit 2
 SITE="${SITE_DIRS[0]##*/}"
-[[ "$SITE" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || exit 2
-[[ "${SITE%-*}" == "$OWNER" ]] || exit 2
+[[ "$SITE" == "$HOST_SITE" ]] || exit 2
+OWNER="${SITE%-*}"
+TYPE="${SITE##*-}"
 META="$SITE_DIR/$SITE/group_vars/all.yml"
 INVENTORY="$SITE_DIR/$SITE/hosts.yml"
 for file in "$META" "$INVENTORY"; do
@@ -37,6 +38,7 @@ for file in "$META" "$INVENTORY"; do
 done
 grep -Fxq "  id: $SITE" "$META" || exit 2
 grep -Fxq "  owner_slug: $OWNER" "$META" || exit 2
+grep -Fxq "  type: $TYPE" "$META" || exit 2
 for path in "$BASE" "$BASE/playbooks" "$BASE/roles" \
     "$BASE/roles/runner_remote_commander" \
     "$BASE/playbooks/apply-runner-remote-commander.yml"; do

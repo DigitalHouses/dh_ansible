@@ -18,7 +18,7 @@ def test_example_runner_inventory_identity_and_reserved_address():
     assert site == "ci-example"
     assert all_vars["site"]["owner_slug"] + "-" + all_vars["site"]["type"] == site
     assert runner["vmid"] == 1231
-    assert runner["hostname"] == f"ansible-{all_vars['site']['owner_slug']}"
+    assert runner["hostname"] == f"ansible-{site}"
     assert runner["network"]["ipv4"] == "198.51.100.231/24"
     assert pve["host"] == "198.51.100.30"
     assert runner["management"]["write_ready"] is False
@@ -65,5 +65,5 @@ def test_runner_audit_yaml_structure_and_canonical_owner_name():
         "Check inventory identity matches local site",
     ]
     tasks = play[0]["pre_tasks"]
-    assert any("ansible-' ~ site.owner_slug" in str(step) for step in tasks)
+    assert any("ansible-' ~ site.id" in str(step) for step in tasks)
     assert all("site_id_effective" not in str(step) for step in tasks)

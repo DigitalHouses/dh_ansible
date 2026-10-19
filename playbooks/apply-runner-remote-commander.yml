@@ -31,7 +31,7 @@
       ansible.builtin.assert:
         that:
           - site.id == site.owner_slug ~ '-' ~ site.type
-          - remote_commander_hostname.stdout == 'ansible-' ~ site.owner_slug
+          - remote_commander_hostname.stdout == 'ansible-' ~ site.id
         fail_msg: "This is not the expected Ansible site runner."
 
   roles:

@@ -2,7 +2,7 @@
 site_runner:
   vmid: 1231
   site_name: CI Example
-  hostname: ansible-ci
+  hostname: ansible-ci-example
   network:
     ipv4: 198.51.100.231/24
     gateway: 198.51.100.1

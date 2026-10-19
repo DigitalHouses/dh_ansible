@@ -68,4 +68,4 @@ echo "TERMINAL REMAINS OPEN"
 
 ## Имя локального runner
 
-Hostname LXC: `ansible-<owner_slug>` (например, `ansible-serzhan`). Не путать с `site.id` (`serzhan-home`): он остаётся полным ключом Fleet, Semaphore inventory и Vault. CTID/IP по прежнему стандарту 1231 / .231. Bootstrap сверяет owner_slug из PRIVATE site metadata до создания гостя. Переход на новое имя применяется только при следующем Fresh E2E, старые работающие CT не переименовываются автоматически.
+Hostname LXC: `ansible-<site_id>` (например, `ansible-serzhan-home`). Site ID (`serzhan-home`) остаётся ключом Fleet, Semaphore inventory и Vault; hostname всегда строится по этому полному ID. CTID/IP по прежнему стандарту 1231 / .231. Bootstrap сверяет Site ID и owner_slug из PRIVATE site metadata до создания гостя. Переход на новое имя применяется только при следующем Fresh E2E, старые работающие CT не переименовываются автоматически.
