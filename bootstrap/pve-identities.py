@@ -253,6 +253,32 @@ def main() -> None:
         exact_acl(acl, "user", u, role)
     for u, token, role in ((AUDIT_USER, "audit", "PVEAuditor"), (WRITE_USER, "write", "PVEAdmin")):
         exact_acl(acl, "token", f"{u}!{token}", role)
+    # Never issue a second credential if an existing PVE token or host
+    # identity has lost its restore material. This gate is read-only.
+    path = STAGING_DIR / f"pve-identities-{args.site}-ansible-v2-pending.json"
+    staged = path.is_file() and not path.is_symlink()
+    if path.exists() and not staged:
+        fail("BLOCKED: Unexpected canonical identity staging type")
+    for user, token in ((AUDIT_USER, "audit"), (WRITE_USER, "write")):
+        if any(u.get("userid") == user for u in users):
+            existing = records(read_json("pveum", "user", "token", "list", user),
+                               name=f"canonical token list for {user}")
+            if any(row.get("tokenid") == token for row in existing) and not staged:
+                fail("BLOCKED: Existing canonical PVE token has no v2 escrow; restore from Fleet Vault")
+    key_state = runner_exec(
+        str(args.runner_ctid), "python3", "-c",
+        "import pathlib; p=pathlib.Path('/var/lib/ansimble/.ssh/pve_host_write_ed25519');"
+        "q=pathlib.Path(str(p)+'.pub'); print(int(p.exists()),int(q.exists()))",
+    )
+    if key_state == "0 0" and staged:
+        fail("BLOCKED: Rebuilt runner has no PVE private key; restore from Fleet Vault, do not rotate")
+    if key_state == "0 0":
+        try:
+            pwd.getpwnam(HOST_USER)
+        except KeyError:
+            pass
+        else:
+            fail("BLOCKED: Existing canonical PVE Linux principal but no runner key; recover first")
     print(f"PREFLIGHT=PASS SITE={args.site} RUNNER_CTID={args.runner_ctid}")
     if not args.apply:
         print("MODE=READ_ONLY; add --apply after reviewing the plan")
@@ -260,7 +286,6 @@ def main() -> None:
     STAGING_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(STAGING_DIR, 0o700)
     # Identity v2 intentionally does not reuse historical token escrow.
-    path = STAGING_DIR / f"pve-identities-{args.site}-ansible-v2-pending.json"
     if path.is_symlink():
         fail("BLOCKED: Staging path symlink")
     if path.exists():
