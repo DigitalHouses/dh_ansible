@@ -592,8 +592,8 @@ def test_runner_hostname_uses_full_site_slug():
 
 def test_guest_failure_allows_safe_hostname_error_but_not_secret_output():
     m = load()
-    stdout = "GUEST_LOCALE=PASS C.UTF-8\\n"
-    stderr = "INSTALL=BLOCKED: Runner hostname mismatch\\nsecret=DO_NOT_SHOW"
+    stdout = "GUEST_LOCALE=PASS C.UTF-8\n"
+    stderr = "INSTALL=BLOCKED: Runner hostname mismatch\nsecret=DO_NOT_SHOW"
     lines = m.safe_guest_failure_lines(
         ["pct", "exec", "1231", "--",
          "python3", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py"],
