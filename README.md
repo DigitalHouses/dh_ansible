@@ -13,13 +13,13 @@
 
 `bootstrap/install.sh` входит в `dh_ansible`. Отдельный старый репозиторий installer остаётся временным rollback и не участвует в целевой архитектуре.
 
-Выполнять **только на выбранном PVE**, из-под root, после отдельного разрешения на изменение CT. Пример для синтетического объекта `demo-office` (на действующей площадке используйте её собственный slug):
+Выполнять **только на выбранном PVE**, из-под root, после отдельного разрешения на изменение CT. В примере ниже Site ID вводится в терминале и подтверждается оператором:
 
 ```bash
 clear
 dh_install() {
-  local REF="f5a9c5809f2fbc135aa342eabef8a0ebe828c0d2"
-  local SHA="db0962575999201c5460c46e7a882c1c537b4417"
+  local REF="f2bd09cfb76ba8fedd982f98fcc5bb83fb9f9699"
+  local SHA="a2e444322d7643fcf330c5403a4b2fa47070d0b1"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
