@@ -802,11 +802,6 @@ def seed_semaphore(site, project_title):
     print("SEMAPHORE_TEMPLATES=PASS (no task executed)", flush=True)
 
 
-def creation_confirmed(answer: str, site: str) -> bool:
-    """Only the exact reserved CTID or canonical runner name authorizes creation."""
-    return answer in {f"CREATE CT{CTID}", f"CREATE CT{CTID} {runner_hostname(site)}"}
-
-
 def apply(args, template):
     if not re.fullmatch(r"[a-f0-9]{40}", args.expected_commit or ""):
         raise Blocked("Immutable 40-character code release SHA required")
@@ -834,7 +829,8 @@ def apply(args, template):
                                       preauthorized=args.use_github_session)
         validate_fleet_password(checkout)
         verify_site_escrow(checkout, args.site)
-        # Ask only AFTER all acquisition/authentication, right before the first guest change.
+        # Site ID y/n is confirmed by the public installer before auth.
+        # Resume operations still require an explicit extra confirmation.
         if args.resume_semaphore:
             print(f"PLAN: finish verified running Semaphore in CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
             confirm = input(f"Type COMPLETE SEMAPHORE CT{CTID} to continue: ")
@@ -856,10 +852,11 @@ def apply(args, template):
             if confirm != f"RESUME CT{CTID}":
                 raise Blocked("Operator cancelled; existing guest unchanged")
         else:
+            # Fresh creation is authorized by the already confirmed Site ID,
+            # validated private Fleet metadata, Vault/escrow and strict PVE preflight.
+            # Never request a second magic phrase for creating an absent CT.
             print(f"PLAN: create CT{CTID} {runner_hostname(args.site)} at {args.runner_cidr}", flush=True)
-            confirm = input(f"Type CREATE CT{CTID} to continue: ")
-            if not creation_confirmed(confirm, args.site):
-                raise Blocked("Operator cancelled; no guest created")
+            print("CT_CREATE_CONFIRMATION=SITE_ID_ALREADY_CONFIRMED", flush=True)
         host_preflight(args.site, args.runner_cidr, args.gateway, args.pve_ip,
                        resume=args.resume, resume_ansible=args.resume_ansible,
                        resume_semaphore=args.resume_semaphore, resume_fresh=args.resume_fresh)

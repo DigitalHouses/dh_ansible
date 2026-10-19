@@ -57,15 +57,15 @@ def test_guest_acceptance_information_is_printed_to_operator():
     assert 'print(pct_guest(*guest_args, timeout=1000), flush=True)' in src
     assert 'TLS_CERT_SHA256=' in (Path(__file__).resolve().parents[1]/'bootstrap/semaphore-guest-install.py').read_text()
 
-def test_short_exact_create_confirmation_and_explicit_rejection():
+def test_fresh_create_requires_no_magic_confirmation_but_keeps_strict_identity_gate():
+    s=SRC.read_text()
     m=load()
-    assert m.creation_confirmed("CREATE CT1231", "demo-office")
-    assert m.creation_confirmed("CREATE CT1231 ansible-demo-office", "demo-office")
-    assert not m.creation_confirmed("CREATE CT123", "demo-office")
-    assert not m.creation_confirmed("yes", "demo-office")
-    assert not m.creation_confirmed("CREATE CT1231 ansible-other", "demo-office")
-    assert not m.creation_confirmed("", "demo-office")
-    assert 'Type CREATE CT{CTID} to continue: ' in SRC.read_text()
+    assert "creation_confirmed" not in s
+    assert "Type CREATE" not in s
+    assert 'CT_CREATE_CONFIRMATION=SITE_ID_ALREADY_CONFIRMED' in s
+    assert 'host_preflight(args.site, args.runner_cidr, args.gateway, args.pve_ip,' in s
+    assert 'CT1231 / VM1231 already exists; no overwrite' in s
+    assert m.runner_hostname("demo-office") == "ansible-demo-office"
 
 
 def test_guest_failure_output_is_allowlisted_no_password_or_raw_traceback():
@@ -290,12 +290,16 @@ def test_download_fails_closed_without_official_candidate(monkeypatch):
     assert not any(a[:2] == ("pveam", "download") for a in calls)
 
 
-def test_download_after_confirmation_and_authentication():
+def test_download_after_authentication_and_strict_preflight_without_create_prompt():
     src = SRC.read_text()
     body = src.split("def apply(args, template):", 1)[1].split("\ndef main(", 1)[0]
-    assert body.index("validate_fleet_password(") < body.index("confirm = input(")
-    assert body.index("confirm = input(") < body.index("ensure_official_debian_template()")
+    assert body.index("validate_fleet_password(") < body.index("verify_site_escrow(")
+    assert body.index("verify_site_escrow(") < body.index("host_preflight(")
+    assert body.index("host_preflight(") < body.index("ensure_official_debian_template()")
     assert body.index("ensure_official_debian_template()") < body.index("create_runner(")
+    fresh_branch = body.split("        else:\n            # Fresh creation", 1)[1].split("        host_preflight(", 1)[0]
+    assert "input(" not in fresh_branch
+    assert "Type CREATE" not in body
 
 
 def test_offline_etc_repaired_before_first_start(monkeypatch, tmp_path):
