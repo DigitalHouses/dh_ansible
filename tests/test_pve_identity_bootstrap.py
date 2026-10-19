@@ -63,3 +63,25 @@ def test_host_ssh_transport_is_source_restricted():
     assert "pve_host_audit_known_hosts" in text
     assert "VAULT_PENDING" in text
     assert "regenerate automatically" in text
+
+def test_root_bootstrap_uses_canonical_runner_and_separate_v2_escrow():
+    source = BOOTSTRAP.read_text()
+    assert "ansible-{args.site}" in source
+    assert "ansimble-{args.site}" not in source
+    assert "ansible-v2-pending.json" in source
+    assert '"identity_schema": 2' in source
+    assert '"principals": {"audit": AUDIT_USER' in source
+    assert '"/var/lib/ansible-linux"' in source
+    assert '"90-digitalhouses-ansible-linux"' in source
+    assert '"600:0:0"' in source
+
+
+def test_installer_stages_identity_from_pinned_code_under_pve_root():
+    source = (ROOT / "bootstrap" / "semaphore-host-install.py").read_text()
+    assert '"bootstrap/pve-identities.py"' in source
+    assert "def provision_pve_identity_stage(" in source
+    assert 'run("python3", str(source),' in source
+    assert "PVE_CREDENTIALS=VAULT_IMPORT_PENDING" in source
+    assert source.index("stage_runner_remote_commander(args.site, checkout)") < source.index(
+        "provision_pve_identity_stage(args.site, args.runner_cidr,"
+    )
