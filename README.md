@@ -1,34 +1,61 @@
-# DigitalHouses · DH Ansible
+# DigitalHouses · Ansible
 
-Публичный универсальный код инфраструктуры DigitalHouses: Ansible, роли, playbooks, Semaphore, Bootstrap и проверяемый установщик.
-
-## Архитектура — два рабочих репозитория
+Один универсальный набор кода для объектов DigitalHouses. **Дом отличается данными, а не кодом.**
 
 | Репозиторий | Доступ | Назначение |
 | --- | --- | --- |
-| `DigitalHouses/dh_ansible` | PUBLIC | Весь универсальный исполняемый код, Bootstrap, тесты, CI и документация |
-| `DigitalHouses/dh_ansible_fleet_detail` | **PRIVATE** | Инвентаризации объектов и зашифрованный Ansible Vault, без исполняемого кода/Actions |
+| `DigitalHouses/dh_ansible` | PUBLIC | Ansible, Bootstrap, Semaphore, installer, CI и тесты |
+| `DigitalHouses/dh_ansible_fleet_detail` | **PRIVATE** | Декларативные inventory объектов и зашифрованные Vault-файлы |
 
-«Дом отличается данными, а не кодом». Реальные site inventory, Vault, пароли, ключи и данные домов не публикуются в этом репозитории.
+Секреты, реальные inventory, токены и GitHub credentials не публикуются в коде и не передаются в гостевой Semaphore runner.
 
-## Единый установщик
+## Единая точка входа
 
-Исходник единой точки входа находится в **`bootstrap/install.sh`** этого же репозитория. Отдельный старый публичный репозиторий installer сохранён временно только для отката до полного E2E; он не является частью целевой схемы.
+`bootstrap/install.sh` входит в `dh_ansible`. Отдельный старый репозиторий installer остаётся временным rollback и не участвует в целевой архитектуре.
 
-Установщик принимает `<owner>-<type>` и необязательный контролируемый режим `--resume`, `--resume-fresh`, `--resume-ansible` или `--resume-semaphore`. Пример с синтетическим site ID для **чистого тестового PVE** (перед любым запуском требуется отдельное разрешение):
+Выполнять **только на выбранном PVE**, из-под root, после отдельного разрешения на изменение CT. Пример для синтетического объекта `demo-office` (на действующей площадке используйте её собственный slug):
 
 ```bash
 clear
-INSTALLER_REF="010d7454d1a56f6aaf55a8f996fb0b36f9af8798"
-SOURCE="$(curl -fsSL --retry 2 "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/${INSTALLER_REF}/bootstrap/install.sh")"
-test -n "$SOURCE" || exit 2
-bash -c "$SOURCE" -- "demo-office"
+dh_install() {
+  local REF="649a9016481f525294dcf70c7b94f7500f234f30"
+  local SHA="428434a02cac15c0dae3346dc65028089841832a"
+  local DEST="/root/dh-ansible-install.sh"
+  curl -fsSL --retry 3 \
+    "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
+    -o "$DEST" || return 1
+  local ACTUAL
+  ACTUAL="$(git hash-object "$DEST")" || return 1
+  if [ "$ACTUAL" != "$SHA" ]; then
+    echo "BLOCKED: unexpected installer content"
+    return 2
+  fi
+  bash -n "$DEST" || return 2
+  bash "$DEST" "demo-office"
+  local RC=$?
+  echo "INSTALLER_RC=$RC"
+  return "$RC"
+}
+dh_install
+echo "TERMINAL REMAINS OPEN"
 ```
 
-**Воспроизводимая приёмка:** в примере выше закреплён проверенный Git commit установщика; не заменять его плавающим `main` при приёмке. При выпуске нового релиза обновлять эту ссылку только после CI и проверки SHA. Внутри установщика отдельно закреплены `CODE_RELEASE`, Git blob SHA `bootstrap/semaphore-host-install.py`, SHA256 GitHub CLI и `FLEET_RELEASE`. Проверка приватного Vault и идентичности выбранного site выполняется до любого создания LXC; GitHub Device Login владельца остаётся на PVE. Общий Fleet Vault и GitHub credentials на runner не передаются.
+Slug задаётся в аргументе или вводится интерактивно. **Для обоих способов обязательно подтверждение `y/n` до OAuth, чтения Vault и любых изменений PVE**. После подтверждения slug передаётся как `--site` в pinned Bootstrap, который проверяет идентичность с PRIVATE Fleet inventory. Существующий CT не удаляется и не перезаписывается без отдельного разрешения; допустимые режимы продолжения: `--resume`, `--resume-fresh`, `--resume-ansible`, `--resume-semaphore`.
 
-## Статус
+В установщике закреплены SHA публичного Bootstrap, SHA его Git blob, версия/checksum GitHub CLI и независимо закреплённый Fleet commit. Ввод Vault master остаётся только на PVE. Отказ или неверный slug блокируют установку.
 
-Доступность и CI публичного кода проверены, но Bootstrap E2E **не принят**. Уже существующий CT1231 не соответствует новому каноническому hostname/site ID и **не должен удаляться или принудительно усыновляться**. До явного отдельного разрешения недопустимы удаление PVE CT/VM, шаблонов Debian, переразметка дисков, изменения production и удаление архивных репозиториев.
+## Semaphore · локальные операции
 
-Полное принятие: проверенный PVE preflight → владелец/приватный Fleet/Vault → чистая установка runner → HTTPS Semaphore/API → site-local inventory → read-only smoke → повторяемость/идемпотентность без drift.
+При установке создаются три шаблона, привязанные к site-local inventory:
+
+- `Проверка запуска Ansible` — read-only smoke.
+- `Аудит локального runner` — read-only аудит identity, systemd, Git и Ansible.
+- `Установить Remote Desktop Commander` — **только по запросу оператора**, не запускается автоматически.
+
+У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм.
+
+## Приёмка
+
+19 октября 2026: **Fresh Bootstrap E2E домашнего pilot runner принят** — официальный Debian 13 с нуля, HTTPS Semaphore 2.19.16, Ansible Core 2.21.4, два UI smoke-аудита SUCCESS и read-only повторный seeder PASS. Это **не** разрешение на инфраструктурные write-операции или массовое развёртывание.
+
+Новый flow подтверждения slug и on-demand Remote Commander проверяется отдельно CI и контролируемым `--resume-semaphore` на действующем тестовом CT; повторный destructive E2E для их применения не нужен. Production объекты не менять без отдельной приёмки.
