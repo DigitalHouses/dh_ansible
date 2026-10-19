@@ -50,3 +50,20 @@ def test_runner_ci_syntax_check_is_generic():
     assert "tests/fixtures/syntax_inventory.yml playbooks/audit-runner.yml" in ci
     assert "inventories/home/hosts.yml" not in ci
     assert "inventories/amir/hosts.yml" not in ci
+
+def test_runner_audit_yaml_structure_and_canonical_owner_name():
+    play = yaml.safe_load((ROOT / "playbooks/audit-runner.yml").read_text())
+    assert len(play) == 1
+    assert len(play[0]["roles"]) == 1
+    names = [step["name"] for step in play[0]["pre_tasks"]]
+    assert names == [
+        "Require exactly one local target",
+        "Read local runner hostname",
+        "Validate runner hostname format",
+        "Load site identity from the private inventory repository",
+        "Load desired runner state from the private inventory repository",
+        "Check inventory identity matches local site",
+    ]
+    tasks = play[0]["pre_tasks"]
+    assert any("ansible-' ~ site.owner_slug" in str(step) for step in tasks)
+    assert all("site_id_effective" not in str(step) for step in tasks)

@@ -25,7 +25,8 @@
     - name: Validate runner hostname format
       ansible.builtin.assert:
         that:
-          - runner_audit_local_hostname.stdout is match('^ansible-[a-z][a-z0-9-]*
+          - runner_audit_local_hostname.stdout is match('^ansible-[a-z][a-z0-9-]*$')
+        fail_msg: "Expected ansible-<owner_slug> hostname."
 
     - name: Load site identity from the private inventory repository
       ansible.builtin.include_vars:
@@ -40,26 +41,6 @@
         that:
           - site.id == site.owner_slug ~ '-' ~ site.type
           - runner_audit_local_hostname.stdout == 'ansible-' ~ site.owner_slug
-          - site_runner.hostname == runner_audit_local_hostname.stdout
-        fail_msg: "Site identity conflicts with local runner; audit blocked."
-
-  roles:
-    - role: runner_audit
-)
-        fail_msg: "Expected ansible-<owner_slug> hostname."
-
-    - name: Load site identity from the private inventory repository
-      ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/group_vars/all.yml"
-
-    - name: Load desired runner state from the private inventory repository
-      ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/runner.yml"
-
-    - name: Check inventory identity matches local site
-      ansible.builtin.assert:
-        that:
-          - site.id == site_id_effective
           - site_runner.hostname == runner_audit_local_hostname.stdout
         fail_msg: "Site identity conflicts with local runner; audit blocked."
 
