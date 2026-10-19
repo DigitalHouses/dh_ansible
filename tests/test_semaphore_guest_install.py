@@ -113,3 +113,40 @@ def test_guest_rejects_legacy_hostname_and_accepts_full_site_id(monkeypatch):
     # External state is deliberately mocked; only hostname binding tested.
     m.validate("serzhan-home", "198.51.100.231")
     assert ("hostname",) in calls
+
+
+def test_tls_setup_uses_explicit_site_id_not_unbound_global(monkeypatch, tmp_path):
+    """Reproduce the full CN-generation path without OpenSSL or changing host files."""
+    from types import SimpleNamespace
+    import json
+
+    m = module()
+    monkeypatch.setattr(m, "CONFIG", tmp_path / "etc/semaphore/config.json")
+    monkeypatch.setattr(m, "BASE", tmp_path / "var/lib/semaphore")
+    monkeypatch.setattr(m, "CERT", tmp_path / "etc/semaphore/tls.crt")
+    monkeypatch.setattr(m, "KEY", tmp_path / "etc/semaphore/tls.key")
+    monkeypatch.setattr(m.os, "chown", lambda *args: None)
+    openssl_calls = []
+
+    def mock_command(*args, **kwargs):
+        assert args[0] == "openssl"
+        openssl_calls.append(args)
+        key_file = args[args.index("-keyout") + 1]
+        cert_file = args[args.index("-out") + 1]
+        Path(key_file).write_text("SYNTHETIC PRIVATE KEY - TEST ONLY")
+        Path(cert_file).write_text("SYNTHETIC CERTIFICATE - TEST ONLY")
+        return ""
+
+    monkeypatch.setattr(m, "command", mock_command)
+    service = SimpleNamespace(pw_uid=1001, pw_gid=1001)
+    m.setup_files("serzhan-home", "198.51.100.231", service)
+
+    assert len(openssl_calls) == 1
+    command = openssl_calls[0]
+    assert command[command.index("-subj") + 1] == "/CN=ansible-serzhan-home"
+    assert command[command.index("-addext") + 1] == (
+        "subjectAltName=IP:198.51.100.231,IP:127.0.0.1"
+    )
+    config = json.loads(m.CONFIG.read_text())
+    assert config["web_host"] == "https://198.51.100.231:3000"
+    assert config["tls"]["enabled"] is True
