@@ -69,14 +69,17 @@ def worker(args):
         blocked("Guest worker must run as root inside runner")
     if args.ctid != 1231:
         blocked("Invalid runner CTID")
-    if checked("hostname") != f"ansimble-{args.site}":
+    if checked("hostname") != f"ansible-{args.site}":
         blocked("Runner hostname mismatch")
-    home_uid = pwd.getpwnam("ansimble").pw_uid
+    home_uid = 0
     master = secure_read(Path(args.master_file)).rstrip(b"\r\n")
     if len(master) < 8:
         blocked("Invalid master-password length")
     stage = json.loads(secure_read(Path(args.staged_tokens)).decode("utf-8"))
-    if stage.get("site_id") != args.site:
+    if stage.get("site_id") != args.site or stage.get("identity_schema") != 2:
+        blocked("PVE bootstrap staging schema mismatch")
+    if stage.get("principals") != {"audit": "ansible-audit@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"}:
+        blocked("PVE bootstrap staging principals mismatch")
         blocked("PVE bootstrap staging site mismatch")
     if stage.get("runner_ip") != args.runner_ip or stage.get("pve_ip") != args.pve_ip:
         blocked("PVE bootstrap staging IP mismatch")
@@ -149,7 +152,7 @@ def worker(args):
         f.write(encrypted)
         f.flush()
         os.fsync(f.fileno())
-    os.chown(candidate, home_uid, pwd.getpwnam("ansimble").pw_gid)
+    os.chown(candidate, 0, 0)
     os.chmod(candidate, 0o600)
     print("VAULT_CANDIDATE=PASS")
     print(f"VAULT_CANDIDATE_SHA256={hashlib.sha256(encrypted).hexdigest()}")
@@ -174,11 +177,14 @@ def host(args):
         blocked("This is not a PVE node")
     if checked("pct", "status", str(args.ctid)) != "status: running":
         blocked("Runner LXC is not running")
-    if pct(args.ctid, "hostname") != f"ansimble-{args.site}":
+    if pct(args.ctid, "hostname") != f"ansible-{args.site}":
         blocked("Runner hostname mismatch")
-    staging = STAGING_BASE / f"pve-identities-{args.site}-pending.json"
+    staging = STAGING_BASE / f"pve-identities-{args.site}-ansible-v2-pending.json"
     bundle = json.loads(secure_read(staging).decode("utf-8"))
-    if bundle.get("site_id") != args.site:
+    if bundle.get("site_id") != args.site or bundle.get("identity_schema") != 2:
+        blocked("PVE identity schema mismatch")
+    if bundle.get("principals") != {"audit": "ansible-audit@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"}:
+        blocked("PVE identity principal mismatch")
         blocked("PVE identity staging site mismatch")
     if bundle.get("runner_ip") != args.runner_ip or bundle.get("pve_ip") != args.pve_ip:
         blocked("PVE identity staging address mismatch")
