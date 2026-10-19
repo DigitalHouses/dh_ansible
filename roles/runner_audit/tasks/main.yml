@@ -37,6 +37,20 @@
   register: runner_ipv4
   changed_when: false
 
+- name: Read local mDNS daemon state
+  ansible.builtin.command:
+    argv: [systemctl, is-active, avahi-daemon.service]
+  register: runner_mdns_service
+  changed_when: false
+  failed_when: false
+
+- name: Resolve published mDNS hostname via Avahi
+  ansible.builtin.command:
+    argv: [avahi-resolve-host-name, '-4', "ansible-{{ site.id }}.local"]
+  register: runner_mdns_resolution
+  changed_when: false
+  failed_when: false
+
 - name: Read repository HEAD
   ansible.builtin.command:
     argv: [git, -C, "{{ runner_audit_repository_path | default(site_runner.bootstrap.repository_path) }}", rev-parse, HEAD]
@@ -77,6 +91,11 @@
       - runner_systemd.stdout == "running"
       - runner_failed_units.stdout | trim == ""
       - site_runner.network.ipv4 in runner_ipv4.stdout
+      - runner_mdns_service.stdout == "active"
+      - runner_mdns_resolution.rc == 0
+      - runner_mdns_resolution.stdout.split() | length == 2
+      - runner_mdns_resolution.stdout.split()[0] == 'ansible-' ~ site.id ~ '.local'
+      - runner_mdns_resolution.stdout.split()[1] == site_runner.network.ipv4.split('/')[0]
       - runner_git_branch.stdout == runner_audit_repository_branch
       - runner_git_origin.stdout == runner_audit_repository_origin
       - runner_git_status.stdout | trim == ""
@@ -91,6 +110,8 @@
       systemd: "{{ runner_systemd.stdout }}"
       failed_units: 0
       ipv4: "{{ site_runner.network.ipv4 }}"
+      mdns: "ansible-{{ site.id }}.local"
+      mdns_publisher: "{{ runner_mdns_service.stdout }}"
       repository_head: "{{ runner_git_head.stdout }}"
       repository_branch: "{{ runner_git_branch.stdout }}"
       repository_worktree: clean

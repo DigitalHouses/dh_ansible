@@ -37,7 +37,7 @@ ADMIN_SECRET = Path("/root/dh-semaphore-initial-admin-password")
 UNIT = Path("/etc/systemd/system/digitalhouses-semaphore.service")
 VENV = Path("/opt/ansimble/venv")
 APT_PKGS = ("python3", "python3-venv", "python3-pip", "ca-certificates", "curl",
-            "openssl", "git", "openssh-client", "tzdata")
+            "openssl", "git", "openssh-client", "tzdata", "avahi-daemon", "avahi-utils")
 
 
 class Blocked(RuntimeError):
@@ -161,6 +161,24 @@ def setup_files(site, runner_ip, service):
     os.chmod(CONFIG, 0o640)
 
 
+def configure_network_identity(site: str, runner_ip: str) -> None:
+    """Publish the verified system hostname through native Debian mDNS.
+
+    No NetAlertX-specific code or per-site static host entries. avahi-daemon
+    uses the existing kernel hostname, and refuses an occupied .local name.
+    """
+    fqdn = f"ansible-{site}.local"
+    if command("hostname") != f"ansible-{site}":
+        raise Blocked("Network identity does not match canonical hostname")
+    command("systemctl", "enable", "--now", "avahi-daemon.service", timeout=45)
+    if command("systemctl", "is-active", "avahi-daemon.service") != "active":
+        raise Blocked("mDNS publisher is inactive")
+    result = command("avahi-resolve-host-name", "-4", fqdn, timeout=20).split()
+    if len(result) != 2 or result[0].rstrip(".") != fqdn or result[1] != runner_ip:
+        raise Blocked("mDNS address does not match pinned site identity")
+    print(f"NETWORK_IDENTITY_MDNS=PASS fqdn={fqdn} ip={runner_ip}", flush=True)
+
+
 def provision(site, runner_ip, requirements, *, resume_ansible=False):
     print("OS_DEPENDENCIES=START", flush=True)
     if not requirements.is_file() or requirements.is_symlink():
@@ -171,9 +189,12 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
                 "-o", "Acquire::Retries=2", timeout=240)
         command("env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "install",
                 "-y", "--no-install-recommends", *APT_PKGS, timeout=300)
+        configure_network_identity(site, runner_ip)
         command("python3", "-m", "venv", str(VENV), timeout=90)
         command(str(VENV / "bin/pip"), "install", "--disable-pip-version-check",
                 "-r", str(requirements), timeout=300)
+    if resume_ansible:
+        configure_network_identity(site, runner_ip)
     command(str(VENV / "bin/python"), "-m", "pip", "check", timeout=60)
     ansible = command(str(VENV / "bin/ansible-playbook"), "--version")
     if "ansible-playbook [core 2.21.4]" not in ansible:

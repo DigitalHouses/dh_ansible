@@ -67,3 +67,13 @@ def test_runner_audit_yaml_structure_and_canonical_owner_name():
     tasks = play[0]["pre_tasks"]
     assert any("ansible-' ~ site.id" in str(step) for step in tasks)
     assert all("site_id_effective" not in str(step) for step in tasks)
+
+
+def test_runner_audit_verifies_native_mdns_advertisement_read_only():
+    text = (ROOT / "roles/runner_audit/tasks/main.yml").read_text()
+    assert "avahi-daemon.service" in text
+    assert "avahi-resolve-host-name" in text
+    assert "ansible-{{ site.id }}.local" in text
+    assert "runner_mdns_resolution.stdout.split()[1]" in text
+    assert "site_runner.network.ipv4.split('/')[0]" in text
+    assert "changed_when: false" in text

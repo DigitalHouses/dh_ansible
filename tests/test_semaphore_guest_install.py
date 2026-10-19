@@ -153,3 +153,54 @@ def test_tls_setup_uses_explicit_site_id_not_unbound_global(monkeypatch, tmp_pat
     config = json.loads(m.CONFIG.read_text())
     assert config["web_host"] == "https://198.51.100.231:3000"
     assert config["tls"]["enabled"] is True
+
+
+def test_network_identity_provisioning_is_standard_and_fails_closed(monkeypatch, capsys):
+    m = module()
+    assert "avahi-daemon" in m.APT_PKGS
+    assert "avahi-utils" in m.APT_PKGS
+    calls = []
+
+    def fake_command(*args, **kwargs):
+        calls.append(args)
+        if args == ("hostname",):
+            return "ansible-ci-example"
+        if args == ("systemctl", "is-active", "avahi-daemon.service"):
+            return "active"
+        if args == ("avahi-resolve-host-name", "-4", "ansible-ci-example.local"):
+            return "ansible-ci-example.local\\t198.51.100.231"
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_command)
+    m.configure_network_identity("ci-example", "198.51.100.231")
+    assert ("systemctl", "enable", "--now", "avahi-daemon.service") in calls
+    assert "NETWORK_IDENTITY_MDNS=PASS" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("actual", [
+    "ansible-other.local\\t198.51.100.231",
+    "ansible-ci-example.local\\t198.51.100.232",
+    "",
+])
+def test_network_identity_rejects_missing_or_conflicting_mdns(monkeypatch, actual):
+    m = module()
+
+    def fake_command(*args, **kwargs):
+        if args == ("hostname",):
+            return "ansible-ci-example"
+        if args == ("systemctl", "is-active", "avahi-daemon.service"):
+            return "active"
+        if args[0] == "avahi-resolve-host-name":
+            return actual
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_command)
+    with pytest.raises(m.Blocked, match="mDNS address"):
+        m.configure_network_identity("ci-example", "198.51.100.231")
+
+
+def test_mdns_provisioning_happens_after_package_install_and_before_ansible():
+    source = SOURCE.read_text()
+    provision = source.split("def provision(", 1)[1].split("\n\ndef main(", 1)[0]
+    assert provision.index("*APT_PKGS") < provision.index("configure_network_identity(site, runner_ip)")
+    assert provision.index("configure_network_identity(site, runner_ip)") < provision.index('"python3", "-m", "venv"')
