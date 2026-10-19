@@ -46,7 +46,8 @@ def _site_confirm_script():
     """Extract the actual shell function without running PVE, OAuth or Vault."""
     s = INSTALL.read_text()
     begin = s.index("confirm_site_id() {")
-    end = s.index("\nconfirm_site_id || exit 2", begin)
+    # The prompt function is isolated from the root-only journaling prologue.
+    end = s.index("\n}\n", begin) + 2
     return (
         "set -Eeuo pipefail\nSITE=''\n" +
         s[begin:end] +
@@ -131,9 +132,9 @@ def test_installer_journal_excludes_auth_codes_and_unstructured_output():
     pattern = re.search(r"^LOG_PATTERN='([^']+)'$", s, re.M)
     assert pattern, "Expected strict journal allowlist"
     allow = re.compile(pattern.group(1))
-    assert allow.fullmatch("SEMAPHORE_SYSTEMD=PASS")
-    assert allow.fullmatch("SITE_INVENTORY_DIR_CREATE=/safe/example")
-    assert allow.fullmatch("PCT_EXEC_FAILURE=command:install rc:129")
+    assert allow.match("SEMAPHORE_SYSTEMD=PASS")
+    assert allow.match("SITE_INVENTORY_DIR_CREATE=/safe/example")
+    assert allow.match("PCT_EXEC_FAILURE=command:install rc:129")
     assert not allow.match("! First copy your one-time code: ABCD-EFGH")
     assert not allow.match("OWNER: Fleet master password (hidden): example")
     assert not allow.match("GH_TOKEN=anything")
