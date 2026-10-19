@@ -33,6 +33,7 @@ BRIDGE = "vmbr0"
 SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
 ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 CODE_FILES = (
+    "bootstrap/pve-identities.py",
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
@@ -791,6 +792,28 @@ def stage_runner_remote_commander(site, checkout):
     print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
+def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
+                                 checkout: Path) -> None:
+    """Root-only PVE identity bootstrap; never silently rotate existing tokens.
+
+    This first phase issues new canonical principals into root-only escrow.
+    The encrypted Fleet Vault must be published and independently accepted
+    before it can become a routine unattended credential source.
+    """
+    source = checkout / "bootstrap/pve-identities.py"
+    if source.is_symlink() or not source.is_file():
+        raise Blocked("Pinned PVE identity bootstrap missing")
+    runner_ip = str(ipaddress.IPv4Interface(runner_cidr).ip)
+    run("python3", str(source),
+        "--site", site,
+        "--runner-ctid", str(CTID),
+        "--runner-ip", runner_ip,
+        "--pve-ip", pve_ip,
+        "--apply", timeout=180)
+    print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
+    print("PVE_CREDENTIALS=VAULT_IMPORT_PENDING", flush=True)
+
+
 def resolve_project_title(checkout: Path, site: str, provided: str | None) -> str:
     """Site names are inventory data rather than special-cased code."""
     if provided:
@@ -892,6 +915,8 @@ def apply(args, template):
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
+        provision_pve_identity_stage(args.site, args.runner_cidr,
+                                     args.pve_ip, checkout)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
