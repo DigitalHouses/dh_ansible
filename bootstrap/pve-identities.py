@@ -18,11 +18,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-AUDIT_USER = "ansimble-audit@pve"
-WRITE_USER = "ansimble@pve"
-HOST_USER = "ansimble"
+AUDIT_USER = "ansible-audit@pve"
+WRITE_USER = "ansible-writer@pve"
+HOST_USER = "ansible-linux"
 KEY_PATH = "/var/lib/ansimble/.ssh/pve_host_write_ed25519"
 STAGING_DIR = Path("/var/lib/digitalhouses/bootstrap")
+HOST_HOME = "/var/lib/ansible-linux"
 
 
 def fail(message: str) -> None:
@@ -82,7 +83,7 @@ def runner_user_exec(ctid: str, *cmd: str) -> str:
 
 
 def prepare_runner_key(ctid: str, site: str) -> str:
-    runner_user_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansimble/.ssh")
+    runner_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansimble/.ssh")
     pub_path = KEY_PATH + ".pub"
     state = runner_exec(
         ctid, "python3", "-c",
@@ -90,7 +91,7 @@ def prepare_runner_key(ctid: str, site: str) -> str:
         "print(int(a.exists()),int(b.exists()))", KEY_PATH, pub_path,
     )
     if state == "0 0":
-        runner_user_exec(ctid, "ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+        runner_exec(ctid, "ssh-keygen", "-q", "-t", "ed25519", "-N", "",
                          "-f", KEY_PATH, "-C", f"digitalhouses-{site}-pve-host")
     elif state != "1 1":
         fail("BLOCKED: Incomplete runner SSH key pair; no overwrite")
@@ -117,7 +118,7 @@ else:
     with os.fdopen(fd,'w') as f: f.write(line+'\\n')
 print('PINNED_HOST_KEY=PASS')
 '''
-    print(runner_user_exec(ctid, "python3", "-c", script, line))
+    print(runner_exec(ctid, "python3", "-c", script, line))
 
 
 def install_linux_user(source_ip: str, key: str) -> None:
@@ -125,9 +126,9 @@ def install_linux_user(source_ip: str, key: str) -> None:
         account = pwd.getpwnam(HOST_USER)
     except KeyError:
         run("useradd", "--system", "--user-group", "--create-home",
-            "--home-dir", "/var/lib/ansimble", "--shell", "/bin/bash", HOST_USER)
+            "--home-dir", HOST_HOME, "--shell", "/bin/bash", HOST_USER)
         account = pwd.getpwnam(HOST_USER)
-    if account.pw_uid == 0 or account.pw_dir != "/var/lib/ansimble" or account.pw_shell != "/bin/bash":
+    if account.pw_uid == 0 or account.pw_dir != HOST_HOME or account.pw_shell != "/bin/bash":
         fail("BLOCKED: Existing Linux ansimble identity differs")
     shadow = run("getent", "shadow", HOST_USER).split(":", 2)[1]
     if not shadow.startswith(("!", "*")):
@@ -154,8 +155,8 @@ def install_linux_user(source_ip: str, key: str) -> None:
             fh.write(managed_line + "\n")
     os.chown(authorized, account.pw_uid, account.pw_gid)
     os.chmod(authorized, 0o600)
-    sudoers = Path("/etc/sudoers.d/90-digitalhouses-ansimble")
-    desired = "ansimble ALL=(root) NOPASSWD: ALL\n"
+    sudoers = Path("/etc/sudoers.d/90-digitalhouses-ansible-linux")
+    desired = "ansible-linux ALL=(root) NOPASSWD: ALL\n"
     if sudoers.is_symlink():
         fail("BLOCKED: sudoers path symlink")
     if sudoers.exists() and sudoers.read_text() != desired:
@@ -238,11 +239,11 @@ def main() -> None:
                for row in local_addresses.splitlines() if len(row.split()) >= 4):
         fail("BLOCKED: PVE IP not assigned to this host")
     conf = run("pct", "config", str(args.runner_ctid))
-    if f"hostname: ansimble-{args.site}" not in conf or f"ip={source}/" not in conf:
+    if f"hostname: ansible-{args.site}" not in conf or f"ip={source}/" not in conf:
         fail("BLOCKED: Runner CTID/site/IP does not match PVE configuration")
     if run("pct", "status", str(args.runner_ctid)) != "status: running":
         fail("BLOCKED: Runner is not running")
-    if runner_exec(str(args.runner_ctid), "hostname") != f"ansimble-{args.site}":
+    if runner_exec(str(args.runner_ctid), "hostname") != f"ansible-{args.site}":
         fail("BLOCKED: Runner guest hostname mismatch")
     if source == target:
         fail("BLOCKED: Runner and PVE addresses must differ")
@@ -258,17 +259,23 @@ def main() -> None:
         return
     STAGING_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(STAGING_DIR, 0o700)
-    path = STAGING_DIR / f"pve-identities-{args.site}-pending.json"
+    # Identity v2 intentionally does not reuse historical token escrow.
+    path = STAGING_DIR / f"pve-identities-{args.site}-ansible-v2-pending.json"
     if path.is_symlink():
         fail("BLOCKED: Staging path symlink")
     if path.exists():
         if path.stat().st_uid != 0 or path.stat().st_mode & 0o077:
             fail("BLOCKED: Unsafe staging file permissions")
         staging = json.loads(path.read_text())
-        if staging.get("site_id") != args.site:
+        if staging.get("site_id") != args.site or staging.get("identity_schema") != 2:
+            fail("BLOCKED: Staging identity schema mismatch")
+        if staging.get("principals") != {"audit": AUDIT_USER, "write": WRITE_USER, "linux": HOST_USER}:
+            fail("BLOCKED: Staging principal mismatch")
             fail("BLOCKED: Staging file site mismatch")
     else:
-        staging = {"site_id": args.site, "runner_ip": str(source),
+        staging = {"site_id": args.site, "identity_schema": 2,
+                   "principals": {"audit": AUDIT_USER, "write": WRITE_USER, "linux": HOST_USER},
+                   "runner_ip": str(source),
                    "pve_ip": str(target), "pve_tokens": {}, "status": "VAULT_PENDING"}
         save_staging(path, staging)
     if staging.get("runner_ip") != str(source) or staging.get("pve_ip") != str(target):
