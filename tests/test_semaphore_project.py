@@ -139,13 +139,13 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     original = list(api.records[path])
     old_ids = [x["id"] for x in original]
     # Simulate the 3 unnumbered templates present in Semaphore 2.19.
-    for existing, (_, aliases, _, _) in zip(original, m.TEMPLATES):
-        existing["name"] = aliases[0]
+    for existing, (_, old_name, _, _) in zip(original, m.TEMPLATES):
+        existing["name"] = old_name
         existing["task_id"] = existing["id"] + 500
     n_post_before = sum(method == "POST" for method, _, _ in api.calls)
     n_put_before = sum(method == "PUT" for method, _, _ in api.calls)
     m.provision(api, "demo-office", "Demo Site", False)
-    assert [x["name"] for x in original] == [x[1][0] for x in m.TEMPLATES]
+    assert [x["name"] for x in original] == [x[1] for x in m.TEMPLATES]
     assert len([x for x in api.calls if x[0] == "PUT"]) == n_put_before
     m.provision(api, "demo-office", "Demo Site", True)
     assert [x["name"] for x in original] == [x[0] for x in m.TEMPLATES]
@@ -163,7 +163,7 @@ def test_rename_alias_collision_blocks_without_writing():
     api = FakeAPI()
     m.provision(api, "demo-office", "Demo Site", True)
     path = next(key for key in api.records if key.endswith("/templates"))
-    api.records[path].append({**api.records[path][0], "name": m.TEMPLATES[0][1][0],
+    api.records[path].append({**api.records[path][0], "name": m.TEMPLATES[0][1],
                               "id": 999})
     before = len([x for x in api.calls if x[0] in ("POST", "PUT")])
     with pytest.raises(m.Blocked, match="Conflicting old/new"):
@@ -176,7 +176,7 @@ def test_rename_blocks_config_drift_instead_of_overwriting():
     api = FakeAPI()
     m.provision(api, "demo-office", "Demo Site", True)
     path = next(key for key in api.records if key.endswith("/templates"))
-    api.records[path][0]["name"] = m.TEMPLATES[0][1][0]
+    api.records[path][0]["name"] = m.TEMPLATES[0][1]
     api.records[path][0]["autorun"] = True
     before = len([x for x in api.calls if x[0] == "PUT"])
     with pytest.raises(m.Blocked, match="drift"):
@@ -189,23 +189,36 @@ def test_names_sort_globally_with_ten_step_gaps():
     titles = [name for name, _, _, _ in m.TEMPLATES]
     assert titles == sorted(titles)
     assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30]
-    assert all(len(aliases) == 2 for _, aliases, _, _ in m.TEMPLATES)
+    assert all(isinstance(previous, str) for _, previous, _, _ in m.TEMPLATES)
 
 
-@pytest.mark.parametrize("alias_index", [0, 1])
-def test_old_and_dotted_names_are_migrated_without_duplicates(alias_index):
+
+def test_unnumbered_names_migrate_without_duplicates():
     m = module()
     api = FakeAPI()
     m.provision(api, "demo-office", "Demo Site", True)
     path = next(p for p in api.records if p.endswith("/templates"))
     resources = api.records[path]
     before_ids = [x["id"] for x in resources]
-    for current, (_, aliases, _, _) in zip(resources, m.TEMPLATES):
-        current["name"] = aliases[alias_index]
+    for current, (_, old_name, _, _) in zip(resources, m.TEMPLATES):
+        current["name"] = old_name
     writes = sum(meth == "POST" for meth, _, _ in api.calls)
     m.provision(api, "demo-office", "Demo Site", False)
-    assert [x["name"] for x in resources] == [a[1][alias_index] for a in m.TEMPLATES]
+    assert [x["name"] for x in resources] == [row[1] for row in m.TEMPLATES]
     m.provision(api, "demo-office", "Demo Site", True)
-    assert [x["name"] for x in resources] == [a[0] for a in m.TEMPLATES]
+    assert [x["name"] for x in resources] == [row[0] for row in m.TEMPLATES]
     assert [x["id"] for x in resources] == before_ids
     assert sum(meth == "POST" for meth, _, _ in api.calls) == writes
+
+
+def test_unknown_template_name_is_blocked_without_creating_duplicate():
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo Site", True)
+    path = next(p for p in api.records if p.endswith("/templates"))
+    api.records[path][0]["name"] = "Нестандартное имя"
+    before_writes = len([entry for entry in api.calls if entry[0] in ("POST", "PUT")])
+    with pytest.raises(m.Blocked, match="Unexpected Semaphore template name"):
+        m.provision(api, "demo-office", "Demo Site", True)
+    after_writes = len([entry for entry in api.calls if entry[0] in ("POST", "PUT")])
+    assert after_writes == before_writes

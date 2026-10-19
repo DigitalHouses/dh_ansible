@@ -26,17 +26,14 @@ CODE_GIT_URL = "https://github.com/DigitalHouses/dh_ansible.git"
 SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
 VIEWS = ("01 · Подготовка", "02 · Развёртывание", "03 · Обслуживание", "04 · Приёмка")
 # Global sortable numeric prefixes on Semaphore task names. Leave gaps of ten.
-# Tuple: canonical title, prior exact aliases, playbook, view.
+# Tuple: canonical title, unnumbered previous name, playbook, view.
 # This is display/order only, not required task execution or dependency.
 TEMPLATES = (
-    ("10-Проверка запуска Ansible",
-     ("Проверка запуска Ansible", "01.01 · Проверка запуска Ansible"),
+    ("10-Проверка запуска Ansible", "Проверка запуска Ansible",
      "playbooks/smoke-semaphore.yml", VIEWS[0]),
-    ("20-Аудит локального runner",
-     ("Аудит локального runner", "01.02 · Аудит локального runner"),
+    ("20-Аудит локального runner", "Аудит локального runner",
      "playbooks/audit-runner.yml", VIEWS[0]),
-    ("30-Установить Remote Desktop Commander",
-     ("Установить Remote Desktop Commander", "03.01 · Установить Remote Desktop Commander"),
+    ("30-Установить Remote Desktop Commander", "Установить Remote Desktop Commander",
      "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
 )
 API_BASE = "https://127.0.0.1:3000/api"
@@ -116,20 +113,26 @@ def ensure(api, path, name, desired, *, key="name", apply=False, compare=()):
 
 
 
-def ensure_template(api, path, title, aliases, desired, *, apply=False):
+def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
     """Create numbered templates or rename one exact, previously seeded template.
 
     Keep the existing template ID, task history and configuration. Refuse drift,
-    ambiguous aliases or a combined old/new state. No duplicate migration.
+    or combined old/new state. No duplicate migration.
     """
     items = api.request("GET", path)
     if not isinstance(items, list):
         raise Blocked(f"Expected template list at {path}")
-    known_names = (title, *aliases)
+    known_names = (title, legacy_title)
     matches = [obj for obj in items if obj.get("name") in known_names]
     if len(matches) > 1:
         raise Blocked(f"Conflicting old/new Semaphore template names: {title}")
     if not matches:
+        # An unknown name for the same playbook must never create a duplicate.
+        if any(item.get("playbook") == desired["playbook"]
+               and item.get("project_id") == desired["project_id"]
+               for item in items):
+            raise Blocked(f"Unexpected Semaphore template name for {title}; "
+                          "rename existing template manually before seeding")
         return ensure(api, path, title, desired, apply=apply,
                       compare=("playbook", "app", "inventory_id", "repository_id",
                                "environment_id", "view_id", "autorun"))
@@ -237,9 +240,9 @@ def provision(api, site: str, project_title: str, apply: bool):
                               key="title", apply=apply)
     if not all(views.values()):
         return {"state": "PLAN_ONLY"}
-    for title, aliases, playbook, view in TEMPLATES:
+    for title, legacy_title, playbook, view in TEMPLATES:
         ensure_template(api, prefix + "/templates?sort=name&order=asc",
-                        title, aliases,
+                        title, legacy_title,
                {"name": title, "project_id": pid, "app": "ansible",
                 "playbook": playbook, "arguments": "[]", "type": "",
                 "inventory_id": local_inventory["id"], "repository_id": code_repo["id"],
