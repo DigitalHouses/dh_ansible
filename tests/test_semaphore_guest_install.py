@@ -106,10 +106,10 @@ def test_guest_rejects_legacy_hostname_and_accepts_full_site_id(monkeypatch):
         if args == ("hostname",):
             return "ansible-serzhan-home"
         if args == ("ip", "-4", "-o", "addr", "show"):
-            return "inet 192.168.11.231/24"
+            return "inet 198.51.100.231/24"
         return ""
 
     monkeypatch.setattr(m, "command", fake_cmd)
     # External state is deliberately mocked; only hostname binding tested.
-    m.validate("serzhan-home", "192.168.11.231")
+    m.validate("serzhan-home", "198.51.100.231")
     assert ("hostname",) in calls
