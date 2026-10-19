@@ -168,7 +168,7 @@ def test_network_identity_provisioning_is_standard_and_fails_closed(monkeypatch,
         if args == ("systemctl", "is-active", "avahi-daemon.service"):
             return "active"
         if args == ("avahi-resolve-host-name", "-4", "ansible-ci-example.local"):
-            return "ansible-ci-example.local\\t198.51.100.231"
+            return "ansible-ci-example.local\t198.51.100.231"
         return ""
 
     monkeypatch.setattr(m, "command", fake_command)
@@ -178,8 +178,8 @@ def test_network_identity_provisioning_is_standard_and_fails_closed(monkeypatch,
 
 
 @pytest.mark.parametrize("actual", [
-    "ansible-other.local\\t198.51.100.231",
-    "ansible-ci-example.local\\t198.51.100.232",
+    "ansible-other.local\t198.51.100.231",
+    "ansible-ci-example.local\t198.51.100.232",
     "",
 ])
 def test_network_identity_rejects_missing_or_conflicting_mdns(monkeypatch, actual):

@@ -140,3 +140,12 @@ def test_installer_journal_excludes_auth_codes_and_unstructured_output():
     assert not allow.match("GH_TOKEN=anything")
     assert not allow.match("ghp_" + "x" * 30)
     assert allow.match("BLOCKED: Command failed: pct, rc=129")
+
+
+def test_safe_log_captures_only_approved_mdns_status():
+    s = INSTALL.read_text()
+    pattern = re.search(r"^LOG_PATTERN='([^']+)'$", s, re.M)
+    assert pattern
+    allowed = re.compile(pattern.group(1))
+    assert allowed.match("NETWORK_IDENTITY_MDNS=PASS fqdn=ansible-ci-example.local ip=198.51.100.231")
+    assert not allowed.match("AVAHI_SECRET_TOKEN=should_not_log")
