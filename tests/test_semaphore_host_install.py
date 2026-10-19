@@ -544,6 +544,28 @@ def test_site_escrow_is_private_fleet_data_not_hardcoded(monkeypatch, tmp_path):
     (escrow / "escrow/ticket.json").chmod(0o600)
     (escrow / "keyfile").chmod(0o600)
     monkeypatch.setattr(m, "ROOT_STAGE", escrow)
+
+    # CI runs as an unprivileged user, whereas the real PVE escrow must be
+    # root-owned. Simulate only the uid of synthetic escrow fixture paths;
+    # leave the production ownership validation intact.
+    original_stat = Path.stat
+
+    class RootOwnedFixtureStat:
+        st_uid = 0
+
+        def __init__(self, real_stat):
+            self._real_stat = real_stat
+
+        def __getattr__(self, name):
+            return getattr(self._real_stat, name)
+
+    def synthetic_escrow_stat(path, *args, **kwargs):
+        observed = original_stat(path, *args, **kwargs)
+        if path == escrow or escrow in path.parents:
+            return RootOwnedFixtureStat(observed)
+        return observed
+
+    monkeypatch.setattr(Path, "stat", synthetic_escrow_stat)
     m.verify_site_escrow(checkout, "demo-office")
     (escrow / "keyfile").unlink()
     with pytest.raises(m.Blocked, match="missing or unsafe"):
