@@ -21,9 +21,21 @@ class FakeAPI:
     def request(self, method, path, body=None):
         p = path.split("?")[0]
         self.calls.append((method, p, body))
+        if "/templates/" in p:
+            base, sid = p.rsplit("/", 1)
+            resource = self.records.setdefault(base, [])
+            found = [r for r in resource if r["id"] == int(sid)]
+            assert len(found) == 1
+            if method == "GET":
+                return found[0].copy()
+            if method == "PUT":
+                assert body["id"] == found[0]["id"]
+                found[0].update(body)
+                return None
+            raise AssertionError("No other per-ID mutations allowed")
         arr = self.records.setdefault(p, [])
         if method == "GET":
-            return arr.copy()
+            return [r.copy() for r in arr]
         if method == "POST":
             self.nextid += 1
             new = {**body, "id": self.nextid}
@@ -38,8 +50,8 @@ def test_clean_apply_creates_two_audits_and_one_manual_installer():
     result = m.provision(api, "demo-office", "Тестовый дом", True)
     assert result["state"] == "APPLIED"
     names = [c[2]["name"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")]
-    assert names == ["Проверка запуска Ansible", "Аудит локального runner",
-                     "Установить Remote Desktop Commander"]
+    assert names == ["01.01 · Проверка запуска Ansible", "01.02 · Аудит локального runner",
+                     "03.01 · Установить Remote Desktop Commander"]
     assert [c[2]["playbook"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")] == [
         "playbooks/smoke-semaphore.yml", "playbooks/audit-runner.yml",
         "playbooks/request-runner-remote-commander.yml"]
@@ -117,3 +129,56 @@ def test_site_inventory_drift_blocks_without_mutation():
         m.provision(api, "demo-office", "Demo Site", True)
     assert len([c for c in api.calls if c[0] == "POST"]) == posts
     assert not [c for c in api.calls if c[0] in ("PUT", "DELETE")]
+
+
+def test_numbered_templates_retain_existing_ids_and_task_history():
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo Site", True)
+    path = next(key for key in api.records if key.endswith("/templates"))
+    original = list(api.records[path])
+    old_ids = [x["id"] for x in original]
+    # Simulate the 3 unnumbered templates present in Semaphore 2.19.
+    for existing, (_, legacy, _, _) in zip(original, m.TEMPLATES):
+        existing["name"] = legacy
+        existing["task_id"] = existing["id"] + 500
+    n_post_before = sum(method == "POST" for method, _, _ in api.calls)
+    n_put_before = sum(method == "PUT" for method, _, _ in api.calls)
+    m.provision(api, "demo-office", "Demo Site", False)
+    assert [x["name"] for x in original] == [x[1] for x in m.TEMPLATES]
+    assert len([x for x in api.calls if x[0] == "PUT"]) == n_put_before
+    m.provision(api, "demo-office", "Demo Site", True)
+    assert [x["name"] for x in original] == [x[0] for x in m.TEMPLATES]
+    assert [x["id"] for x in original] == old_ids
+    assert [x["task_id"] for x in original] == [i + 500 for i in old_ids]
+    assert sum(method == "POST" for method, _, _ in api.calls) == n_post_before
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+    # Reapply is a no-op: no duplicate templates or repeated changes.
+    m.provision(api, "demo-office", "Demo Site", True)
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+
+
+def test_rename_alias_collision_blocks_without_writing():
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo Site", True)
+    path = next(key for key in api.records if key.endswith("/templates"))
+    api.records[path].append({**api.records[path][0], "name": m.TEMPLATES[0][1],
+                              "id": 999})
+    before = len([x for x in api.calls if x[0] in ("POST", "PUT")])
+    with pytest.raises(m.Blocked, match="Conflicting old/new"):
+        m.provision(api, "demo-office", "Demo Site", True)
+    assert len([x for x in api.calls if x[0] in ("POST", "PUT")]) == before
+
+
+def test_rename_blocks_config_drift_instead_of_overwriting():
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo Site", True)
+    path = next(key for key in api.records if key.endswith("/templates"))
+    api.records[path][0]["name"] = m.TEMPLATES[0][1]
+    api.records[path][0]["autorun"] = True
+    before = len([x for x in api.calls if x[0] == "PUT"])
+    with pytest.raises(m.Blocked, match="drift"):
+        m.provision(api, "demo-office", "Demo Site", True)
+    assert len([x for x in api.calls if x[0] == "PUT"]) == before

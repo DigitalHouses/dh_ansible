@@ -25,10 +25,15 @@ import urllib.request
 CODE_GIT_URL = "https://github.com/DigitalHouses/dh_ansible.git"
 SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
 VIEWS = ("01 · Подготовка", "02 · Развёртывание", "03 · Обслуживание", "04 · Приёмка")
+# Stage.step makes the UI order explicit. Numbers reflect views, not required execution.
+# Tuple: canonical title, exact one-time legacy alias, playbook, view.
 TEMPLATES = (
-    ("Проверка запуска Ansible", "playbooks/smoke-semaphore.yml", VIEWS[0]),
-    ("Аудит локального runner", "playbooks/audit-runner.yml", VIEWS[0]),
-    ("Установить Remote Desktop Commander", "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
+    ("01.01 · Проверка запуска Ansible", "Проверка запуска Ansible",
+     "playbooks/smoke-semaphore.yml", VIEWS[0]),
+    ("01.02 · Аудит локального runner", "Аудит локального runner",
+     "playbooks/audit-runner.yml", VIEWS[0]),
+    ("03.01 · Установить Remote Desktop Commander", "Установить Remote Desktop Commander",
+     "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
 )
 API_BASE = "https://127.0.0.1:3000/api"
 
@@ -106,6 +111,69 @@ def ensure(api, path, name, desired, *, key="name", apply=False, compare=()):
     return created
 
 
+
+def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
+    """Create numbered templates or rename one exact, previously seeded template.
+
+    Keep the existing template ID, task history and configuration. Refuse drift,
+    ambiguous aliases or a combined old/new state. No duplicate migration.
+    """
+    items = api.request("GET", path)
+    if not isinstance(items, list):
+        raise Blocked(f"Expected template list at {path}")
+    matches = [obj for obj in items if obj.get("name") in (title, legacy_title)]
+    if len(matches) > 1:
+        raise Blocked(f"Conflicting old/new Semaphore template names: {title}")
+    if not matches:
+        return ensure(api, path, title, desired, apply=apply,
+                      compare=("playbook", "app", "inventory_id", "repository_id",
+                               "environment_id", "view_id", "autorun"))
+    current = matches[0]
+    # Only a template whose entire effective installation contract still matches
+    # our originally seeded resource is eligible for an in-place rename.
+    required = ("project_id", "playbook", "arguments", "type", "app",
+                "inventory_id", "repository_id", "environment_id", "view_id",
+                "autorun", "allow_override_args_in_task")
+    if any(current.get(field) != desired.get(field) for field in required):
+        raise Blocked(f"Existing Semaphore resource drift: {current.get('name')}")
+    if current.get("name") == title:
+        return current
+    template_id = current.get("id")
+    if type(template_id) is not int or template_id <= 0:
+        raise Blocked(f"Invalid Semaphore template ID for rename: {legacy_title}")
+    if not apply:
+        print(f"PLAN_RENAME={legacy_title} => {title} id={template_id}", flush=True)
+        return current
+
+    prefix = path.split("?")[0]
+    detail = api.request("GET", f"{prefix}/{template_id}")
+    if not isinstance(detail, dict) or detail.get("id") != template_id:
+        raise Blocked("Semaphore template details mismatch; rename cancelled")
+    if detail.get("name") != legacy_title or any(
+            detail.get(field) != desired.get(field) for field in required):
+        raise Blocked("Semaphore template drift before rename; cancelled")
+    # Use the API's own complete resource representation, changing name ONLY.
+    # All other task/template options and the identifier remain unchanged.
+    payload = dict(detail)
+    payload["name"] = title
+    api.request("PUT", f"{prefix}/{template_id}", payload)
+
+    after = api.request("GET", path)
+    if not isinstance(after, list):
+        raise Blocked("Cannot verify Semaphore template rename")
+    matches_after = [item for item in after
+                     if item.get("name") in (title, legacy_title)]
+    if (len(matches_after) != 1
+            or matches_after[0].get("name") != title
+            or matches_after[0].get("id") != template_id
+            or any(matches_after[0].get(k) != detail.get(k)
+                   for k in detail if k != "name" and k in matches_after[0])):
+        raise Blocked("Semaphore template post-rename verification failed")
+    print(f"RENAMED_TEMPLATE={legacy_title} => {title} id={template_id}",
+          flush=True)
+    return matches_after[0]
+
+
 def provision(api, site: str, project_title: str, apply: bool):
     project = ensure(api, "/projects", project_title,
                      {"name": project_title, "max_parallel_tasks": 1, "alert": False, "demo": False},
@@ -163,14 +231,15 @@ def provision(api, site: str, project_title: str, apply: bool):
                               key="title", apply=apply)
     if not all(views.values()):
         return {"state": "PLAN_ONLY"}
-    for title, playbook, view in TEMPLATES:
-        ensure(api, prefix + "/templates?sort=name&order=asc", title,
+    for title, legacy_title, playbook, view in TEMPLATES:
+        ensure_template(api, prefix + "/templates?sort=name&order=asc",
+                        title, legacy_title,
                {"name": title, "project_id": pid, "app": "ansible",
                 "playbook": playbook, "arguments": "[]", "type": "",
                 "inventory_id": local_inventory["id"], "repository_id": code_repo["id"],
                 "environment_id": env["id"], "view_id": views[view]["id"],
                 "allow_override_args_in_task": False, "autorun": False},
-               apply=apply, compare=("playbook", "app", "inventory_id", "repository_id"))
+               apply=apply)
     return {"state": "APPLIED" if apply else "PLAN_ONLY", "project_id": pid}
 
 
