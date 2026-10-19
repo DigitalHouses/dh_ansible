@@ -29,8 +29,10 @@ jobs:
         run: python -m pytest -q -m "not private_fleet" tests/
       - name: Validate runner wrapper syntax
         run: bash -n bin/ansimble-run
-      - name: Validate Semaphore bootstrap launcher shell syntax
-        run: bash -n bootstrap/semaphore-launch.sh
+      - name: Validate PVE installer and release launcher shell syntax
+        run: |
+          bash -n bootstrap/install.sh
+          bash -n bootstrap/semaphore-launch.sh
       - name: Validate Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit.yml
