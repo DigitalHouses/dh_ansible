@@ -39,7 +39,8 @@ if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
 fi
 
 echo "=== CANONICAL SITE CONFIRMATION ==="
-printf 'OBJECT_SLUG=%s\\nDOWNSTREAM_SITE=%s\\n' "$SITE" "$SITE"
+echo "OBJECT_SLUG=$SITE"
+echo "DOWNSTREAM_SITE=$SITE"
 if ! IFS= read -r -p "Подтвердить объект '$SITE' для всех этапов (y/n): " CONFIRM_SITE; then
   echo "BLOCKED: confirmation missing; no actions performed" >&2; exit 2
 fi
