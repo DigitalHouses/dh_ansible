@@ -109,3 +109,33 @@ def test_site_id_never_normalizes_inner_spaces():
     assert result.returncode == 0, result.stderr
     assert "Некорректный Site ID" in result.stdout
     assert "CONFIRMED_SITE=serzhan-home" in result.stdout
+
+
+
+def test_installer_has_root_only_structured_journal_before_site_prompt():
+    s = INSTALL.read_text()
+    assert 'LOG_DIR="/var/log/digitalhouses/ansible"' in s
+    assert 'LOG_FILE=$(mktemp "$LOG_DIR/install-' in s
+    assert 'chmod 0600 "$LOG_FILE"' in s
+    assert 'stat -c' in s
+    assert 'LOG_MODE=SAFE_EVENTS_ONLY' in s
+    assert 'trap installer_cleanup EXIT' in s
+    assert s.index('LOG_FILE=$(mktemp') < s.index('confirm_site_id || exit 2')
+    assert 'grep -aE --line-buffered "$LOG_PATTERN"' in s
+    assert 'RESULT_RC=$rc' in s
+    assert 'LOG_FILE=$LOG_FILE' in s
+
+
+def test_installer_journal_excludes_auth_codes_and_unstructured_output():
+    s = INSTALL.read_text()
+    pattern = re.search(r"^LOG_PATTERN='([^']+)'$", s, re.M)
+    assert pattern, "Expected strict journal allowlist"
+    allow = re.compile(pattern.group(1))
+    assert allow.fullmatch("SEMAPHORE_SYSTEMD=PASS")
+    assert allow.fullmatch("SITE_INVENTORY_DIR_CREATE=/safe/example")
+    assert allow.fullmatch("PCT_EXEC_FAILURE=command:install rc:129") is None
+    assert not allow.match("! First copy your one-time code: ABCD-EFGH")
+    assert not allow.match("OWNER: Fleet master password (hidden): example")
+    assert not allow.match("GH_TOKEN=anything")
+    assert not allow.match("ghp_" + "x" * 30)
+    assert allow.match("BLOCKED: Command failed: pct, rc=129")

@@ -624,3 +624,19 @@ def test_safe_progress_of_guest_setup_is_allowlisted():
     assert len(lines) == 6
     assert lines[-1] == "SEMAPHORE_SYSTEMD=PASS"
     assert "SECRET_MUST_NEVER_PRINT" not in "\n".join(lines)
+
+
+
+def test_site_inventory_failure_emits_safe_command_and_step(monkeypatch, capsys):
+    m = load()
+    from types import SimpleNamespace
+    def fake_subprocess(*args, **kwargs):
+        return SimpleNamespace(returncode=129, stdout="PRIVATE=never-log",
+                               stderr="SECRET=never-log")
+    monkeypatch.setattr(m.subprocess, "run", fake_subprocess)
+    with pytest.raises(m.Blocked, match="pct, rc=129"):
+        m.run("pct", "exec", str(m.CTID), "--", "install",
+              "-d", "-m", "0750", "/safe/example")
+    out = capsys.readouterr().out
+    assert "PCT_EXEC_FAILURE=command:install rc:129" in out
+    assert "PRIVATE" not in out and "SECRET" not in out

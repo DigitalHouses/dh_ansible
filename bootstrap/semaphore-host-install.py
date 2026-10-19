@@ -89,6 +89,12 @@ def run(*argv, timeout=120, env=None, reveal=False):
     except (OSError, subprocess.TimeoutExpired):
         raise Blocked(f"Command unavailable or timed out: {argv[0]}") from None
     if p.returncode:
+        # Never echo arbitrary subprocess arguments: some callers handle secrets.
+        if (len(argv) >= 5 and argv[:3] == ("pct", "exec", str(CTID))
+                and argv[3] == "--" and
+                Path(argv[4]).name in {"install", "stat", "sha256sum", "rm", "test"}):
+            print("PCT_EXEC_FAILURE=command:" + Path(argv[4]).name +
+                  f" rc:{p.returncode}", flush=True)
         for diagnostic in safe_guest_failure_lines(argv, p.stdout, p.stderr):
             print("GUEST_DIAGNOSTIC: " + diagnostic, flush=True)
         raise Blocked(f"Command failed: {Path(argv[0]).name}, rc={p.returncode}")
@@ -486,13 +492,16 @@ def install_site_inventory(site, paths, checkout):
     if not paths or any(not p.startswith(prefix) for p in paths):
         raise Blocked("Untrusted site inventory selection")
     site_root = f"{SITE_INVENTORY_BASE}/{site}"
+    print("SITE_INVENTORY_STAGE=START", flush=True)
     for folder in (SITE_INVENTORY_BASE, site_root, site_root + "/group_vars"):
+        print("SITE_INVENTORY_DIR_CREATE=" + folder, flush=True)
         if code("pct", "exec", str(CTID), "--", "test", "-L", folder) == 0:
             raise Blocked("Site inventory directory is a symlink")
         pct_guest("install", "-d", "-o", "root", "-g", "semaphore", "-m", "0750",
                   folder)
     fleet = checkout.parent / "fleet-detail"
     for index, path in enumerate(paths):
+        print(f"SITE_INVENTORY_FILE_STAGE={index + 1}/{len(paths)}", flush=True)
         relative = path[len(prefix):]
         source = fleet / path
         if source.is_symlink() or not source.is_file():
