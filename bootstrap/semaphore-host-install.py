@@ -79,7 +79,7 @@ def safe_guest_failure_lines(argv, stdout, stderr):
     if not any(str(arg).endswith("/semaphore-guest-install.py") for arg in argv):
         return []
     lines = (stdout or "").splitlines() + (stderr or "").splitlines()
-    allowed = re.compile(r"^(?:INSTALL=BLOCKED: Command failed: [a-zA-Z0-9_.-]+, rc=[0-9]+|INSTALL=BLOCKED: Runner hostname mismatch|SEMAPHORE_GUEST_PREFLIGHT=PASS|SEMAPHORE_GUEST_RESUME=EXISTING_ANSIBLE_ONLY|GUEST_LOCALE=PASS C\.UTF-8|OS_DEPENDENCIES=START|ANSIBLE_RUNTIME_PERMISSIONS=PASS|ANSIBLE_RUNTIME=PASS|SEMAPHORE_PACKAGE=PASS)$")
+    allowed = re.compile(r"^(?:INSTALL=BLOCKED: Command failed: [a-zA-Z0-9_.-]+, rc=[0-9]+|INSTALL=BLOCKED: Runner hostname mismatch|SEMAPHORE_GUEST_PREFLIGHT=PASS|SEMAPHORE_GUEST_RESUME=EXISTING_ANSIBLE_ONLY|GUEST_LOCALE=PASS C\.UTF-8|OS_DEPENDENCIES=START|ANSIBLE_RUNTIME_PERMISSIONS=PASS|ANSIBLE_RUNTIME=PASS|SEMAPHORE_PACKAGE=PASS|SEMAPHORE_TLS_SETUP=(?:START|PASS)|SEMAPHORE_DB_MIGRATION=PASS|SEMAPHORE_ADMIN_CREATE=PASS|SEMAPHORE_SYSTEMD=PASS)$")
     return [line for line in lines if len(line) < 180 and allowed.fullmatch(line)][-8:]
 
 def run(*argv, timeout=120, env=None, reveal=False):

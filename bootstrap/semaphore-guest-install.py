@@ -207,6 +207,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
     if subprocess.run(["systemctl", "is-active", "--quiet", "semaphore.service"]).returncode == 0:
         raise Blocked("Conflicting Semaphore service active")
     print("SEMAPHORE_PACKAGE=PASS", flush=True)
+    print("SEMAPHORE_TLS_SETUP=START", flush=True)
 
     if not Path("/usr/sbin/nologin").exists():
         raise Blocked("nologin shell unavailable")
@@ -219,8 +220,10 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
     if service.pw_uid == 0:
         raise Blocked("Unsafe service user")
     setup_files(site, runner_ip, service)
+    print("SEMAPHORE_TLS_SETUP=PASS", flush=True)
     command("runuser", "-u", "semaphore", "--", "/usr/bin/semaphore",
             "migrate", "--config", str(CONFIG), timeout=90)
+    print("SEMAPHORE_DB_MIGRATION=PASS", flush=True)
     password = secrets.token_urlsafe(32)
     password_file(password)
     # Upstream user CLI requires --password; ephemeral process argv exists only
@@ -230,6 +233,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
             "--login", "admin", "--name", "DigitalHouses Administrator",
             "--email", "admin@localhost", "--password", password, timeout=90)
     del password
+    print("SEMAPHORE_ADMIN_CREATE=PASS", flush=True)
 
     unit = """[Unit]
 Description=DigitalHouses Semaphore UI
@@ -264,6 +268,7 @@ WantedBy=multi-user.target
     command("systemctl", "enable", "--now", UNIT.name, timeout=90)
     if command("systemctl", "is-active", UNIT.name) != "active":
         raise Blocked("Semaphore unit is inactive")
+    print("SEMAPHORE_SYSTEMD=PASS", flush=True)
     ctx = ssl.create_default_context(cafile=str(CERT))
     opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx),
                                          urllib.request.ProxyHandler({}))
