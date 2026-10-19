@@ -19,13 +19,13 @@
 
 ```bash
 clear
-INSTALLER_REF="main"
+INSTALLER_REF="010d7454d1a56f6aaf55a8f996fb0b36f9af8798"
 SOURCE="$(curl -fsSL --retry 2 "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/${INSTALLER_REF}/bootstrap/install.sh")"
 test -n "$SOURCE" || exit 2
 bash -c "$SOURCE" -- "demo-office"
 ```
 
-**Воспроизводимая приёмка:** вместо изменяемого `main` указывать полностью проверенный SHA коммита с `bootstrap/install.sh`. Внутри установщика отдельно закреплены `CODE_RELEASE`, Git blob SHA `bootstrap/semaphore-host-install.py`, SHA256 GitHub CLI и `FLEET_RELEASE`. Проверка приватного Vault и идентичности выбранного site выполняется до любого создания LXC; GitHub Device Login владельца остаётся на PVE. Общий Fleet Vault и GitHub credentials на runner не передаются.
+**Воспроизводимая приёмка:** в примере выше закреплён проверенный Git commit установщика; не заменять его плавающим `main` при приёмке. При выпуске нового релиза обновлять эту ссылку только после CI и проверки SHA. Внутри установщика отдельно закреплены `CODE_RELEASE`, Git blob SHA `bootstrap/semaphore-host-install.py`, SHA256 GitHub CLI и `FLEET_RELEASE`. Проверка приватного Vault и идентичности выбранного site выполняется до любого создания LXC; GitHub Device Login владельца остаётся на PVE. Общий Fleet Vault и GitHub credentials на runner не передаются.
 
 ## Статус
 
