@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 REQUEST=/var/lib/semaphore/dh-remote-commander.request
-STATUS=/var/lib/semaphore/dh-remote-commander.status
+STATUS=/run/dh-remote-commander-install.status
 BASE=/opt/digitalhouses/bootstrap/remote-commander
 LOG=/var/log/dh-remote-commander-install.log
 report() { printf '%s\n' "$1" > "$STATUS"; chmod 0644 "$STATUS"; }
