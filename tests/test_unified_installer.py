@@ -48,9 +48,9 @@ def _site_confirm_script():
     begin = s.index("confirm_site_id() {")
     end = s.index("\nconfirm_site_id || exit 2", begin)
     return (
-        "set -Eeuo pipefail\\nSITE=''\\n" +
+        "set -Eeuo pipefail\nSITE=''\n" +
         s[begin:end] +
-        "\nconfirm_site_id\\nprintf 'CONFIRMED_SITE=%s\\n' \"$SITE\"\\n"
+        "\nconfirm_site_id\nprintf 'CONFIRMED_SITE=%s\\n' \"$SITE\"\n"
     )
 
 
@@ -67,7 +67,7 @@ def _run_site_confirm(responses):
 
 
 def test_site_typo_can_be_corrected_after_n():
-    result = _run_site_confirm("serzahn-home\\nn\\nserzhan-home\\ny\\n")
+    result = _run_site_confirm("serzahn-home\nn\nserzhan-home\ny\n")
     assert result.returncode == 0, result.stderr
     assert "SITE_CONFIRMATION=YES serzhan-home" in result.stdout
     assert "Повторный ввод Site ID" in result.stdout
@@ -76,7 +76,7 @@ def test_site_typo_can_be_corrected_after_n():
 
 
 def test_malformed_site_id_reprompts_without_confirmation():
-    result = _run_site_confirm("bad_value\\nserzhan-home\\ny\\n")
+    result = _run_site_confirm("bad_value\nserzhan-home\ny\n")
     assert result.returncode == 0, result.stderr
     assert "Некорректный Site ID" in result.stdout
     assert "CONFIRMED_SITE=serzhan-home" in result.stdout
@@ -84,14 +84,14 @@ def test_malformed_site_id_reprompts_without_confirmation():
 
 
 def test_unrecognized_answer_repeats_confirmation():
-    result = _run_site_confirm("serzhan-home\\nmaybe\\nY\\n")
+    result = _run_site_confirm("serzhan-home\nmaybe\nY\n")
     assert result.returncode == 0, result.stderr
     assert "Ответьте y или n" in result.stdout
     assert "CONFIRMED_SITE=serzhan-home" in result.stdout
 
 
 def test_site_confirmation_eof_blocks_without_downstream():
-    for supplied in ("", "serzhan-home\\n", "serzhan-home\\nn\\n"):
+    for supplied in ("", "serzhan-home\n", "serzhan-home\nn\n"):
         result = _run_site_confirm(supplied)
         assert result.returncode != 0
         assert "CONFIRMED_SITE=" not in result.stdout
