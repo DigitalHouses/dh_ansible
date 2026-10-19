@@ -42,6 +42,9 @@ CODE_FILES = (
     "roles/runner_remote_commander/tasks/main.yml",
     "roles/runner_remote_commander/handlers/main.yml",
     "roles/runner_remote_commander/templates/digitalhouses-remote-commander.service.j2",
+    "bootstrap/remote-commander-install-request.sh",
+    "bootstrap/dh-remote-commander-install.service",
+    "bootstrap/dh-remote-commander-install.path",
 )
 REMOTE_INSTALL_FILES = tuple(item for item in CODE_FILES
                              if item.startswith(("playbooks/apply-runner-remote-commander.yml",
@@ -719,15 +722,14 @@ def install_guest(site, runner_ip, checkout, *, resume_ansible=False):
     print("SEMAPHORE_HTTPS_RUNTIME=PASS", flush=True)
 
 
-def install_runner_remote_commander(site, checkout):
-    """Install the standard Ansible playbook inside only this site's runner.
+def stage_runner_remote_commander(site, checkout):
+    """Stage a root-owned fixed-purpose systemd.path handoff; never install automatically.
 
-    Code is fetched from the pinned public release, never from Fleet secrets.
-    Git/Node.js/Remote Commander are never installed on the PVE host.
-    The registered device belongs to the operator; the browser pairing remains manual.
+    Semaphore has NoNewPrivileges=true and cannot use sudo. Its single local
+    request triggers ONLY the root-owned pinned Remote Commander playbook.
     """
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", site):
-        raise Blocked("Invalid site for Remote Commander installation")
+        raise Blocked("Invalid Remote Commander site")
     if pct_guest("hostname") != f"ansimble-{site}":
         raise Blocked("Remote Commander runner hostname mismatch")
 
@@ -742,26 +744,30 @@ def install_runner_remote_commander(site, checkout):
     for item in REMOTE_INSTALL_FILES:
         source = checkout / item
         if source.is_symlink() or not source.is_file():
-            raise Blocked("Pinned Remote Commander code missing: " + item)
+            raise Blocked("Pinned Remote Commander source missing: " + item)
         destination = base + "/" + item
         run("pct", "push", str(CTID), str(source), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
 
-    inventory = f"{SITE_INVENTORY_BASE}/{site}/hosts.yml"
-    playbook = base + "/playbooks/apply-runner-remote-commander.yml"
-    # The standard local inventory must already be provisioned by install_site_inventory.
-    result = pct_guest(
-        "env", "LANG=C.UTF-8", "LC_ALL=C.UTF-8",
-        "ANSIBLE_ROLES_PATH=" + base + "/roles",
-        "/opt/ansimble/venv/bin/ansible-playbook",
-        "-i", inventory, playbook, timeout=900)
-    if "failed=0" not in result:
-        raise Blocked("Remote Commander Ansible acceptance marker missing")
-    if pct_guest("systemctl", "is-active", "digitalhouses-remote-commander.service") != "active":
-        raise Blocked("Remote Commander service is not active")
-    if pct_guest("systemctl", "is-enabled", "digitalhouses-remote-commander.service") != "enabled":
-        raise Blocked("Remote Commander service autostart is not enabled")
-    print("REMOTE_COMMANDER_SYSTEMD=PASS (browser pairing may be pending)", flush=True)
+    handoff = (
+        ("bootstrap/remote-commander-install-request.sh",
+         "/usr/local/sbin/dh-remote-commander-install", "0700"),
+        ("bootstrap/dh-remote-commander-install.service",
+         "/etc/systemd/system/dh-remote-commander-install.service", "0644"),
+        ("bootstrap/dh-remote-commander-install.path",
+         "/etc/systemd/system/dh-remote-commander-install.path", "0644"),
+    )
+    for relative, destination, mode in handoff:
+        source = checkout / relative
+        if source.is_symlink() or not source.is_file():
+            raise Blocked("Pinned on-demand artifact missing: " + relative)
+        run("pct", "push", str(CTID), str(source), destination, timeout=30)
+        pct_guest("chmod", mode, destination)
+    pct_guest("systemctl", "daemon-reload")
+    pct_guest("systemctl", "enable", "--now", "dh-remote-commander-install.path")
+    if pct_guest("systemctl", "is-active", "dh-remote-commander-install.path") != "active":
+        raise Blocked("On-demand Remote Commander watcher not active")
+    print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
 def resolve_project_title(checkout: Path, site: str, provided: str | None) -> str:
@@ -867,7 +873,7 @@ def apply(args, template):
                 raise Blocked("Semaphore owner login/API audit not confirmed")
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
         seed_semaphore(args.site, project_title)
-        install_runner_remote_commander(args.site, checkout)
+        stage_runner_remote_commander(args.site, checkout)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")

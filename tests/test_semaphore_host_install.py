@@ -460,7 +460,7 @@ def test_resume_fresh_flag_requires_strict_empty_guest():
     assert 'if not (args.resume or args.resume_ansible or args.resume_fresh):' in src
 
 
-def test_remote_commander_is_pinned_and_part_of_single_bootstrap():
+def test_remote_commander_staged_only_and_never_installed_at_bootstrap():
     m = load()
     expected = {
         "playbooks/apply-runner-remote-commander.yml",
@@ -469,21 +469,26 @@ def test_remote_commander_is_pinned_and_part_of_single_bootstrap():
         "roles/runner_remote_commander/handlers/main.yml",
         "roles/runner_remote_commander/templates/digitalhouses-remote-commander.service.j2",
     }
+    auxiliaries = {
+        "bootstrap/remote-commander-install-request.sh",
+        "bootstrap/dh-remote-commander-install.service",
+        "bootstrap/dh-remote-commander-install.path",
+    }
     assert set(m.REMOTE_INSTALL_FILES) == expected
-    assert expected.issubset(m.CODE_FILES)
+    assert expected | auxiliaries <= set(m.CODE_FILES)
     assert m.REMOTE_BOOTSTRAP_DIR == "/opt/digitalhouses/bootstrap/remote-commander"
     body = SRC.read_text().split("def apply(args, template):", 1)[1].split("\\ndef main(", 1)[0]
     assert body.index("install_site_inventory(") < body.index("seed_semaphore(")
-    assert body.index("seed_semaphore(") < body.index("install_runner_remote_commander(")
-    assert "pct destroy" not in SRC.read_text()
-    assert 'print("REMOTE_COMMANDER_SYSTEMD=PASS' in SRC.read_text()
+    assert body.index("seed_semaphore(") < body.index("stage_runner_remote_commander(")
+    assert 'REMOTE_COMMANDER_ON_DEMAND=READY' in SRC.read_text()
+    assert "install_runner_remote_commander(" not in SRC.read_text()
 
 
-def test_remote_commander_staged_and_executed_only_in_guest(monkeypatch, tmp_path):
+def test_remote_commander_stages_fixed_root_watcher(monkeypatch, tmp_path):
     m = load()
     site = "demo-office"
     writes = []
-    for relative in m.REMOTE_INSTALL_FILES:
+    for relative in m.CODE_FILES:
         target = tmp_path / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("synthetic")
@@ -491,38 +496,27 @@ def test_remote_commander_staged_and_executed_only_in_guest(monkeypatch, tmp_pat
         writes.append(("guest", args))
         if args == ("hostname",):
             return "ansimble-" + site
-        if args[0] == "env":
-            assert "LANG=C.UTF-8" in args
-            assert "LC_ALL=C.UTF-8" in args
-            assert args[-1] == f"{m.REMOTE_BOOTSTRAP_DIR}/playbooks/apply-runner-remote-commander.yml"
-            assert args[-2] == f"{m.SITE_INVENTORY_BASE}/{site}/hosts.yml"
-            assert args[-3] == "-i"
-            return "runner : ok=23 changed=0 unreachable=0 failed=0"
-        if args[:2] == ("systemctl", "is-active"):
+        if args == ("systemctl", "is-active", "dh-remote-commander-install.path"):
             return "active"
-        if args[:2] == ("systemctl", "is-enabled"):
-            return "enabled"
         return ""
     def fake_run(*args, **kwargs):
         writes.append(("run", args))
         assert args[:3] == ("pct", "push", str(m.CTID))
-        assert "/opt/digitalhouses/bootstrap/remote-commander/" in args[4]
         return ""
     monkeypatch.setattr(m, "pct_guest", fake_guest)
     monkeypatch.setattr(m, "run", fake_run)
-    m.install_runner_remote_commander(site, tmp_path)
-    assert sum(1 for kind, args in writes if kind == "run") == 5
-    assert len([args for kind, args in writes if kind == "guest" and args[0] == "env"]) == 1
+    m.stage_runner_remote_commander(site, tmp_path)
+    assert sum(1 for kind, args in writes if kind == "run") == 8
+    assert not any(args[0] == "env" for kind, args in writes if kind == "guest")
+    assert ("guest", ("systemctl", "enable", "--now",
+                      "dh-remote-commander-install.path")) in writes
 
 
 def test_remote_commander_rejects_bad_hostname_before_any_write(monkeypatch, tmp_path):
     m = load()
     monkeypatch.setattr(m, "pct_guest", lambda *a, **kw: "wrong-hostname")
-    def fail_run(*a, **kw):
-        raise AssertionError("No guest writes allowed")
-    monkeypatch.setattr(m, "run", fail_run)
     with pytest.raises(m.Blocked, match="hostname mismatch"):
-        m.install_runner_remote_commander("demo-office", tmp_path)
+        m.stage_runner_remote_commander("demo-office", tmp_path)
 
 
 def test_site_escrow_is_private_fleet_data_not_hardcoded(monkeypatch, tmp_path):

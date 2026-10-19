@@ -1,0 +1,63 @@
+---
+# A user-triggered local request: no sudo from Semaphore, no remote hosts.
+- name: Request on-demand Remote Desktop Commander installation
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Require exactly one local runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname in ['runner', 'localhost']
+          - (ansible_connection | default('')) == 'local'
+          - site.id is defined
+    - name: Read local runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      register: remote_request_hostname
+      changed_when: false
+      check_mode: false
+    - name: Require matching site slug
+      ansible.builtin.assert:
+        that:
+          - remote_request_hostname.stdout == 'ansimble-' ~ site.id
+    - name: Check fixed-purpose root watcher
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-remote-commander-install.path]
+      register: remote_request_watcher
+      changed_when: false
+      check_mode: false
+    - name: Require prepared on-demand installer
+      ansible.builtin.assert:
+        that:
+          - remote_request_watcher.stdout == 'active'
+  tasks:
+    - name: Check installed Remote Commander
+      ansible.builtin.command:
+        argv: [systemctl, is-active, digitalhouses-remote-commander.service]
+      register: remote_request_existing
+      failed_when: false
+      changed_when: false
+      check_mode: false
+    - name: Request fixed local installation
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-remote-commander.request
+        content: "INSTALL\n"
+        mode: "0600"
+      when: remote_request_existing.stdout != 'active'
+    - name: Await Remote Commander installation
+      ansible.builtin.command:
+        argv: [systemctl, is-active, digitalhouses-remote-commander.service]
+      register: remote_request_active
+      changed_when: false
+      failed_when: false
+      until: remote_request_active.stdout == 'active'
+      retries: 90
+      delay: 10
+    - name: Report installed service
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          site: "{{ site.id }}"
+          component: remote_desktop_commander

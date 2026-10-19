@@ -3,7 +3,11 @@
 set -Eeuo pipefail
 umask 077
 
-SITE="${1:-}"
+SITE=""
+if (( $# > 0 )) && [[ "${1}" != --* ]]; then
+  SITE="$1"
+  shift
+fi
 CODE_RELEASE="34d9ca9ba3ff3919dc325f8b930d9d9156107e50"
 CODE_INSTALLER_BLOB="5ce57c63d5ec6941de65eb52671a1d24bd4f70c5"
 FLEET_RELEASE="6dd57b2e35573a4883e70188590e8e595688bd71"
@@ -11,17 +15,19 @@ GH_VERSION="2.102.0"
 GH_SHA256="bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
 
 RESUME_ARGS=()
-if (( $# == 2 )) && [[ "${2}" == "--resume" ]]; then
-  RESUME_ARGS=(--resume)
-elif (( $# == 2 )) && [[ "${2}" == "--resume-fresh" ]]; then
-  RESUME_ARGS=(--resume-fresh)
-elif (( $# == 2 )) && [[ "${2}" == "--resume-ansible" ]]; then
-  RESUME_ARGS=(--resume-ansible)
-elif (( $# == 2 )) && [[ "${2}" == "--resume-semaphore" ]]; then
-  RESUME_ARGS=(--resume-semaphore)
-elif (( $# != 1 )); then
-  echo "BLOCKED: usage: install.sh <owner>-<type> [--resume|--resume-fresh|--resume-ansible|--resume-semaphore]" >&2
+if (( $# == 1 )); then
+  case "$1" in
+    --resume|--resume-fresh|--resume-ansible|--resume-semaphore) RESUME_ARGS=("$1") ;;
+    *) echo "BLOCKED: unknown operation" >&2; exit 2 ;;
+  esac
+elif (( $# != 0 )); then
+  echo "BLOCKED: usage: install.sh [<owner>-<type>] [--resume|--resume-fresh|--resume-ansible|--resume-semaphore]" >&2
   exit 2
+fi
+if [[ -z "$SITE" ]]; then
+  if ! IFS= read -r -p "Введите slug объекта (<owner>-<type>): " SITE; then
+    echo "BLOCKED: site slug input missing" >&2; exit 2
+  fi
 fi
 if [[ ! "$SITE" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]]; then
   echo "BLOCKED: invalid site ID" >&2
@@ -31,6 +37,17 @@ if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
   echo "BLOCKED: root terminal on Proxmox VE required" >&2
   exit 2
 fi
+
+echo "=== CANONICAL SITE CONFIRMATION ==="
+printf 'OBJECT_SLUG=%s\\nDOWNSTREAM_SITE=%s\\n' "$SITE" "$SITE"
+if ! IFS= read -r -p "Подтвердить объект '$SITE' для всех этапов (y/n): " CONFIRM_SITE; then
+  echo "BLOCKED: confirmation missing; no actions performed" >&2; exit 2
+fi
+case "$CONFIRM_SITE" in
+  y|Y) echo "SITE_CONFIRMATION=YES $SITE" ;;
+  n|N) echo "CANCELLED: site not confirmed; no actions performed"; exit 0 ;;
+  *) echo "BLOCKED: answer must be y or n" >&2; exit 2 ;;
+esac
 
 WORK=$(mktemp -d /root/ansimble-network.XXXXXX)
 trap 'rc=$?; rm -rf "$WORK"; echo "RESULT_RC=$rc"; echo "TERMINAL STAYS OPEN"' EXIT

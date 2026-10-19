@@ -32,15 +32,17 @@ class FakeAPI:
         raise AssertionError("No other methods allowed")
 
 
-def test_clean_apply_creates_only_two_read_only_templates():
+def test_clean_apply_creates_two_audits_and_one_manual_installer():
     m = module()
     api = FakeAPI()
     result = m.provision(api, "demo-office", "Тестовый дом", True)
     assert result["state"] == "APPLIED"
     names = [c[2]["name"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")]
-    assert names == ["Проверка запуска Ansible", "Аудит локального runner"]
-    assert all("smoke" in c[2]["playbook"] or "audit-runner" in c[2]["playbook"]
-               for c in api.calls if c[0] == "POST" and c[1].endswith("/templates"))
+    assert names == ["Проверка запуска Ansible", "Аудит локального runner",
+                     "Установить Remote Desktop Commander"]
+    assert [c[2]["playbook"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")] == [
+        "playbooks/smoke-semaphore.yml", "playbooks/audit-runner.yml",
+        "playbooks/request-runner-remote-commander.yml"]
     count = len([c for c in api.calls if c[0] == "POST"])
     again = m.provision(api, "demo-office", "Тестовый дом", True)
     assert again["state"] == "APPLIED"
@@ -99,7 +101,7 @@ def test_public_code_private_fleet_inventory_boundary():
     assert inventory["ssh_key_id"] == by_name["Runner inventory (local-only)"]["id"]
     templates = next(items for path, items in resources.items()
                      if path.endswith("/templates"))
-    assert len(templates) == 2
+    assert len(templates) == 3
     assert all(item["repository_id"] == code["id"] for item in templates)
     assert all(item["inventory_id"] == inventory["id"] for item in templates)
 

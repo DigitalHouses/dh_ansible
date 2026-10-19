@@ -2,7 +2,8 @@
 """DigitalHouses Semaphore 2.19 project bootstrap via OFFICIAL localhost API.
 
 Never edits Semaphore SQLite directly. Idempotent: existing names are checked
-for exact identity; drift fails closed. Creates only SAFE read-only templates.
+for exact identity; drift fails closed. Installs two read-only templates and
+one explicitly operator-started local Remote Commander installation template.
 Admin password supplied through a root-only file, never CLI arguments.
 """
 from __future__ import annotations
@@ -27,6 +28,7 @@ VIEWS = ("01 · Подготовка", "02 · Развёртывание", "03 �
 TEMPLATES = (
     ("Проверка запуска Ansible", "playbooks/smoke-semaphore.yml", VIEWS[0]),
     ("Аудит локального runner", "playbooks/audit-runner.yml", VIEWS[0]),
+    ("Установить Remote Desktop Commander", "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
 )
 API_BASE = "https://127.0.0.1:3000/api"
 

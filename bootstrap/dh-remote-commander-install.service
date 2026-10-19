@@ -1,0 +1,14 @@
+[Unit]
+Description=DigitalHouses fixed-purpose Remote Commander installer
+After=network-online.target digitalhouses-semaphore.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/semaphore/dh-remote-commander.request
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/dh-remote-commander-install
+TimeoutStartSec=1200
+NoNewPrivileges=true
+PrivateTmp=true

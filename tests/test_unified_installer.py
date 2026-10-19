@@ -19,6 +19,11 @@ def test_installer_is_present_and_pins_independent_immutable_inputs():
     assert "https://github.com/login/device" in s
     assert "dh_ansimble_fleet_detail" not in s
     assert "ansimble-installer" not in s
+    assert "SITE_CONFIRMATION=YES $SITE" in s
+    assert "read -r -p \"Подтвердить объект" in s
+    assert 'case "$CONFIRM_SITE"' in s
+    assert '  --site "$SITE"' in s
+    assert "OBJECT_SLUG=%s" in s
 
 
 def test_installer_blocks_occupied_ct_and_has_no_destructive_actions():
