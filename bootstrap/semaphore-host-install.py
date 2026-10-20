@@ -950,7 +950,8 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
             "--runner-ip", runner_ip, "--pve-ip", pve_ip,
             "--master-file", str(master_path),
             "--vault-file", str(source_vault),
-            "--output-file", str(candidate), timeout=150)
+            "--output-file", str(candidate),
+            "--guest-python", guest_python, timeout=150)
         publish_encrypted_pve_vault(source_vault, candidate,
                                     expected_fleet_commit, env)
     print("PVE_CREDENTIALS=ENCRYPTED_FLEET_PUBLISHED", flush=True)
