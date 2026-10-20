@@ -102,7 +102,7 @@ def test_restored_ed25519_public_key_regex_accepts_comments():
     )
     expr = next(expressions)
     pattern = ast.literal_eval(expr.args[0])
-    assert re.fullmatch(pattern, "ssh-ed25519 " + "A" * 44 + " digitalhouses-serzhan-home-pve-host")
+    assert re.fullmatch(pattern, "ssh-ed25519 " + "A" * 44 + " digitalhouses-demo-home-pve-host")
     assert not re.fullmatch(pattern, "ssh-ed25519 " + "A" * 44 + "\\nINJECTED")
 
 
@@ -112,12 +112,12 @@ def test_existing_canonical_staging_never_reissues_pve_tokens(monkeypatch, tmp_p
     mod = importlib.util.module_from_spec(mod_spec)
     mod_spec.loader.exec_module(mod)
     monkeypatch.setattr(mod, "ROOT_STAGE", tmp_path)
-    path = tmp_path / "pve-identities-serzhan-home-ansible-v2-pending.json"
+    path = tmp_path / "pve-identities-demo-home-ansible-v2-pending.json"
     path.write_text(json.dumps({
-        "site_id": "serzhan-home",
+        "site_id": "demo-home",
         "identity_schema": 2,
-        "runner_ip": "192.168.11.231",
-        "pve_ip": "192.168.11.30",
+        "runner_ip": "192.0.2.231",
+        "pve_ip": "192.0.2.30",
         "principals": {
             "audit": "ansible-audit@pve",
             "write": "ansible-writer@pve",
@@ -135,7 +135,7 @@ def test_existing_canonical_staging_never_reissues_pve_tokens(monkeypatch, tmp_p
         return "PVE_RESTORED_IDENTITIES=READ_ONLY_PASS"
     monkeypatch.setattr(mod, "run", verified_read_only)
     assert mod.pve_staged_enrollment_verified(
-        "serzhan-home", "192.168.11.231", "192.168.11.30", tmp_path / "bootstrap.py")
+        "demo-home", "192.0.2.231", "192.0.2.30", tmp_path / "bootstrap.py")
     assert len(calls) == 1
     assert "--reconcile-restored" in calls[0]
     assert "--apply" not in calls[0]
