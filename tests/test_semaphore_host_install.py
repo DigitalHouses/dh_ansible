@@ -359,6 +359,7 @@ def test_fresh_system_bus_requires_healthy_systemd(monkeypatch):
     def fake_code(*args, **kwargs):
         return 1 if args[-2:] == ("systemctl", "is-system-running") else 0
     monkeypatch.setattr(m, "code", fake_code)
+    monkeypatch.setattr(m, "pct_guest", lambda *a, **k: "ssh.service loaded failed failed SSH")
     monkeypatch.setattr(m.time, "sleep", lambda _: None)
     with pytest.raises(m.Blocked, match="readiness timeout"):
         m.verify_fresh_system_bus(attempts=2, delay_seconds=0)
@@ -640,3 +641,62 @@ def test_site_inventory_failure_emits_safe_command_and_step(monkeypatch, capsys)
     out = capsys.readouterr().out
     assert "PCT_EXEC_FAILURE=command:install rc:129" in out
     assert "PRIVATE" not in out and "SECRET" not in out
+
+
+def test_first_boot_fixes_only_postfix_lxc_namespace_failure(monkeypatch, capsys):
+    m = load()
+    systemd_repaired = {"value": False}
+    commands = []
+    def fake_code(*args, **kwargs):
+        if args[-2:] == ("systemctl", "is-system-running"):
+            return 0 if systemd_repaired["value"] else 1
+        return 0
+    def fake_guest(*args, **kwargs):
+        commands.append(args)
+        if args[:2] == ("systemctl", "list-units"):
+            return "● postfix.service loaded failed failed Postfix Mail Transport Agent"
+        if args == ("systemctl", "mask", "--now", "postfix.service"):
+            return ""
+        if args == ("systemctl", "reset-failed", "postfix.service"):
+            systemd_repaired["value"] = True
+            return ""
+        raise AssertionError(args)
+    monkeypatch.setattr(m, "code", fake_code)
+    monkeypatch.setattr(m, "pct_guest", fake_guest)
+    m.verify_fresh_system_bus(attempts=2, delay_seconds=0)
+    output = capsys.readouterr().out
+    assert "FRESH_DEBIAN_POSTFIX=MASKED_UNNEEDED_LXC_SERVICE" in output
+    assert "FRESH_DEBIAN_DBUS=PASS" in output
+    assert commands == [
+        ("systemctl", "list-units", "--failed", "--all",
+         "--no-legend", "--plain", "--no-pager"),
+        ("systemctl", "mask", "--now", "postfix.service"),
+        ("systemctl", "reset-failed", "postfix.service"),
+    ]
+
+
+def test_postfix_fix_never_masks_when_another_unit_failed(monkeypatch):
+    m = load()
+    calls = []
+    def fake_guest(*args, **kwargs):
+        calls.append(args)
+        return ("● postfix.service loaded failed failed Postfix\\n"
+                "● other.service loaded failed failed Other")
+    monkeypatch.setattr(m, "pct_guest", fake_guest)
+    assert m.reconcile_first_boot_postfix_only() is False
+    assert len(calls) == 1
+
+
+def test_postfix_fix_never_relaxes_failed_dbus(monkeypatch):
+    m = load()
+    commands = []
+    def fake_code(*args, **kwargs):
+        return 1 if args[-2:] == ("systemctl", "is-active") else 1
+    monkeypatch.setattr(m, "code", lambda *a, **kw: (
+        1 if a[-2:] == ("is-active", "dbus.service") else 0))
+    monkeypatch.setattr(m, "pct_guest", lambda *a, **kw: commands.append(a))
+    monkeypatch.setattr(m.time, "sleep", lambda *_: None)
+    with pytest.raises(m.Blocked, match="readiness timeout"):
+        m.verify_fresh_system_bus(attempts=2, delay_seconds=0)
+    assert commands == []
+
