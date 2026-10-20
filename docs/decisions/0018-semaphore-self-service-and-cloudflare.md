@@ -24,8 +24,9 @@ encrypted, private, and is **not** added as a Semaphore Git repository.
    modifies Semaphore's database.
 4. The synchronized catalog includes `10-Cloudflare · Туннель объекта (план)`,
    whose priority is protected remote administration of PVE and its guests.
-5. Engineer executes task 00 locally once; when protected remote connectivity
-   is verified, subsequent jobs can be launched remotely through the site UI.
+5. Engineer runs task 10 (Cloudflare) after task 00 has populated the catalog.
+   As of this revision task 10 is PLAN_ONLY; provisioning and the verified
+   Access/Tunnel remote entrypoint remain a separate implementation milestone.
 
 Task numbers describe UI ordering, **not** automatic execution dependencies.
 Task 00 is initially the only built-in template; task 10 (Cloudflare planning)
@@ -44,8 +45,8 @@ appears after the first successful task 00 synchronization.
 - Idempotent comparison: CREATE missing; UPDATE known owned templates in
   place preserving IDs and execution history; report UNCHANGED; BLOCK unknown
   collisions/drift. No automatic delete or autorun.
-- A dedicated root-owned fixed-purpose worker uses root-only Semaphore
-  credentials. Semaphore itself runs unprivileged and can submit only a
+- A dedicated root-owned fixed-purpose worker uses a revocable Semaphore API
+  token stored in a root-only file (0600), independent of the UI password. Semaphore itself runs unprivileged and can submit only a
   validated fixed-action request; not a root shell, arbitrary playbook,
   file path, URL or command. Use a bounded timeout and atomic status response.
 - Explicitly report catalog source commit SHA, revision, and per-task result.
