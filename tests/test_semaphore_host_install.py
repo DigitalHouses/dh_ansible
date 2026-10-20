@@ -739,3 +739,57 @@ def test_restore_only_cli_rejects_wrong_resume_mode():
     with pytest.raises(m.Blocked,match="requires --resume-semaphore"):
         m.main(argv)
 
+
+def test_guest_directory_staging_retries_only_pct_129(monkeypatch):
+    m = load()
+    attempts = []
+    def guest(*argv, **kwargs):
+        attempts.append(argv)
+        if len(attempts) < 3:
+            raise m.Blocked("Command failed: pct, rc=129")
+        return ""
+    monkeypatch.setattr(m, "pct_guest", guest)
+    monkeypatch.setattr(m.time, "sleep", lambda seconds: None)
+    m.stage_guest_root_directory(
+        "/opt/digitalhouses/bootstrap/remote-commander/roles",
+        stage="remote_commander")
+    assert len(attempts) == 3
+    assert all(a[:6] == ("install", "-d", "-o", "root", "-g", "root") for a in attempts)
+    assert all(a[-1].endswith("/roles") for a in attempts)
+
+
+def test_guest_directory_staging_rejects_persistent_hup(monkeypatch):
+    m = load()
+    calls = []
+    def guest(*args, **kwargs):
+        calls.append(args)
+        raise m.Blocked("Command failed: pct, rc=129")
+    monkeypatch.setattr(m, "pct_guest", guest)
+    monkeypatch.setattr(m.time, "sleep", lambda *_: None)
+    with pytest.raises(m.Blocked, match="failed after 3 pct exec SIGHUP"):
+        m.stage_guest_root_directory("/opt/digitalhouses/bootstrap/pve-access",
+                                     stage="pve_access")
+    assert len(calls) == 3
+
+
+def test_guest_directory_staging_never_retries_other_errors(monkeypatch):
+    m = load()
+    calls = []
+    def guest(*args, **kwargs):
+        calls.append(args)
+        raise m.Blocked("Command failed: pct, rc=1")
+    monkeypatch.setattr(m, "pct_guest", guest)
+    with pytest.raises(m.Blocked, match="rc=1"):
+        m.stage_guest_root_directory("/opt/digitalhouses/bootstrap/pve-access",
+                                     stage="pve_access")
+    assert len(calls) == 1
+    with pytest.raises(m.Blocked, match="Unsafe staged guest directory"):
+        m.stage_guest_root_directory("/etc/ssh", stage="pve_access")
+    assert len(calls) == 1
+
+
+def test_pve_directory_and_remote_directory_staging_share_retry_policy():
+    src = SRC.read_text()
+    assert 'stage_guest_root_directory(folder, stage="remote_commander")' in src
+    assert 'stage_guest_root_directory(folder, stage="pve_access")' in src
+    assert 'stage_guest_root_directory(folder + "/playbooks", stage="pve_access")' in src
