@@ -14,9 +14,9 @@ def load():
 def test_parser_distinguishes_guest_mounts_from_known_config():
     m=load()
     data=m.parse_pve_config(
-      "hostname: ansimble-home\nunprivileged: 1\nnet0: name=eth0,ip=198.51.100.231/24,bridge=vmbr0\n"
+      "hostname: ansible-home\nunprivileged: 1\nnet0: name=eth0,ip=198.51.100.231/24,bridge=vmbr0\n"
     )
-    assert data["hostname"]=="ansimble-home"
+    assert data["hostname"]=="ansible-home"
     assert data["unprivileged"]=="1"
     assert data["net0"].startswith("name=eth0")
 
