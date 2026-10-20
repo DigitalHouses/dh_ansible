@@ -46,22 +46,29 @@
       failed_when: false
       changed_when: false
       check_mode: false
+
     - name: Explain installation progress and device pairing
       ansible.builtin.debug:
         msg:
-          - "Remote Commander is installed by the local systemd watcher; package setup may take several minutes."
-          - "Semaphore waits for the managed service for up to 15 minutes."
-          - "Pairing URL: https://mcp.desktopcommander.app/device/verify"
-          - "First-time pairing code appears in the runner systemd journal; verify it in your browser."
-          - "Service ACTIVE confirms installation only, not remote connectivity."
+          - "The local root-owned watcher installs Remote Commander; Node.js/npm may take several minutes."
+          - "Semaphore will show the live confirmation URL and one-time code below."
+          - "Only a sanitized short-lived code is readable by Semaphore; no journal or secrets are shared."
+          - "Authorization requires opening the URL in your own browser."
 
-    - name: Request fixed local installation
+    - name: Generate unique Remote Commander request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: remote_request_id
+      changed_when: false
+      check_mode: false
+
+    - name: Send fixed-purpose install or pairing request
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-remote-commander.request
-        content: "INSTALL\n"
+        content: "{{ 'PAIR' if remote_request_existing.stdout == 'active' else 'INSTALL' }}:{{ remote_request_id.stdout }}\n"
         mode: "0600"
-      when: remote_request_existing.stdout != 'active'
-    - name: Await Remote Commander installation
+
+    - name: Await managed Remote Commander service
       ansible.builtin.command:
         argv: [systemctl, is-active, digitalhouses-remote-commander.service]
       register: remote_request_active
@@ -70,13 +77,42 @@
       until: remote_request_active.stdout == 'active'
       retries: 90
       delay: 10
-    - name: Report installed service
+      check_mode: false
+
+    - name: Await sanitized OAuth pairing status
+      ansible.builtin.command:
+        argv: [cat, /run/dh-remote-commander-pairing.status]
+      register: remote_pairing_record
+      changed_when: false
+      failed_when: false
+      until: remote_pairing_record.stdout.startswith('PAIR|' ~ remote_request_id.stdout ~ '|')
+      retries: 60
+      delay: 2
+      check_mode: false
+
+    - name: Show actual one-time pairing code and URL inside Semaphore
+      ansible.builtin.debug:
+        msg:
+          pairing_code: "{{ remote_pairing_record.stdout.split('|')[3] }}"
+          verification_url: "{{ remote_pairing_record.stdout.split('|')[4] }}"
+          action: "Open verification_url in your browser, sign in, and confirm pairing_code."
+          expires: "Provider code expires 15 minutes after issuance. Re-run this task if the device issues a new code."
+      when: remote_pairing_record.stdout.split('|')[2] == 'CODE'
+
+    - name: Explain connected or pending authorization
+      ansible.builtin.debug:
+        msg:
+          authorization_state: "{{ remote_pairing_record.stdout.split('|')[2] }}"
+          verification_url: "https://mcp.desktopcommander.app/device/verify"
+          note: "If WAITING, the code has not appeared yet or is expired; inspect the agent on PVE. CONNECTED means the agent reported authorization."
+      when: remote_pairing_record.stdout.split('|')[2] != 'CODE'
+
+    - name: Report installed service and independent connection check
       ansible.builtin.debug:
         msg:
           result: PASS
           site: "{{ site.id }}"
           component: remote_desktop_commander
           service_status: ACTIVE
-          connection_status: NOT_VERIFIED
-          pairing_url: "https://mcp.desktopcommander.app/device/verify"
-          pairing_instruction: "Obtain the temporary code from the remote service journal on PVE; approve in your browser."
+          pairing_state: "{{ remote_pairing_record.stdout.split('|')[2] }}"
+          note: "Service ACTIVE alone does not prove the device is Online in Remote MCP."
