@@ -961,7 +961,8 @@ def pve_staged_enrollment_verified(site: str, runner_ip: str, pve_ip: str,
 def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                                  checkout: Path, expected_fleet_commit: str,
                                  owner_master: str, env: dict,
-                                 *, guest_python: str = "/opt/ansible/venv/bin/python") -> None:
+                                 *, guest_python: str = "/opt/ansible/venv/bin/python",
+                                 restore_only: bool = False) -> None:
     """Restore canonical credentials from Fleet or enroll and publish new ones."""
     source_vault = checkout.parent / "fleet-detail/secrets/fleet.vault.yml"
     source = checkout / "bootstrap/pve-identities.py"
@@ -1009,6 +1010,8 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
             return
         if "PVE_FLEET_RECOVERY=ABSENT" not in response:
             raise Blocked("Unknown encrypted Fleet PVE recovery state")
+        if restore_only:
+            raise Blocked("PVE credential restore-only: canonical credentials absent from Fleet Vault; no tokens issued")
         # Only new identities may be created. Source is pinned, publication
         # requires exact GitHub main HEAD/CAS to avoid overwriting concurrent changes.
         record = assert_private_fleet_head(expected_fleet_commit, env)
@@ -1138,10 +1141,12 @@ def apply(args, template):
         # Fresh creation and resume-fresh both build a NEW empty runner.
         # Restore its original SSH private key from encrypted Fleet Vault.
         # Existing mature runner resume modes do not touch PVE credentials.
-        if not (args.resume or args.resume_ansible or args.resume_semaphore):
+        if (not (args.resume or args.resume_ansible or args.resume_semaphore)
+                or (args.resume_semaphore and args.restore_pve_access)):
             provision_pve_identity_stage(args.site, args.runner_cidr,
                                          args.pve_ip, checkout,
-                                         args.expected_fleet_commit, owner_master, env)
+                                         args.expected_fleet_commit, owner_master, env,
+                                         restore_only=bool(args.resume_semaphore))
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
@@ -1295,8 +1300,12 @@ def main(argv=None):
                               help="Resume verified Ansible-only CT1231; never create a guest")
     resume_group.add_argument("--resume-semaphore", action="store_true",
                               help="Complete verified running Semaphore; seed project only")
+    parser.add_argument("--restore-pve-access", action="store_true",
+                        help="With --resume-semaphore only: restore existing PVE credentials, never issue new tokens")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.restore_pve_access and not args.resume_semaphore:
+        raise Blocked("PVE Access restore-only requires --resume-semaphore")
     if args.verify_pve_access:
         if any((args.commission_pve_access, args.resume, args.resume_fresh,
                 args.resume_ansible, args.resume_semaphore, args.apply)):
