@@ -1,0 +1,14 @@
+[Unit]
+Description=DigitalHouses Semaphore catalog sync (fixed-purpose)
+ConditionPathExists=/var/lib/semaphore/dh-semaphore-catalog-sync.request
+After=digitalhouses-semaphore.service
+Wants=digitalhouses-semaphore.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/dh-semaphore-catalog-sync
+TimeoutStartSec=180
+NoNewPrivileges=true
+PrivateTmp=true
