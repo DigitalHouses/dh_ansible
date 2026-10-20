@@ -1135,10 +1135,10 @@ def apply(args, template):
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
         stage_pve_access_audit(checkout)
-        # Credential enrollment is part of a NEW bootstrap only; recovery
-        # and resume cannot silently issue API users/tokens or SSH keys.
-        if not (args.resume or args.resume_fresh or args.resume_ansible
-                or args.resume_semaphore):
+        # Fresh creation and resume-fresh both build a NEW empty runner.
+        # Restore its original SSH private key from encrypted Fleet Vault.
+        # Existing mature runner resume modes do not touch PVE credentials.
+        if not (args.resume or args.resume_ansible or args.resume_semaphore):
             provision_pve_identity_stage(args.site, args.runner_cidr,
                                          args.pve_ip, checkout,
                                          args.expected_fleet_commit, owner_master, env)
