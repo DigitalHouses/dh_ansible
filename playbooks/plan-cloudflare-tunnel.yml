@@ -1,0 +1,32 @@
+---
+# READ-ONLY contract inspection; does not claim to provision Cloudflare.
+- name: Plan site Cloudflare Tunnel routes without applying
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Verify the canonical site scope
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - (ansible_connection | default('')) == 'local'
+          - site.id is defined
+          - site.owner_slug is defined
+          - site.type is defined
+          - site.id == site.owner_slug ~ '-' ~ site.type
+  tasks:
+    - name: Explain the approved tunnel name and hostnames
+      ansible.builtin.debug:
+        msg:
+          stage: PLAN_ONLY
+          cloudflare_tunnel_name: "{{ site.id }}"
+          pve_fqdn: "{{ site.id }}-pve.digitalhouses.vip"
+          ansible_fqdn: "{{ site.id }}-pve-ansible.digitalhouses.vip"
+          required_security: "Access policy must be verified before publishing routes"
+          note: "Provisioning is not implemented or authorized by this planning task"
+    - name: Refuse to claim Cloudflare deployment has happened
+      ansible.builtin.debug:
+        msg: "CLOUDFLARE_PROVISIONING=NOT_STARTED; no DNS/Access/Tunnel changes were made."
