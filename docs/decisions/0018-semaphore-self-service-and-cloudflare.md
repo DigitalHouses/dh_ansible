@@ -62,9 +62,9 @@ the first successful task 10 synchronization.
   necessarily the actual Linux hostname or the numeric VMID/CTID.
 - Accepted concrete mappings for `serzhan-home`:
   - `serzhan-home-pve.digitalhouses.vip` =>
-    `https://192.168.11.30:8006` (PVE).
+    `https://<site-internal-ip>:8006` (PVE).
   - `serzhan-home-pve-ansible.digitalhouses.vip` =>
-    `https://192.168.11.231:3000` (CT1231 Semaphore).
+    `https://<site-internal-ip>:3000` (CT1231 Semaphore).
   URL route and origin scheme must be treated as separate data fields.
 - Values must derive from canonical Fleet/site inventory; validate uniqueness
   of guest/service slugs on the site, not hard-code mappings per site.
