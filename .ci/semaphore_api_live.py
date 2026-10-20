@@ -78,3 +78,23 @@ module.migrate_accepted_four_task_catalog(
     bearer, "home", "CI · Legacy Restore", apply=True)
 assert {v["id"] for v in bearer.request("GET", path)} == {v["id"] for v in after}
 print("SEMAPHORE_2_19_RESTORED_MIGRATION=PASS")
+
+
+# Validate the exact root-only token creation path that the restored CT uses.
+# The token value is never logged; this explicitly covers '=' Base64URL padding.
+import tempfile
+with tempfile.TemporaryDirectory(prefix="semaphore-token-check-") as token_dir:
+    original_token_path = module.CATALOG_TOKEN_PATH
+    module.CATALOG_TOKEN_PATH = Path(token_dir) / "catalog-token"
+    try:
+        module.create_catalog_api_token_once(api)
+        assert module.CATALOG_TOKEN_PATH.stat().st_mode & 0o777 == 0o600
+        secret = module.secure_file(module.CATALOG_TOKEN_PATH)
+        assert module.valid_catalog_token(secret)
+        assert isinstance(module.API(ca_file=os.environ["CI_SEMAPHORE_CERT"],
+                                     token=secret).request("GET", "/projects"), list)
+        module.create_catalog_api_token_once(api)
+        assert module.secure_file(module.CATALOG_TOKEN_PATH) == secret
+    finally:
+        module.CATALOG_TOKEN_PATH = original_token_path
+print("SEMAPHORE_2_19_ROOT_TOKEN_CREATION=PASS")
