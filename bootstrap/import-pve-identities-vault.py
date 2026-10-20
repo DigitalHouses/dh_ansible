@@ -283,6 +283,11 @@ def host(args):
     master = secure_read(Path(args.master_file))
     if not 8 <= len(master.rstrip(b"\r\n")) <= 1024:
         blocked("Master password invalid")
+    if args.guest_python not in ("/opt/ansible/venv/bin/python",
+                                  "/opt/ansimble/venv/bin/python"):
+        blocked("Unapproved runner Python path")
+    if pct(args.ctid, "test", "-x", args.guest_python) != "":
+        blocked("Unexpected runner Python executable check")
     guest_temp = f"/dev/shm/dh-fleet-{uuid.uuid4().hex}"
     with tempfile.TemporaryDirectory(prefix="dh-fleet-", dir="/run") as host_tmp:
         host_master = Path(host_tmp) / "master"
@@ -296,7 +301,7 @@ def host(args):
             checked("pct", "push", str(args.ctid), str(args.vault_file), guest_temp + "/base.vault.yml")
             pct(args.ctid, "chmod", "0600", guest_temp + "/master",
                 guest_temp + "/staging.json", guest_temp + "/base.vault.yml")
-            print(pct(args.ctid, "/opt/ansible/venv/bin/python",
+            print(pct(args.ctid, args.guest_python,
                       "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
                       "--worker", "--site", args.site, "--ctid", str(args.ctid),
                       "--runner-ip", args.runner_ip, "--pve-ip", args.pve_ip,
@@ -337,6 +342,7 @@ def main():
     parser.add_argument("--vault-file")
     parser.add_argument("--candidate-file")
     parser.add_argument("--output-file")
+    parser.add_argument("--guest-python", default="/opt/ansible/venv/bin/python")
     args = parser.parse_args()
     if args.recover:
         if not args.master_file or not args.vault_file:
