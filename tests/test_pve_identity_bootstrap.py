@@ -81,7 +81,8 @@ def test_installer_stages_identity_from_pinned_code_under_pve_root():
     assert '"bootstrap/pve-identities.py"' in source
     assert "def provision_pve_identity_stage(" in source
     assert 'run("python3", str(source),' in source
-    assert "PVE_CREDENTIALS=VAULT_IMPORT_PENDING" in source
+    assert "PVE_CREDENTIALS=ENCRYPTED_FLEET_PUBLISHED" in source
+    assert "PVE_CREDENTIALS=RESTORED_FROM_FLEET" in source
     assert source.index("stage_runner_remote_commander(args.site, checkout)") < source.index(
         "provision_pve_identity_stage(args.site, args.runner_cidr,"
     )
