@@ -381,7 +381,8 @@ def sync_existing_template(api, path, desired, *, apply=False):
     allowed_change = ("playbook", "view_id")
     changed = [k for k in allowed_change if current.get(k) != desired.get(k)]
     if not changed:
-        print("CATALOG_UNCHANGED=" + title, flush=True)
+        if apply:
+            print("CATALOG_UNCHANGED=" + title, flush=True)
         return
     if title == BOOTSTRAP_TEMPLATES[0][0]:
         raise Blocked("Never rewrite bootstrap recovery task")
