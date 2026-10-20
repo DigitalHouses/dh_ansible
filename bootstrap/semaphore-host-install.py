@@ -45,6 +45,9 @@ CODE_FILES = (
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
+    "bootstrap/semaphore-catalog-sync-request.sh",
+    "bootstrap/dh-semaphore-catalog-sync.path",
+    "bootstrap/dh-semaphore-catalog-sync.service",
     "requirements/runner.txt",
     "playbooks/apply-runner-remote-commander.yml",
     "roles/runner_remote_commander/defaults/main.yml",
@@ -813,6 +816,30 @@ def install_guest(site, runner_ip, checkout, *, resume_ansible=False):
     print("SEMAPHORE_HTTPS_RUNTIME=PASS", flush=True)
 
 
+def stage_semaphore_catalog_sync(checkout):
+    """Install narrowly scoped root watcher for the only initial Semaphore task."""
+    files = (
+        ("bootstrap/semaphore-catalog-sync-request.sh",
+         "/usr/local/sbin/dh-semaphore-catalog-sync", "0700"),
+        ("bootstrap/dh-semaphore-catalog-sync.service",
+         "/etc/systemd/system/dh-semaphore-catalog-sync.service", "0644"),
+        ("bootstrap/dh-semaphore-catalog-sync.path",
+         "/etc/systemd/system/dh-semaphore-catalog-sync.path", "0644"),
+    )
+    for relative, target, mode in files:
+        source = checkout / relative
+        if source.is_symlink() or not source.is_file():
+            raise Blocked("Missing immutable Semaphore catalog worker: " + relative)
+        run("pct", "push", str(CTID), str(source), target, timeout=30)
+        pct_guest("chmod", mode, target)
+    pct_guest("systemctl", "daemon-reload")
+    pct_guest("systemctl", "enable", "--now", "dh-semaphore-catalog-sync.path")
+    if pct_guest("systemctl", "is-active",
+                 "dh-semaphore-catalog-sync.path") != "active":
+        raise Blocked("Semaphore catalog sync worker not ready")
+    print("SEMAPHORE_CATALOG_SYNC_ON_DEMAND=READY", flush=True)
+
+
 def stage_runner_remote_commander(site, checkout):
     """Stage a root-owned fixed-purpose systemd.path handoff; never install automatically.
 
@@ -1080,7 +1107,7 @@ def seed_semaphore(site, project_title):
               "--site", site, "--project-title", project_title,
               "--admin-password-file", "/root/dh-semaphore-initial-admin-password",
               "--apply", timeout=120)
-    print("SEMAPHORE_TEMPLATES=PASS (no task executed)", flush=True)
+    print("SEMAPHORE_BOOTSTRAP_TASK=00-Обновить список задач (only task; not executed)", flush=True)
 
 
 def apply(args, template):
@@ -1162,6 +1189,7 @@ def apply(args, template):
             if "NO_INFRASTRUCTURE_TASKS_LAUNCHED=YES" not in probe:
                 raise Blocked("Semaphore owner login/API audit not confirmed")
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
+        stage_semaphore_catalog_sync(checkout)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
         stage_pve_access_audit(checkout)
