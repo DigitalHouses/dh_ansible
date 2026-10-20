@@ -460,7 +460,7 @@ def test_resume_fresh_flag_requires_strict_empty_guest():
     assert 'resume_group.add_argument("--resume-fresh"' in src
     assert 'Type RESUME FRESH CT{CTID} to continue:' in src
     assert 'CT1231=VERIFIED_FRESH_PREBOOT_RUNNER' in src
-    assert 'Fresh resume guest has deployment artifacts' in src
+    assert 'Fresh resume guest has deployment artifact: {marker}' in src
     assert 'resume_fresh=args.resume_fresh' in src
     assert 'if not (args.resume or args.resume_ansible or args.resume_fresh):' in src
 
