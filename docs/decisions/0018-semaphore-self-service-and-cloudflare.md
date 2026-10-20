@@ -7,31 +7,31 @@
 ## Goal
 A site differs by declarative Fleet data, not separate code. After a one-command
 installer, the engineer has a local Semaphore UI with exactly one built-in task:
-`10-Обновить список задач`. All other task definitions are loaded from the
-public `DigitalHouses/dh_ansible` catalog on explicit invocation of task 10.
+`00-Обновить список задач`. All other task definitions are loaded from the
+public `DigitalHouses/dh_ansible` catalog on explicit invocation of task 00.
 The private `DigitalHouses/dh_ansible_fleet_detail` repository remains
 encrypted, private, and is **not** added as a Semaphore Git repository.
 
 ## Expected user workflow
 1. Installer runs on the approved site PVE, creates a single local runner, sets up
-   Semaphore, and seeds exactly the bootstrap task `10-Обновить список задач`.
+   Semaphore, and seeds exactly the bootstrap task `00-Обновить список задач`.
    Installer must also supply its narrowly scoped root-owned synchronization
    worker, but must not install NetAlertX or automatically run infrastructure tasks.
-2. Engineer opens local Semaphore and runs `10-Обновить список задач`.
+2. Engineer opens local Semaphore and runs `00-Обновить список задач`.
 3. Synchronizer validates source identity and desired manifest, presents an
    unambiguous plan (created / updated / unchanged / conflict), then applies only
    allowable catalog changes via localhost HTTPS Semaphore API. It never directly
    modifies Semaphore's database.
-4. The synchronized catalog includes `00-Cloudflare · Туннель объекта`,
+4. The synchronized catalog includes `10-Cloudflare · Туннель объекта (план)`,
    whose priority is protected remote administration of PVE and its guests.
 5. Engineer executes task 00 locally once; when protected remote connectivity
    is verified, subsequent jobs can be launched remotely through the site UI.
 
 Task numbers describe UI ordering, **not** automatic execution dependencies.
-Task 10 is initially the only built-in template; task 00 appears after
-the first successful task 10 synchronization.
+Task 00 is initially the only built-in template; task 10 (Cloudflare planning)
+appears after the first successful task 00 synchronization.
 
-## Task 10 · Synchronize catalog
+## Task 00 · Synchronize catalog
 - Public code repository `dh_ansible` is authoritative for catalog definitions.
   Semaphore already clones public repository playbooks at execution time;
   synchronization specifically manages template metadata, views, tasks,
@@ -51,7 +51,7 @@ the first successful task 10 synchronization.
 - Explicitly report catalog source commit SHA, revision, and per-task result.
   A failed update leaves the existing working catalog intact as far as possible.
 
-## Task 00 · Cloudflare remote entrypoint
+## Task 10 · Cloudflare remote entrypoint
 - Canonical **tunnel name = `<site-id>`**, not an individual app or guest.
   Home pilot: Cloudflare Tunnel `serzhan-home`. A single connector on the
   site's PVE routes traffic to its PVE UI and its VM/LXC services.
@@ -93,9 +93,9 @@ the first successful task 10 synchronization.
 ## Compatibility / migration
 - Existing restored CT1231 has templates 10/20/30/40; migrate
   deliberately, preserving IDs and history. Do not overwrite the current
-  smoke task 10 without audited migration, and do not destroy its Golden
+  smoke task 00 without audited migration, and do not destroy its Golden
   backup. Install the new synchronizer once via a guarded site-only
-  maintenance path; new fresh installers have only task 10.
+  maintenance path; new fresh installers have only task 00.
 - Existing PVE writes are disabled; task 00 must not silently escalate
   from read-only PVE access.
 - New Bootstrap logic requires new pins, public CI, synthetic migration
@@ -103,10 +103,25 @@ the first successful task 10 synchronization.
   The currently accepted backup remains an older immutable release.
 
 ## Acceptance criteria
-- Fresh installed Semaphore initially shows **only** task 10.
-- Task 10 self-syncs all supported catalog entries, repeat run changes zero.
-- A broken public catalog leaves task 10 and the working UI accessible.
+- Fresh installed Semaphore initially shows **only** task 00.
+- Task 00 self-syncs all supported catalog entries, repeat run changes zero.
+- A broken public catalog leaves task 00 and the working UI accessible.
 - Task 00 refuses to publish a route without matching Access protection.
 - Remote UI can be reached through CF Access without any inbound WAN port,
   and only after successful policy authorization.
 - Read-only smoke audit of local runner and PVE remains available post-sync.
+
+## Implementation status (2026-10-21)
+
+- Bootstrap seeder now defines only `00-Обновить список задач`.
+- A narrow root-owned systemd.path worker performs catalog sync via the
+  existing localhost HTTPS Semaphore API.
+- Public catalog `catalog/semaphore-tasks.json` declares the rest;
+  invalid manifests block without deleting existing templates.
+- The initial Cloudflare task `10-Cloudflare · Туннель объекта (план)` is
+  **read-only planning only**. It does not create Cloudflare accounts, tokens,
+  Access policies, routes, or tunnels. A separately authorized provisioner
+  and runtime acceptance are still required.
+- This implementation is not yet production accepted: public CI and fresh
+  destructive E2E must pass, and the immutable installer pin must be advanced.
+- Do not assume a restored older CT includes the sync worker or initial 00 task.
