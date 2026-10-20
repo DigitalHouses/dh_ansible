@@ -44,19 +44,15 @@ class FakeAPI:
         raise AssertionError("No other methods allowed")
 
 
-def test_clean_apply_creates_runner_smoke_remote_and_pve_access_audit():
+def test_clean_bootstrap_apply_creates_only_self_sync():
     m = module()
     api = FakeAPI()
     result = m.provision(api, "demo-office", "Тестовый дом", True)
     assert result["state"] == "APPLIED"
     names = [c[2]["name"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")]
-    assert names == ["10-Проверка запуска Ansible", "20-Аудит локального runner",
-                     "30-Установить Remote Desktop Commander",
-                     "40-Проверка доступов PVE"]
+    assert names == ["00-Обновить список задач"]
     assert [c[2]["playbook"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")] == [
-        "playbooks/smoke-semaphore.yml", "playbooks/audit-runner.yml",
-        "playbooks/request-runner-remote-commander.yml",
-        "playbooks/request-pve-access-audit.yml"]
+        "playbooks/request-semaphore-catalog-sync.yml"]
     count = len([c for c in api.calls if c[0] == "POST"])
     again = m.provision(api, "demo-office", "Тестовый дом", True)
     assert again["state"] == "APPLIED"
@@ -115,7 +111,7 @@ def test_public_code_private_fleet_inventory_boundary():
     assert inventory["ssh_key_id"] == by_name["Runner inventory (local-only)"]["id"]
     templates = next(items for path, items in resources.items()
                      if path.endswith("/templates"))
-    assert len(templates) == 4
+    assert len(templates) == 1
     assert all(item["repository_id"] == code["id"] for item in templates)
     assert all(item["inventory_id"] == inventory["id"] for item in templates)
 
@@ -141,23 +137,23 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     original = list(api.records[path])
     old_ids = [x["id"] for x in original]
     # Simulate originally seeded unnumbered templates (including audit 40).
-    for existing, (_, old_name, _, _) in zip(original, m.TEMPLATES):
+    for existing, (_, old_name, _, _) in zip(original, m.BOOTSTRAP_TEMPLATES):
         existing["name"] = old_name
         existing["task_id"] = existing["id"] + 500
     n_post_before = sum(method == "POST" for method, _, _ in api.calls)
     n_put_before = sum(method == "PUT" for method, _, _ in api.calls)
     m.provision(api, "demo-office", "Demo Site", False)
-    assert [x["name"] for x in original] == [x[1] for x in m.TEMPLATES]
+    assert [x["name"] for x in original] == [x[1] for x in m.BOOTSTRAP_TEMPLATES]
     assert len([x for x in api.calls if x[0] == "PUT"]) == n_put_before
     m.provision(api, "demo-office", "Demo Site", True)
-    assert [x["name"] for x in original] == [x[0] for x in m.TEMPLATES]
+    assert [x["name"] for x in original] == [x[0] for x in m.BOOTSTRAP_TEMPLATES]
     assert [x["id"] for x in original] == old_ids
     assert [x["task_id"] for x in original] == [i + 500 for i in old_ids]
     assert sum(method == "POST" for method, _, _ in api.calls) == n_post_before
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 1
     # Reapply is a no-op: no duplicate templates or repeated changes.
     m.provision(api, "demo-office", "Demo Site", True)
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 1
 
 
 def test_rename_alias_collision_blocks_without_writing():
@@ -165,7 +161,7 @@ def test_rename_alias_collision_blocks_without_writing():
     api = FakeAPI()
     m.provision(api, "demo-office", "Demo Site", True)
     path = next(key for key in api.records if key.endswith("/templates"))
-    api.records[path].append({**api.records[path][0], "name": m.TEMPLATES[0][1],
+    api.records[path].append({**api.records[path][0], "name": m.BOOTSTRAP_TEMPLATES[0][1],
                               "id": 999})
     before = len([x for x in api.calls if x[0] in ("POST", "PUT")])
     with pytest.raises(m.Blocked, match="Conflicting old/new"):
@@ -178,7 +174,7 @@ def test_rename_blocks_config_drift_instead_of_overwriting():
     api = FakeAPI()
     m.provision(api, "demo-office", "Demo Site", True)
     path = next(key for key in api.records if key.endswith("/templates"))
-    api.records[path][0]["name"] = m.TEMPLATES[0][1]
+    api.records[path][0]["name"] = m.BOOTSTRAP_TEMPLATES[0][1]
     api.records[path][0]["autorun"] = True
     before = len([x for x in api.calls if x[0] == "PUT"])
     with pytest.raises(m.Blocked, match="drift"):
@@ -188,10 +184,10 @@ def test_rename_blocks_config_drift_instead_of_overwriting():
 
 def test_names_sort_globally_with_ten_step_gaps():
     m = module()
-    titles = [name for name, _, _, _ in m.TEMPLATES]
+    titles = [name for name, _, _, _ in m.BOOTSTRAP_TEMPLATES]
     assert titles == sorted(titles)
-    assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30, 40]
-    assert all(isinstance(previous, str) for _, previous, _, _ in m.TEMPLATES)
+    assert [int(name.split("-", 1)[0]) for name in titles] == [0]
+    assert all(isinstance(previous, str) for _, previous, _, _ in m.BOOTSTRAP_TEMPLATES)
 
 
 
@@ -202,13 +198,13 @@ def test_unnumbered_names_migrate_without_duplicates():
     path = next(p for p in api.records if p.endswith("/templates"))
     resources = api.records[path]
     before_ids = [x["id"] for x in resources]
-    for current, (_, old_name, _, _) in zip(resources, m.TEMPLATES):
+    for current, (_, old_name, _, _) in zip(resources, m.BOOTSTRAP_TEMPLATES):
         current["name"] = old_name
     writes = sum(meth == "POST" for meth, _, _ in api.calls)
     m.provision(api, "demo-office", "Demo Site", False)
-    assert [x["name"] for x in resources] == [row[1] for row in m.TEMPLATES]
+    assert [x["name"] for x in resources] == [row[1] for row in m.BOOTSTRAP_TEMPLATES]
     m.provision(api, "demo-office", "Demo Site", True)
-    assert [x["name"] for x in resources] == [row[0] for row in m.TEMPLATES]
+    assert [x["name"] for x in resources] == [row[0] for row in m.BOOTSTRAP_TEMPLATES]
     assert [x["id"] for x in resources] == before_ids
     assert sum(meth == "POST" for meth, _, _ in api.calls) == writes
 
@@ -224,3 +220,67 @@ def test_unknown_template_name_is_blocked_without_creating_duplicate():
         m.provision(api, "demo-office", "Demo Site", True)
     after_writes = len([entry for entry in api.calls if entry[0] in ("POST", "PUT")])
     assert after_writes == before_writes
+
+
+def sample_catalog(module):
+    return list(module.BOOTSTRAP_TEMPLATES) + [
+        ("10-Cloudflare · Туннель объекта (план)",
+         "10-Cloudflare · Туннель объекта (план)",
+         "playbooks/plan-cloudflare-tunnel.yml", module.VIEWS[0]),
+        ("20-Проверка запуска Ansible", "20-Проверка запуска Ansible",
+         "playbooks/smoke-semaphore.yml", module.VIEWS[3]),
+    ]
+
+
+def test_00_catalog_creates_tasks_and_repeat_sync_is_idempotent(monkeypatch):
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo", True)
+    monkeypatch.setattr(m, "read_public_catalog", lambda: sample_catalog(m))
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    path = next(p for p in api.records if p.endswith("/templates"))
+    templates = api.records[path]
+    assert [item["name"] for item in templates] == [t[0] for t in sample_catalog(m)]
+    original_ids = [item["id"] for item in templates]
+    changes = len([call for call in api.calls if call[0] in ("POST", "PUT")])
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    assert [item["id"] for item in templates] == original_ids
+    assert len([call for call in api.calls if call[0] in ("POST", "PUT")]) == changes
+
+
+def test_00_catalog_updates_known_template_in_place(monkeypatch):
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo", True)
+    tasks = sample_catalog(m)
+    monkeypatch.setattr(m, "read_public_catalog", lambda: tasks)
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    path = next(p for p in api.records if p.endswith("/templates"))
+    original = api.records[path][2]
+    original_id = original["id"]
+    original["task_id"] = 12345
+    changed = [*tasks]
+    changed[2] = (tasks[2][0], tasks[2][1],
+                  "playbooks/audit-runner.yml", tasks[2][3])
+    monkeypatch.setattr(m, "read_public_catalog", lambda: changed)
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    assert original["id"] == original_id
+    assert original["task_id"] == 12345
+    assert original["playbook"] == "playbooks/audit-runner.yml"
+
+
+def test_00_catalog_rejects_unsafe_existing_collision(monkeypatch):
+    m = module()
+    api = FakeAPI()
+    m.provision(api, "demo-office", "Demo", True)
+    monkeypatch.setattr(m, "read_public_catalog", lambda: sample_catalog(m))
+    path = next(p for p in api.records if p.endswith("/templates"))
+    api.records[path].append({
+        "id": 499, "name": "10-Cloudflare · Туннель объекта (план)",
+        "playbook": "playbooks/another.yml", "project_id": 10,
+        "description": "Not managed by DigitalHouses"})
+    before = len([x for x in api.calls if x[0] in ("POST", "PUT")])
+    with pytest.raises(m.Blocked, match="drift|not catalog-owned"):
+        m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    after = len([x for x in api.calls if x[0] in ("POST", "PUT")])
+    assert before == after
