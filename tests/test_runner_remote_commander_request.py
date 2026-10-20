@@ -34,7 +34,7 @@ def test_request_shows_pairing_url_before_waiting():
     tasks=yaml.safe_load(src)[0]["tasks"]
     names=[task["name"] for task in tasks]
     assert "Explain installation progress and device pairing" in names
-    assert names.index("Explain installation progress and device pairing") < names.index("Await Remote Commander installation")
+    assert names.index("Explain installation progress and device pairing") < names.index("Await managed Remote Commander service")
     assert "https://mcp.desktopcommander.app/device/verify" in src
     assert "Show actual one-time pairing code and URL inside Semaphore" in names
     assert names.index("Show actual one-time pairing code and URL inside Semaphore") > names.index("Await sanitized OAuth pairing status")
