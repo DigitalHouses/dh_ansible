@@ -708,7 +708,8 @@ def test_resume_fresh_recovers_vault_pve_identity_without_reenrollment():
     body = source.split("def apply(args, template):", 1)[1].split(
         "\ndef commission_pve_preflight(", 1)[0]
     # Mature resume is excluded; empty fresh resume is intentionally INCLUDED.
-    assert "if not (args.resume or args.resume_ansible or args.resume_semaphore):" in body
+    assert "if (not (args.resume or args.resume_ansible or args.resume_semaphore)" in body
+    assert "or (args.resume_semaphore and args.restore_pve_access)):" in body
     assert "if not (args.resume or args.resume_fresh or args.resume_ansible" not in body
     assert "provision_pve_identity_stage(args.site, args.runner_cidr," in body
     assert body.index("stage_pve_access_audit(checkout)") < body.index(
