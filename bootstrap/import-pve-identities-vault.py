@@ -23,8 +23,8 @@ import uuid
 from pathlib import Path
 
 STAGING_BASE = Path("/var/lib/digitalhouses/bootstrap")
-PRIVATE_KEY = Path("/var/lib/ansimble/.ssh/pve_host_write_ed25519")
-PUBLIC_KEY = Path("/var/lib/ansimble/.ssh/pve_host_write_ed25519.pub")
+PRIVATE_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519")
+PUBLIC_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519.pub")
 VAULT_BASE_DIR = Path("/var/lib/ansimble")
 
 
