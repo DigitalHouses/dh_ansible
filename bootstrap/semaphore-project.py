@@ -28,16 +28,14 @@ VIEWS = ("01 · Подготовка", "02 · Развёртывание", "03 �
 # Global sortable numeric prefixes on Semaphore task names. Leave gaps of ten.
 # Tuple: canonical title, unnumbered previous name, playbook, view.
 # This is display/order only, not required task execution or dependency.
-TEMPLATES = (
-    ("10-Проверка запуска Ansible", "Проверка запуска Ansible",
-     "playbooks/smoke-semaphore.yml", VIEWS[0]),
-    ("20-Аудит локального runner", "Аудит локального runner",
-     "playbooks/audit-runner.yml", VIEWS[0]),
-    ("30-Установить Remote Desktop Commander", "Установить Remote Desktop Commander",
-     "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
-    ("40-Проверка доступов PVE", "Проверка доступов PVE",
-     "playbooks/request-pve-access-audit.yml", VIEWS[3]),
+BOOTSTRAP_TEMPLATES = (
+    ("00-Обновить список задач", "Обновить список задач",
+     "playbooks/request-semaphore-catalog-sync.yml", VIEWS[0]),
 )
+CATALOG_PATH = "catalog/semaphore-tasks.json"
+CATALOG_SOURCE = "DigitalHouses/dh_ansible"
+MANAGED_DESCRIPTION = "DigitalHouses · управляется каталогом dh_ansible"
+
 API_BASE = "https://127.0.0.1:3000/api"
 
 
@@ -185,7 +183,9 @@ def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
     return matches_after[0]
 
 
-def provision(api, site: str, project_title: str, apply: bool):
+def provision(api, site: str, project_title: str, apply: bool, *, templates=None):
+    if templates is None:
+        templates = BOOTSTRAP_TEMPLATES
     project = ensure(api, "/projects", project_title,
                      {"name": project_title, "max_parallel_tasks": 1, "alert": False, "demo": False},
                      apply=apply)
@@ -242,10 +242,11 @@ def provision(api, site: str, project_title: str, apply: bool):
                               key="title", apply=apply)
     if not all(views.values()):
         return {"state": "PLAN_ONLY"}
-    for title, legacy_title, playbook, view in TEMPLATES:
+    for title, legacy_title, playbook, view in templates:
         ensure_template(api, prefix + "/templates?sort=name&order=asc",
                         title, legacy_title,
                {"name": title, "project_id": pid, "app": "ansible",
+                "description": MANAGED_DESCRIPTION,
                 "playbook": playbook, "arguments": "[]", "type": "",
                 "inventory_id": local_inventory["id"], "repository_id": code_repo["id"],
                 "environment_id": env["id"], "view_id": views[view]["id"],
@@ -254,12 +255,179 @@ def provision(api, site: str, project_title: str, apply: bool):
     return {"state": "APPLIED" if apply else "PLAN_ONLY", "project_id": pid}
 
 
+
+def read_public_catalog():
+    """Read a validated, immutable snapshot of the public catalog on each run."""
+    def get_json(url: str, size: int = 128_000):
+        request = urllib.request.Request(url, headers={
+            "User-Agent": "DigitalHouses-Semaphore-Catalog/1",
+            "Accept": "application/json"})
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                if response.status != 200:
+                    raise Blocked("Public catalog HTTP status is not 200")
+                data = response.read(size + 1)
+        except (OSError, urllib.error.URLError) as error:
+            raise Blocked("Cannot read public task catalog") from error
+        if len(data) > size:
+            raise Blocked("Public catalog exceeds size limit")
+        try:
+            return json.loads(data)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise Blocked("Invalid public catalog JSON") from error
+
+    head = get_json("https://api.github.com/repos/" + CATALOG_SOURCE + "/commits/main")
+    sha = head.get("sha") if isinstance(head, dict) else None
+    if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise Blocked("Invalid public catalog source commit")
+    raw = "https://raw.githubusercontent.com/" + CATALOG_SOURCE + "/" + sha + "/"
+    catalog = get_json(raw + CATALOG_PATH)
+    if not isinstance(catalog, dict) or catalog.get("schema") != 1:
+        raise Blocked("Unsupported public task catalog schema")
+    entries = catalog.get("tasks")
+    if not isinstance(entries, list) or not 1 <= len(entries) <= 90:
+        raise Blocked("Public task catalog has invalid task count")
+    seen = set()
+    tasks = []
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"title", "playbook", "view"}:
+            raise Blocked("Unexpected public task catalog fields")
+        title, playbook, view = (entry[k] for k in ("title", "playbook", "view"))
+        if (not isinstance(title, str) or
+                not re.fullmatch(r"[0-9]{2}-[^\r\n]{3,90}", title)):
+            raise Blocked("Invalid public catalog task title")
+        if title in seen:
+            raise Blocked("Duplicate public catalog title")
+        if not isinstance(playbook, str) or not re.fullmatch(
+                r"playbooks/[a-z0-9-]+\.yml", playbook):
+            raise Blocked("Invalid public catalog playbook path")
+        if view not in VIEWS:
+            raise Blocked("Unknown public catalog view")
+        seen.add(title)
+        # Playbooks must exist in the same public immutable source revision.
+        req = urllib.request.Request(raw + playbook, headers={
+            "User-Agent": "DigitalHouses-Semaphore-Catalog/1"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                if response.status != 200 or len(response.read(100_001)) > 100_000:
+                    raise Blocked("Catalog playbook missing or oversized")
+        except (OSError, urllib.error.URLError) as error:
+            raise Blocked("Catalog playbook not available: " + playbook) from error
+        tasks.append((title, title, playbook, view))
+    bootstrap = BOOTSTRAP_TEMPLATES[0]
+    if tasks[0][:1] != bootstrap[:1] or tasks[0][2:] != bootstrap[2:]:
+        raise Blocked("Catalog cannot change the bootstrap recovery task")
+    print("CATALOG_SOURCE_SHA=" + sha, flush=True)
+    return tasks
+
+
+def sync_existing_template(api, path, desired, *, apply=False):
+    """Modify only a known catalog-owned template, preserving ID and history."""
+    items = api.request("GET", path)
+    if not isinstance(items, list):
+        raise Blocked("Cannot read catalog templates")
+    title = desired["name"]
+    matches = [item for item in items if item.get("name") == title]
+    if len(matches) > 1:
+        raise Blocked("Duplicate catalog template name: " + title)
+    if not matches:
+        if any(item.get("playbook") == desired["playbook"] for item in items):
+            raise Blocked("Catalog playbook already bound to another task")
+        if not apply:
+            print("PLAN_CREATE=" + title, flush=True)
+            return
+        ensure(api, path, title, desired, apply=True,
+               compare=("playbook", "repository_id", "inventory_id"))
+        print("CATALOG_CREATED=" + title, flush=True)
+        return
+    current = matches[0]
+    immutable = ("project_id", "app", "repository_id", "inventory_id",
+                 "environment_id", "arguments", "type",
+                 "autorun", "allow_override_args_in_task")
+    if any(current.get(k) != desired.get(k) for k in immutable):
+        raise Blocked("Catalog template safety drift: " + title)
+    # The bootstrap template can be imported from old seeder versions only by
+    # a deliberately reviewed migration. On fresh installs it is managed.
+    if current.get("description") != MANAGED_DESCRIPTION:
+        raise Blocked("Template is not catalog-owned: " + title)
+    allowed_change = ("playbook", "view_id")
+    changed = [k for k in allowed_change if current.get(k) != desired.get(k)]
+    if not changed:
+        print("CATALOG_UNCHANGED=" + title, flush=True)
+        return
+    if title == BOOTSTRAP_TEMPLATES[0][0]:
+        raise Blocked("Never rewrite bootstrap recovery task")
+    if not apply:
+        print("PLAN_UPDATE=" + title, flush=True)
+        return
+    template_id = current.get("id")
+    if type(template_id) is not int or template_id <= 0:
+        raise Blocked("Invalid catalog template ID")
+    prefix = path.split("?")[0]
+    details = api.request("GET", prefix + "/" + str(template_id))
+    if details.get("id") != template_id or any(
+            details.get(k) != current.get(k) for k in immutable + allowed_change):
+        raise Blocked("Catalog template changed concurrently")
+    payload = dict(details)
+    payload.update({k: desired[k] for k in allowed_change})
+    api.request("PUT", prefix + "/" + str(template_id), payload)
+    verify = api.request("GET", prefix + "/" + str(template_id))
+    if verify.get("id") != template_id or any(
+            verify.get(k) != desired[k] for k in allowed_change):
+        raise Blocked("Catalog template update could not be verified")
+    print("CATALOG_UPDATED=" + title, flush=True)
+
+
+def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
+    """Synchronize templates of an existing, exactly identified site project."""
+    tasks = read_public_catalog()
+    # Bootstrap seeding establishes trusted keys/inventory/views and validates
+    # fixed resource identity before any dynamic template changes.
+    provision(api, site, project_title, apply, templates=BOOTSTRAP_TEMPLATES)
+    projects = api.request("GET", "/projects")
+    named = one_named(projects, project_title)
+    if not named:
+        raise Blocked("Existing site project is missing")
+    prefix = f"/project/{named['id']}"
+    views = api.request("GET", prefix + "/views")
+    repositories = api.request("GET", prefix + "/repositories?sort=name&order=asc")
+    inventory = api.request("GET", prefix + "/inventory?sort=name&order=asc")
+    environment = api.request("GET", prefix + "/environment?sort=name&order=asc")
+    view_ids = {v["title"]: v["id"] for v in views if v.get("title") in VIEWS}
+    repo = one_named(repositories, "DigitalHouses code")
+    inv = one_named(inventory, "Runner (local)")
+    env = one_named(environment, "Empty")
+    if len(view_ids) != len(VIEWS) or not all((repo, inv, env)):
+        raise Blocked("Site project prerequisite is missing")
+    path = prefix + "/templates?sort=name&order=asc"
+    # Check the complete catalog first (fail closed before any writes).
+    for title, _, playbook, view in tasks:
+        desired = {"name": title, "project_id": named["id"], "app": "ansible",
+                   "description": MANAGED_DESCRIPTION, "playbook": playbook,
+                   "arguments": "[]", "type": "",
+                   "inventory_id": inv["id"], "repository_id": repo["id"],
+                   "environment_id": env["id"], "view_id": view_ids[view],
+                   "allow_override_args_in_task": False, "autorun": False}
+        sync_existing_template(api, path, desired, apply=False)
+    if apply:
+        for title, _, playbook, view in tasks:
+            desired = {"name": title, "project_id": named["id"], "app": "ansible",
+                       "description": MANAGED_DESCRIPTION, "playbook": playbook,
+                       "arguments": "[]", "type": "",
+                       "inventory_id": inv["id"], "repository_id": repo["id"],
+                       "environment_id": env["id"], "view_id": view_ids[view],
+                       "allow_override_args_in_task": False, "autorun": False}
+            sync_existing_template(api, path, desired, apply=True)
+    return {"state": "APPLIED" if apply else "PLAN_ONLY", "project_id": named["id"]}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", required=True)
     parser.add_argument("--project-title", required=True)
     parser.add_argument("--admin-password-file", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--sync-catalog", action="store_true")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", args.site):
         raise Blocked("Invalid site ID")
@@ -275,7 +443,10 @@ def main(argv=None):
     api = API()
     api.login(password)
     del password
-    result = provision(api, args.site, args.project_title, args.apply)
+    if args.sync_catalog:
+        result = synchronize_catalog(api, args.site, args.project_title, apply=args.apply)
+    else:
+        result = provision(api, args.site, args.project_title, args.apply)
     print(f"SEMAPHORE_PROJECT={result['state']}", flush=True)
     print("NO_INFRASTRUCTURE_TASKS_LAUNCHED=YES", flush=True)
     return 0
