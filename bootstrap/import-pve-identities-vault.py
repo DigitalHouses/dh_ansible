@@ -22,6 +22,16 @@ import tempfile
 import uuid
 from pathlib import Path
 
+PVE_SCHEMA = 2
+PVE_PRINCIPALS = {
+    "audit": "ansible-audit@pve",
+    "write": "ansible-writer@pve",
+    "linux": "ansible-linux",
+}
+PVE_SECRET_NAMES = (
+    "audit_token_secret", "write_token_secret", "host_write_ssh_private_key",
+)
+
 STAGING_BASE = Path("/var/lib/digitalhouses/bootstrap")
 PRIVATE_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519")
 PUBLIC_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519.pub")
@@ -85,16 +95,25 @@ def recover_worker(args):
     if not isinstance(site, dict) or not isinstance(site.get("pve", {}), dict):
         blocked("Unexpected canonical site secrets schema")
     pve = site.get("pve", {})
-    keys = ("audit_token_secret", "write_token_secret", "host_write_ssh_private_key")
-    present = [isinstance(pve.get(k), str) and bool(pve.get(k)) for k in keys]
+    # Never mistake an older site's unversioned credentials for canonical PVE
+    # identities. Do not restore legacy keys or mint new tokens in that case.
+    present = [isinstance(pve.get(k), str) and bool(pve.get(k))
+               for k in PVE_SECRET_NAMES]
+    schema = pve.get("identity_schema")
+    principals = pve.get("principals")
     if not any(present):
+        if schema is not None or principals is not None:
+            blocked("Orphaned canonical PVE identity metadata without credentials")
         print("PVE_FLEET_RECOVERY=ABSENT")
         return
+    if schema != PVE_SCHEMA or principals != PVE_PRINCIPALS:
+        blocked("Unversioned or conflicting site PVE credentials; migrate explicitly")
     if not all(present):
         blocked("Incomplete canonical site PVE secret namespace")
-    if any(not re.fullmatch(r"[0-9a-fA-F-]{36}", pve[k]) for k in keys[:2]):
+    if any(not re.fullmatch(r"[0-9a-fA-F-]{36}", pve[k])
+           for k in PVE_SECRET_NAMES[:2]):
         blocked("Malformed canonical API token secret")
-    key = pve[keys[2]]
+    key = pve["host_write_ssh_private_key"]
     if "BEGIN OPENSSH PRIVATE KEY" not in key or len(key) > 16384:
         blocked("Malformed canonical SSH private key")
     private = PRIVATE_KEY
@@ -188,6 +207,8 @@ def worker(args):
     if not isinstance(existing_pve, dict):
         blocked("Existing site pve secret namespace is not a mapping")
     additions = {
+        "identity_schema": PVE_SCHEMA,
+        "principals": PVE_PRINCIPALS,
         "audit_token_secret": tokens["audit"],
         "write_token_secret": tokens["write"],
         "host_write_ssh_private_key": ssh_key,
