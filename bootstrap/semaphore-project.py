@@ -166,7 +166,7 @@ def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
                 "inventory_id", "repository_id", "environment_id", "view_id",
                 "autorun", "allow_override_args_in_task")
     drift_fields = [field for field in required
-                    if current.get(field) != desired.get(field)]
+                    if not template_equal(field, current.get(field), desired.get(field))]
     if drift_fields:
         raise Blocked(f"Existing Semaphore resource drift: {current.get('name')} "
                       f"fields={','.join(drift_fields)}")
@@ -184,7 +184,7 @@ def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
     if not isinstance(detail, dict) or detail.get("id") != template_id:
         raise Blocked("Semaphore template details mismatch; rename cancelled")
     if detail.get("name") != previous_title or any(
-            detail.get(field) != desired.get(field) for field in required):
+            not template_equal(field, detail.get(field), desired.get(field)) for field in required):
         raise Blocked("Semaphore template drift before rename; cancelled")
     # Use the API's own complete resource representation, changing name ONLY.
     # All other task/template options and the identifier remain unchanged.
