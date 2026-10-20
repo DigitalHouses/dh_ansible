@@ -37,13 +37,12 @@
   changed_when: false
   no_log: true
 
-- name: Assert PVE host-write client key fingerprint
+- name: Assert recovered PVE SSH private key is readable
   ansible.builtin.assert:
     that:
       - pve_host_write_client_fingerprint.stdout | trim | length > 0
     fail_msg: >-
-      Materialized PVE host-write private key fingerprint does not match
-      inventory.
+      Recovered PVE host-write SSH private key is invalid or unreadable.
   no_log: true
 
 - name: Derive PVE host-write public key
