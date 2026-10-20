@@ -44,17 +44,19 @@ class FakeAPI:
         raise AssertionError("No other methods allowed")
 
 
-def test_clean_apply_creates_two_audits_and_one_manual_installer():
+def test_clean_apply_creates_runner_smoke_remote_and_pve_access_audit():
     m = module()
     api = FakeAPI()
     result = m.provision(api, "demo-office", "Тестовый дом", True)
     assert result["state"] == "APPLIED"
     names = [c[2]["name"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")]
     assert names == ["10-Проверка запуска Ansible", "20-Аудит локального runner",
-                     "30-Установить Remote Desktop Commander"]
+                     "30-Установить Remote Desktop Commander",
+                     "40-Проверка доступов PVE"]
     assert [c[2]["playbook"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")] == [
         "playbooks/smoke-semaphore.yml", "playbooks/audit-runner.yml",
-        "playbooks/request-runner-remote-commander.yml"]
+        "playbooks/request-runner-remote-commander.yml",
+        "playbooks/request-pve-access-audit.yml"]
     count = len([c for c in api.calls if c[0] == "POST"])
     again = m.provision(api, "demo-office", "Тестовый дом", True)
     assert again["state"] == "APPLIED"
@@ -113,7 +115,7 @@ def test_public_code_private_fleet_inventory_boundary():
     assert inventory["ssh_key_id"] == by_name["Runner inventory (local-only)"]["id"]
     templates = next(items for path, items in resources.items()
                      if path.endswith("/templates"))
-    assert len(templates) == 3
+    assert len(templates) == 4
     assert all(item["repository_id"] == code["id"] for item in templates)
     assert all(item["inventory_id"] == inventory["id"] for item in templates)
 
@@ -138,7 +140,7 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     path = next(key for key in api.records if key.endswith("/templates"))
     original = list(api.records[path])
     old_ids = [x["id"] for x in original]
-    # Simulate the 3 unnumbered templates present in Semaphore 2.19.
+    # Simulate originally seeded unnumbered templates (including audit 40).
     for existing, (_, old_name, _, _) in zip(original, m.TEMPLATES):
         existing["name"] = old_name
         existing["task_id"] = existing["id"] + 500
