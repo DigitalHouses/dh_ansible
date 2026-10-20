@@ -355,8 +355,18 @@ def host(args):
             checked("pct", "push", str(args.ctid), str(args.vault_file), guest_temp + "/base.vault.yml")
             pct(args.ctid, "chmod", "0600", guest_temp + "/master",
                 guest_temp + "/staging.json", guest_temp + "/base.vault.yml")
-            print(pct(args.ctid, args.guest_python,
-                      "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
+            guest_script = "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py"
+            if args.verify_vault:
+                # Only an ephemeral verifier is shipped to the existing runner.
+                # Never upgrade its persistent bootstrap during a read-only test.
+                script = Path(__file__)
+                if script.is_symlink() or not script.is_file():
+                    blocked("Verified Vault worker source missing or unsafe")
+                checked("pct", "push", str(args.ctid), str(script),
+                        guest_temp + "/verify-worker.py")
+                pct(args.ctid, "chmod", "0700", guest_temp + "/verify-worker.py")
+                guest_script = guest_temp + "/verify-worker.py"
+            print(pct(args.ctid, args.guest_python, guest_script,
                       "--verify-worker" if args.verify_vault else "--worker",
                       "--site", args.site, "--ctid", str(args.ctid),
                       "--runner-ip", args.runner_ip, "--pve-ip", args.pve_ip,
@@ -379,7 +389,8 @@ def host(args):
         finally:
             subprocess.run(["pct", "exec", str(args.ctid), "--",
                             "rm", "-f", guest_temp + "/master", guest_temp + "/staging.json",
-                            guest_temp + "/base.vault.yml", guest_temp + "/candidate.vault.yml"],
+                            guest_temp + "/base.vault.yml", guest_temp + "/candidate.vault.yml",
+                            guest_temp + "/verify-worker.py"],
                            capture_output=True, check=False)
             subprocess.run(["pct", "exec", str(args.ctid), "--",
                             "rmdir", guest_temp], capture_output=True, check=False)
