@@ -35,6 +35,11 @@ ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 CODE_FILES = (
     "bootstrap/pve-identities.py",
     "bootstrap/import-pve-identities-vault.py",
+    "playbooks/audit-pve-access.yml",
+    "playbooks/request-pve-access-audit.yml",
+    "bootstrap/pve-access-audit-request.sh",
+    "bootstrap/dh-pve-access-audit.service",
+    "bootstrap/dh-pve-access-audit.path",
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
@@ -791,6 +796,38 @@ def stage_runner_remote_commander(site, checkout):
     print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
+def stage_pve_access_audit(checkout: Path) -> None:
+    """Stage only a fixed read-only root executor, activated by Semaphore."""
+    folder = "/opt/digitalhouses/bootstrap/pve-access"
+    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder)
+    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder + "/playbooks")
+    source = checkout / "playbooks/audit-pve-access.yml"
+    if not source.is_file() or source.is_symlink():
+        raise Blocked("Pinned PVE access playbook missing")
+    target = folder + "/playbooks/audit-pve-access.yml"
+    run("pct", "push", str(CTID), str(source), target, timeout=30)
+    pct_guest("chmod", "0644", target)
+    handoff = (
+        ("bootstrap/pve-access-audit-request.sh",
+         "/usr/local/sbin/dh-pve-access-audit", "0700"),
+        ("bootstrap/dh-pve-access-audit.service",
+         "/etc/systemd/system/dh-pve-access-audit.service", "0644"),
+        ("bootstrap/dh-pve-access-audit.path",
+         "/etc/systemd/system/dh-pve-access-audit.path", "0644"),
+    )
+    for relative, destination, mode in handoff:
+        item = checkout / relative
+        if item.is_symlink() or not item.is_file():
+            raise Blocked("Pinned PVE access audit worker missing")
+        run("pct", "push", str(CTID), str(item), destination, timeout=30)
+        pct_guest("chmod", mode, destination)
+    pct_guest("systemctl", "daemon-reload")
+    pct_guest("systemctl", "enable", "--now", "dh-pve-access-audit.path")
+    if pct_guest("systemctl", "is-active", "dh-pve-access-audit.path") != "active":
+        raise Blocked("Fixed-purpose PVE access audit watcher inactive")
+    print("PVE_ACCESS_SEMAPHORE_AUDIT=READY", flush=True)
+
+
 def assert_private_fleet_head(expected_fleet_commit: str, env: dict) -> dict:
     """No secret issue until private Git HEAD agrees with the pinned snapshot."""
     target = "repos/" + FLEET_REPO
@@ -1017,6 +1054,7 @@ def apply(args, template):
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
+        stage_pve_access_audit(checkout)
         # Credential enrollment is part of a NEW bootstrap only; recovery
         # and resume cannot silently issue API users/tokens or SSH keys.
         if not (args.resume or args.resume_fresh or args.resume_ansible
