@@ -5,7 +5,7 @@
 A site engineer uses one approved installer, then operates Ansible components through Semaphore. No parallel installation wizard is deployed.
 
 - One codebase: `DigitalHouses/dh_ansible`.
-- Site data and encrypted credentials: `DigitalHouses/dh_ansimble_fleet_detail`, permanently private.
+- Site data and encrypted credentials: `DigitalHouses/dh_ansible_fleet_detail`, permanently private.
 - GitHub authentication is only for owner-authorized acquisition of private data; public code is available without a deploy key.
 - Different immutable source commits for code and Fleet Detail.
 - Separate Semaphore Git repository records for public playbooks and private inventory.
