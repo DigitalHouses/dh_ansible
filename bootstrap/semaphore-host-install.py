@@ -847,36 +847,63 @@ def publish_encrypted_pve_vault(source_vault: Path, candidate: Path,
 def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                                  checkout: Path, expected_fleet_commit: str,
                                  owner_master: str, env: dict) -> None:
-    """Create credentials as PVE root; seal to Fleet Vault before declaring PASS.
-
-    Fail closed on concurrent Fleet changes; no secret values in stdout or argv.
-    """
-    record = assert_private_fleet_head(expected_fleet_commit, env)
+    """Restore canonical credentials from Fleet or enroll and publish new ones."""
     source_vault = checkout.parent / "fleet-detail/secrets/fleet.vault.yml"
-    if base64.b64decode(record.get("content", "")) != source_vault.read_bytes():
-        raise Blocked("Fleet source is not pinned to the current private main")
     source = checkout / "bootstrap/pve-identities.py"
     worker = checkout / "bootstrap/import-pve-identities-vault.py"
-    if any(path.is_symlink() or not path.is_file() for path in (source, worker)):
-        raise Blocked("Pinned PVE identity bootstrap or Vault worker missing")
+    if any(path.is_symlink() or not path.is_file()
+           for path in (source_vault, source, worker)):
+        raise Blocked("Pinned PVE credentials inputs are missing")
     runner_ip = str(ipaddress.IPv4Interface(runner_cidr).ip)
-    # PVE Linux user/tokens have not been created before all gates above.
-    run("python3", str(source),
-        "--site", site, "--runner-ctid", str(CTID),
-        "--runner-ip", runner_ip, "--pve-ip", pve_ip,
-        "--apply", timeout=180)
-    print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
-
-    # Required data remain root-only on PVE, and all guest secrets are temporary.
+    guest_worker = "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py"
     pct_guest("install", "-d", "-m", "0700", "/opt/digitalhouses/bootstrap")
-    run("pct", "push", str(CTID), str(worker),
-        "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py")
-    pct_guest("chmod", "0700", "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py")
+    run("pct", "push", str(CTID), str(worker), guest_worker)
+    pct_guest("chmod", "0700", guest_worker)
     with tempfile.TemporaryDirectory(prefix="dh-pve-vault-", dir="/run") as loc:
         tmp = Path(loc)
         master_path = tmp / "master"
         master_path.write_bytes(owner_master.encode("utf-8") + b"\\n")
         master_path.chmod(0o600)
+        guest_temp = "/dev/shm/dh-pve-identity"
+        # An interrupted prior operation must be reconciled, never overwritten.
+        pct_guest("install", "-d", "-m", "0700", guest_temp)
+        try:
+            run("pct", "push", str(CTID), str(master_path), guest_temp + "/master")
+            run("pct", "push", str(CTID), str(source_vault), guest_temp + "/base.vault.yml")
+            pct_guest("chmod", "0600", guest_temp + "/master",
+                      guest_temp + "/base.vault.yml")
+            response = pct_guest(
+                "/opt/ansimble/venv/bin/python", guest_worker,
+                "--recover", "--site", site, "--ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--master-file", guest_temp + "/master",
+                "--vault-file", guest_temp + "/base.vault.yml", timeout=90)
+        finally:
+            # Secrets remain temporary regardless of operation success.
+            pct_guest("rm", "-f", guest_temp + "/master",
+                      guest_temp + "/base.vault.yml")
+            pct_guest("rmdir", guest_temp)
+        if "PVE_FLEET_RECOVERY=PASS" in response:
+            # Existing PVE tokens remain unchanged. Only the authorized
+            # restored SSH key may be reattached to the original host.
+            run("python3", str(source),
+                "--site", site, "--runner-ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--reconcile-restored", "--apply", timeout=90)
+            print("PVE_CREDENTIALS=RESTORED_FROM_FLEET", flush=True)
+            return
+        if "PVE_FLEET_RECOVERY=ABSENT" not in response:
+            raise Blocked("Unknown encrypted Fleet PVE recovery state")
+        # Only new identities may be created. Source is pinned, publication
+        # requires exact GitHub main HEAD/CAS to avoid overwriting concurrent changes.
+        record = assert_private_fleet_head(expected_fleet_commit, env)
+        if base64.b64decode(record.get("content", "")) != source_vault.read_bytes():
+            raise Blocked("Fleet source is not pinned to the current private main")
+        run("python3", str(source),
+            "--site", site, "--runner-ctid", str(CTID),
+            "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+            "--apply", timeout=180)
+        print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
         candidate = tmp / "candidate.vault.yml"
         run("python3", str(worker),
             "--site", site, "--ctid", str(CTID),
