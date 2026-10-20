@@ -137,7 +137,7 @@ def test_resume_is_rejected_for_existing_guests_with_partial_semaphore_state(mon
     import types
     monkeypatch.setattr(pathlib.Path,"is_file",lambda p: True if str(p).endswith("pve_host_write_ed25519") or str(p).endswith("pve-identities-home-pending.json") else False)
     # Skip dynamic read-only escrow conditions in this isolated test by using a non-pilot site.
-    with pytest.raises(m.Blocked,match="partial Semaphore runtime"):
+    with pytest.raises(m.Blocked,match=r"partial Semaphore runtime: /etc/semaphore/config.json"):
         m.host_preflight("demo-office","198.51.100.231/24","198.51.100.1","198.51.100.30",resume=True)
 
 def test_host_apt_refresh_rejects_partial_indexes():
