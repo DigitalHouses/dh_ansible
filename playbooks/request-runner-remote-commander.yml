@@ -46,6 +46,15 @@
       failed_when: false
       changed_when: false
       check_mode: false
+    - name: Explain installation progress and device pairing
+      ansible.builtin.debug:
+        msg:
+          - "Remote Commander is installed by the local systemd watcher; package setup may take several minutes."
+          - "Semaphore waits for the managed service for up to 15 minutes."
+          - "Pairing URL: https://mcp.desktopcommander.app/device/verify"
+          - "First-time pairing code appears in the runner systemd journal; verify it in your browser."
+          - "Service ACTIVE confirms installation only, not remote connectivity."
+
     - name: Request fixed local installation
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-remote-commander.request
@@ -67,3 +76,7 @@
           result: PASS
           site: "{{ site.id }}"
           component: remote_desktop_commander
+          service_status: ACTIVE
+          connection_status: NOT_VERIFIED
+          pairing_url: "https://mcp.desktopcommander.app/device/verify"
+          pairing_instruction: "Obtain the temporary code from the remote service journal on PVE; approve in your browser."
