@@ -67,12 +67,17 @@
     - name: Require successful catalog sync
       ansible.builtin.assert:
         that:
-          - catalog_sync_status.stdout == catalog_sync_id.stdout ~ '|PASS'
+          - catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|PASS|')
+          - catalog_sync_status.stdout.split('|') | length == 6
         fail_msg: "Catalog sync failed; inspect root-only /var/log/dh-semaphore-catalog-sync.log"
     - name: Report synced task catalog
       ansible.builtin.debug:
         msg:
           result: PASS
+          source_commit: "{{ catalog_sync_status.stdout.split('|')[2] }}"
+          created: "{{ catalog_sync_status.stdout.split('|')[3] | int }}"
+          updated: "{{ catalog_sync_status.stdout.split('|')[4] | int }}"
+          unchanged: "{{ catalog_sync_status.stdout.split('|')[5] | int }}"
           site: "{{ site.id }}"
           catalog: "DigitalHouses/dh_ansible"
           retained_bootstrap_task: "00-Обновить список задач"
