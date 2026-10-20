@@ -61,6 +61,70 @@ def secure_read(path: Path, require_uid: int = 0) -> bytes:
     return path.read_bytes()
 
 
+def recover_worker(args):
+    """Restore only canonical site SSH key from approved encrypted Fleet Vault.
+
+    Returns ABSENT when the site has no canonical credentials, never prints
+    tokens or SSH key. Partial credential namespaces fail closed.
+    """
+    from ansible.parsing.vault import VaultLib, VaultSecret
+    import yaml
+    if os.geteuid() != 0 or checked("hostname") != f"ansible-{args.site}":
+        blocked("Wrong runner for canonical PVE recovery")
+    master = secure_read(Path(args.master_file)).rstrip(b"\\r\\n")
+    plaintext = VaultLib([("default", VaultSecret(master))]).decrypt(
+        secure_read(Path(args.vault_file)))
+    vault = yaml.safe_load(plaintext)
+    if isinstance(vault, dict) and isinstance(vault.get("site_passport"), dict):
+        passport = vault["site_passport"]
+        if passport.get("site_id") != args.site:
+            blocked("Wrong site passport")
+        site = passport.get("site_secrets", {})
+    else:
+        site = vault.get("fleet_secrets", {}).get("sites", {}).get(args.site, {})
+    if not isinstance(site, dict) or not isinstance(site.get("pve", {}), dict):
+        blocked("Unexpected canonical site secrets schema")
+    pve = site.get("pve", {})
+    keys = ("audit_token_secret", "write_token_secret", "host_write_ssh_private_key")
+    present = [isinstance(pve.get(k), str) and bool(pve.get(k)) for k in keys]
+    if not any(present):
+        print("PVE_FLEET_RECOVERY=ABSENT")
+        return
+    if not all(present):
+        blocked("Incomplete canonical site PVE secret namespace")
+    if any(not re.fullmatch(r"[0-9a-fA-F-]{36}", pve[k]) for k in keys[:2]):
+        blocked("Malformed canonical API token secret")
+    key = pve[keys[2]]
+    if "BEGIN OPENSSH PRIVATE KEY" not in key or len(key) > 16384:
+        blocked("Malformed canonical SSH private key")
+    private = PRIVATE_KEY
+    if private.is_symlink() or private.with_suffix(private.suffix + ".pub").is_symlink():
+        blocked("SSH identity is a symlink")
+    private.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(private.parent, 0o700)
+    key_bytes = (key.rstrip("\\r\\n") + "\\n").encode()
+    if private.exists():
+        if secure_read(private) != key_bytes:
+            blocked("Existing runner SSH key conflicts with encrypted Fleet Vault")
+    else:
+        fd = os.open(private, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        with os.fdopen(fd, "wb") as out:
+            out.write(key_bytes)
+            out.flush()
+            os.fsync(out.fileno())
+    public_line = checked("ssh-keygen", "-y", "-P", "", "-f", str(private)).strip()
+    if len(public_line.split()) < 2 or public_line.split()[0] != "ssh-ed25519":
+        blocked("Recovered SSH key is not ED25519")
+    if PUBLIC_KEY.exists():
+        if PUBLIC_KEY.read_text().strip().split()[:2] != public_line.split()[:2]:
+            blocked("Existing runner SSH public key conflicts with Fleet Vault")
+    else:
+        fd = os.open(PUBLIC_KEY, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        with os.fdopen(fd, "w") as out:
+            out.write(public_line + "\\n")
+    print("PVE_FLEET_RECOVERY=PASS")
+
+
 def worker(args):
     from ansible.parsing.vault import VaultLib, VaultSecret
     import yaml
@@ -242,6 +306,7 @@ def host(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", action="store_true")
+    parser.add_argument("--recover", action="store_true")
     parser.add_argument("--site", required=True)
     parser.add_argument("--ctid", type=int, required=True)
     parser.add_argument("--runner-ip", required=True)
@@ -252,7 +317,11 @@ def main():
     parser.add_argument("--candidate-file")
     parser.add_argument("--output-file")
     args = parser.parse_args()
-    if args.worker:
+    if args.recover:
+        if not args.master_file or not args.vault_file:
+            blocked("Runner recovery requires secure temporary Fleet Vault files")
+        recover_worker(args)
+    elif args.worker:
         if not args.master_file or not args.staged_tokens or not args.vault_file or not args.candidate_file:
             blocked("Guest worker requires secret file paths")
         worker(args)
