@@ -22,8 +22,8 @@ encrypted, private, and is **not** added as a Semaphore Git repository.
    unambiguous plan (created / updated / unchanged / conflict), then applies only
    allowable catalog changes via localhost HTTPS Semaphore API. It never directly
    modifies Semaphore's database.
-4. The synchronized catalog includes `00-Cloudflare · Доступ к Semaphore`,
-   whose priority is enabling protected remote administration.
+4. The synchronized catalog includes `00-Cloudflare · Туннель объекта`,
+   whose priority is protected remote administration of PVE and its guests.
 5. Engineer executes task 00 locally once; when protected remote connectivity
    is verified, subsequent jobs can be launched remotely through the site UI.
 
@@ -52,16 +52,26 @@ the first successful task 10 synchronization.
   A failed update leaves the existing working catalog intact as far as possible.
 
 ## Task 00 · Cloudflare remote entrypoint
-- Canonical managed hostname proposal:
-  `<site-id>-semaphore.digitalhouses.vip`;
-  `serzhan-home-semaphore.digitalhouses.vip` -> runner
-  `https://192.168.11.231:3000/` at this pilot.
-  Values must derive from Fleet/site inventory, not be hard-coded per site.
-- Respect accepted fleet principle: one Cloudflare account, **one tunnel
-  per site/PVE**, many published applications on that tunnel.
-  Reuse the existing site's PVE connector/tunnel when present; no new
-  tunnel per app. Creating the site's first tunnel/connector is a separate
-  branch of the same task with explicit privileged provisioning.
+- Canonical **tunnel name = `<site-id>`**, not an individual app or guest.
+  Home pilot: Cloudflare Tunnel `serzhan-home`. A single connector on the
+  site's PVE routes traffic to its PVE UI and its VM/LXC services.
+- Canonical public hostnames under `digitalhouses.vip`:
+  - PVE itself: `<site-id>-pve.digitalhouses.vip`.
+  - Service hosted in a PVE guest: `<site-id>-pve-<guest-name>.digitalhouses.vip`.
+  The `guest-name` is the unique declarative service/guest slug, **not**
+  necessarily the actual Linux hostname or the numeric VMID/CTID.
+- Accepted concrete mappings for `serzhan-home`:
+  - `serzhan-home-pve.digitalhouses.vip` =>
+    `https://192.168.11.30:8006` (PVE).
+  - `serzhan-home-pve-ansible.digitalhouses.vip` =>
+    `https://192.168.11.231:3000` (CT1231 Semaphore).
+  URL route and origin scheme must be treated as separate data fields.
+- Values must derive from canonical Fleet/site inventory; validate uniqueness
+  of guest/service slugs on the site, not hard-code mappings per site.
+- Respect the fleet principle: one Cloudflare account, **one tunnel per site**,
+  many published applications on that tunnel; do not create a tunnel per guest.
+  Reuse the existing site's PVE connector/tunnel if present; create the first
+  tunnel/connector only after explicit privileged authorization.
 - First verify or create Cloudflare Access protection for the exact hostname,
   using approved DigitalHouses administrator policy. Fail closed unless
   protection is verified; only then publish DNS and tunnel route. Prefer
