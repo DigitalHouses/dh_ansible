@@ -90,6 +90,24 @@ class API:
         self.request("POST", "/auth/login", {"auth": "admin", "password": password})
 
 
+def canonical_template_field(field, value):
+    """Semaphore 2.19 can omit default fields in template list API responses.
+
+    Treat only semantically identical safe defaults as equal; never accept
+    true autorun or enabled argument override as an omitted false default.
+    """
+    if field == "type" and value in (None, "", "task"):
+        return "task"
+    if field in ("autorun", "allow_override_args_in_task") and value is None:
+        return False
+    return value
+
+
+def template_equal(field, actual, desired):
+    return (canonical_template_field(field, actual)
+            == canonical_template_field(field, desired))
+
+
 def one_named(objects, name, *, name_key="name"):
     matches = [obj for obj in objects if obj.get(name_key) == name]
     if len(matches) > 1:
@@ -375,7 +393,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
     immutable = ("project_id", "app", "repository_id", "inventory_id",
                  "environment_id", "arguments", "type",
                  "autorun", "allow_override_args_in_task")
-    if any(current.get(k) != desired.get(k) for k in immutable):
+    if any(not template_equal(k, current.get(k), desired.get(k)) for k in immutable):
         raise Blocked("Catalog template safety drift: " + title)
     # The bootstrap template can be imported from old seeder versions only by
     # a deliberately reviewed migration. On fresh installs it is managed.
@@ -398,7 +416,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
     prefix = path.split("?")[0]
     details = api.request("GET", prefix + "/" + str(template_id))
     if details.get("id") != template_id or any(
-            details.get(k) != current.get(k) for k in immutable + allowed_change):
+            not template_equal(k, details.get(k), current.get(k)) for k in immutable + allowed_change):
         raise Blocked("Catalog template changed concurrently")
     payload = dict(details)
     payload.update({k: desired[k] for k in allowed_change})
