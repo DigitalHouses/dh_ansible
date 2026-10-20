@@ -53,5 +53,7 @@ def test_root_worker_is_pinned_to_specific_readonly_playbook():
     assert '"playbooks/request-pve-access-audit.yml"' in host
     assert 'stage_pve_access_audit(checkout)' in host
     assert '"--reconcile-restored", "--apply"' in host
-    seeder = read("bootstrap/semaphore-project.py")
-    assert "40-Проверка доступов PVE" in seeder
+    catalog = read("catalog/semaphore-tasks.json")
+    assert "50-Проверка доступов PVE" in catalog
+    assert "playbooks/request-pve-access-audit.yml" in catalog
+    assert "00-Обновить список задач" in read("bootstrap/semaphore-project.py")
