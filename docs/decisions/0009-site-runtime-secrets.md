@@ -6,7 +6,7 @@ Date: 2026-10-07
 
 ## Context
 
-Routine Ansimble operations need site credentials without requiring the operator
+Routine Ansible operations need site credentials without requiring the operator
 to type the Fleet Vault master password for every audit or apply.
 
 Persisting the Fleet master password on a managed PVE host would collapse the
@@ -23,7 +23,7 @@ Each site may publish a **site-scoped runtime secret envelope** to its own PVE
 host:
 
 ```text
-/var/lib/ansimble/runtime/<site>.yml
+/var/lib/ansible/runtime/<site>.yml
 ```
 
 Properties:
