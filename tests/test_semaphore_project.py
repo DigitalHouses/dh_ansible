@@ -325,3 +325,67 @@ def test_self_sync_waits_for_final_worker_status():
     assert "catalog_sync_status.stdout == catalog_sync_id.stdout ~ '|FAILED'" in play
     assert "until: catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|')" not in play
     assert "catalog_sync_status.stdout.split('|') | length == 6" in play
+
+
+def create_accepted_legacy_four(api, m):
+    templates = tuple((old, old, playbook, old_view)
+                      for old, _new, playbook, old_view, _view in m.LEGACY_MIGRATIONS)
+    m.provision(api, "demo-office", "Demo", True, templates=templates)
+    path = next(p for p in api.records if p.endswith("/templates"))
+    for template in api.records[path]:
+        template.pop("description", None)
+    return path
+
+
+def test_legacy_four_task_migration_preserves_id_and_execution_history(monkeypatch):
+    m = module()
+    api = FakeAPI()
+    path = create_accepted_legacy_four(api, m)
+    existing = api.records[path]
+    expected_ids = {t["playbook"]: t["id"] for t in existing}
+    for t in existing:
+        t["task_id"] = 800 + t["id"]
+    before_writes = sum(k in ("POST", "PUT") for k, _, _ in api.calls)
+    plan = m.migrate_accepted_four_task_catalog(api, "demo-office", "Demo", apply=False)
+    assert plan["state"] == "PLAN_ONLY"
+    assert sum(k in ("POST", "PUT") for k, _, _ in api.calls) == before_writes
+    result = m.migrate_accepted_four_task_catalog(api, "demo-office", "Demo", apply=True)
+    assert result["state"] == "APPLIED"
+    assert len(existing) == 5
+    assert "00-Обновить список задач" in [t["name"] for t in existing]
+    for task in existing:
+        if task["playbook"] in expected_ids:
+            assert task["id"] == expected_ids[task["playbook"]]
+            assert task["task_id"] == task["id"] + 800
+            assert task["description"] == m.MANAGED_DESCRIPTION
+    writes_after = sum(k in ("POST", "PUT") for k, _, _ in api.calls)
+    result = m.migrate_accepted_four_task_catalog(api, "demo-office", "Demo", apply=True)
+    assert result["state"] == "APPLIED"
+    assert sum(k in ("POST", "PUT") for k, _, _ in api.calls) == writes_after
+    monkeypatch.setattr(m, "read_public_catalog", lambda: [
+        m.BOOTSTRAP_TEMPLATES[0],
+        ("10-Cloudflare · Туннель объекта (план)",
+         "10-Cloudflare · Туннель объекта (план)",
+         "playbooks/plan-cloudflare-tunnel.yml", m.VIEWS[0]),
+        *( (new, new, playbook, new_view)
+          for _old, new, playbook, _old_view, new_view in m.LEGACY_MIGRATIONS),
+    ])
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    assert len(api.records[path]) == 6
+
+
+def test_legacy_migration_blocks_collisions_without_any_writes():
+    m = module()
+    api = FakeAPI()
+    path = create_accepted_legacy_four(api, m)
+    api.records[path][0]["name"] = "unexpected name"
+    before = sum(k in ("POST", "PUT") for k, _, _ in api.calls)
+    with pytest.raises(m.Blocked, match="Unexpected renamed"):
+        m.migrate_accepted_four_task_catalog(api, "demo-office", "Demo", apply=True)
+    assert sum(k in ("POST", "PUT") for k, _, _ in api.calls) == before
+
+
+def test_migration_descending_order_handles_overlapping_titles():
+    m = module()
+    assert [n[0][:2] for n in m.LEGACY_MIGRATIONS] == ["40", "30", "20", "10"]
+    assert [n[1][:2] for n in m.LEGACY_MIGRATIONS] == ["50", "40", "30", "20"]
