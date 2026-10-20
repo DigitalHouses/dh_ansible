@@ -883,7 +883,8 @@ def publish_encrypted_pve_vault(source_vault: Path, candidate: Path,
 
 def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                                  checkout: Path, expected_fleet_commit: str,
-                                 owner_master: str, env: dict) -> None:
+                                 owner_master: str, env: dict,
+                                 *, guest_python: str = "/opt/ansible/venv/bin/python") -> None:
     """Restore canonical credentials from Fleet or enroll and publish new ones."""
     source_vault = checkout.parent / "fleet-detail/secrets/fleet.vault.yml"
     source = checkout / "bootstrap/pve-identities.py"
@@ -910,7 +911,7 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
             pct_guest("chmod", "0600", guest_temp + "/master",
                       guest_temp + "/base.vault.yml")
             response = pct_guest(
-                "/opt/ansible/venv/bin/python", guest_worker,
+                guest_python, guest_worker,
                 "--recover", "--site", site, "--ctid", str(CTID),
                 "--runner-ip", runner_ip, "--pve-ip", pve_ip,
                 "--master-file", guest_temp + "/master",
