@@ -899,7 +899,7 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
     with tempfile.TemporaryDirectory(prefix="dh-pve-vault-", dir="/run") as loc:
         tmp = Path(loc)
         master_path = tmp / "master"
-        master_path.write_bytes(owner_master.encode("utf-8") + b"\\n")
+        master_path.write_bytes(owner_master.encode("utf-8") + b"\n")
         master_path.chmod(0o600)
         guest_temp = "/dev/shm/dh-pve-identity"
         # An interrupted prior operation must be reconciled, never overwritten.
