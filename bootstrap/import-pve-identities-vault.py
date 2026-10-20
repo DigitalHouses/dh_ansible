@@ -25,7 +25,7 @@ from pathlib import Path
 STAGING_BASE = Path("/var/lib/digitalhouses/bootstrap")
 PRIVATE_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519")
 PUBLIC_KEY = Path("/var/lib/ansible/.ssh/pve_host_write_ed25519.pub")
-VAULT_BASE_DIR = Path("/var/lib/ansimble")
+VAULT_BASE_DIR = Path("/dev/shm")
 
 
 def vault_base(site: str) -> Path:
@@ -80,7 +80,6 @@ def worker(args):
         blocked("PVE bootstrap staging schema mismatch")
     if stage.get("principals") != {"audit": "ansible-audit@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"}:
         blocked("PVE bootstrap staging principals mismatch")
-        blocked("PVE bootstrap staging site mismatch")
     if stage.get("runner_ip") != args.runner_ip or stage.get("pve_ip") != args.pve_ip:
         blocked("PVE bootstrap staging IP mismatch")
     tokens = stage.get("pve_tokens")
@@ -96,10 +95,10 @@ def worker(args):
     generated = checked("ssh-keygen", "-y", "-P", "", "-f", str(PRIVATE_KEY)).split()
     if generated[:2] != public[:2]:
         blocked("SSH private/public key mismatch")
-    candidate = vault_candidate(args.site)
+    candidate = Path(args.candidate_file)
     if candidate.exists() or candidate.is_symlink():
         blocked("Existing candidate; do not overwrite")
-    base = secure_read(vault_base(args.site), require_uid=home_uid)
+    base = secure_read(Path(args.vault_file), require_uid=home_uid)
     if not base.startswith(b"$ANSIBLE_VAULT;"):
         blocked("Git source is not encrypted Vault data")
     secret = VaultSecret(master)
@@ -185,13 +184,14 @@ def host(args):
         blocked("PVE identity schema mismatch")
     if bundle.get("principals") != {"audit": "ansible-audit@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"}:
         blocked("PVE identity principal mismatch")
-        blocked("PVE identity staging site mismatch")
     if bundle.get("runner_ip") != args.runner_ip or bundle.get("pve_ip") != args.pve_ip:
         blocked("PVE identity staging address mismatch")
     if set(bundle.get("pve_tokens", {})) != {"audit", "write"}:
         blocked("Both PVE tokens must exist before Vault import")
-    if pct(args.ctid, "test", "-f", str(vault_base(args.site))) != "":
-        blocked("Unexpected runner vault source check")
+    if not args.vault_file or not args.master_file or not args.output_file:
+        blocked("PVE must provide trusted vault, master, and encrypted output paths")
+    secure_read(Path(args.vault_file))
+    secure_read(Path(args.master_file))
     # Preflight candidate absent before asking for master.
     status = subprocess.run(
         ["pct", "exec", str(args.ctid), "--", "test", "-e", str(vault_candidate(args.site))],
@@ -202,30 +202,42 @@ def host(args):
     print("PVE_STAGE=PASS")
     print("RUNNER_VAULT_SOURCE=PASS")
     print("MASTER_PASSWORD=LOCAL_TERMINAL_ONLY")
-    master = getpass.getpass("Fleet Vault master password (hidden): ")
-    if len(master) < 8:
-        blocked("Master password too short")
+    master = secure_read(Path(args.master_file))
+    if not 8 <= len(master.rstrip(b"\r\n")) <= 1024:
+        blocked("Master password invalid")
     guest_temp = f"/dev/shm/dh-fleet-{uuid.uuid4().hex}"
     with tempfile.TemporaryDirectory(prefix="dh-fleet-", dir="/run") as host_tmp:
         host_master = Path(host_tmp) / "master"
-        host_master.write_bytes(master.encode("utf-8") + b"\n")
+        host_master.write_bytes(master)
         os.chmod(host_master, 0o600)
         del master
         try:
             pct(args.ctid, "install", "-d", "-m", "0700", guest_temp)
             checked("pct", "push", str(args.ctid), str(host_master), guest_temp + "/master")
             checked("pct", "push", str(args.ctid), str(staging), guest_temp + "/staging.json")
+            checked("pct", "push", str(args.ctid), str(args.vault_file), guest_temp + "/base.vault.yml")
             pct(args.ctid, "chmod", "0600", guest_temp + "/master",
                 guest_temp + "/staging.json")
             print(pct(args.ctid, "/opt/ansimble/venv/bin/python",
-                      "/var/lib/ansimble/import-pve-identities-vault.py",
+                      "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
                       "--worker", "--site", args.site, "--ctid", str(args.ctid),
                       "--runner-ip", args.runner_ip, "--pve-ip", args.pve_ip,
                       "--master-file", guest_temp + "/master",
-                      "--staged-tokens", guest_temp + "/staging.json"))
+                      "--staged-tokens", guest_temp + "/staging.json",
+                      "--vault-file", guest_temp + "/base.vault.yml",
+                      "--candidate-file", guest_temp + "/candidate.vault.yml"))
+            if Path(args.output_file).exists():
+                blocked("Encrypted candidate output already exists")
+            checked("pct", "pull", str(args.ctid), guest_temp + "/candidate.vault.yml",
+                    str(args.output_file))
+            encrypted = secure_read(Path(args.output_file))
+            if not encrypted.startswith(b"$ANSIBLE_VAULT;"):
+                blocked("Returned candidate is not Ansible Vault ciphertext")
+            print("ENCRYPTED_OUTPUT=PASS")
         finally:
             subprocess.run(["pct", "exec", str(args.ctid), "--",
-                            "rm", "-f", guest_temp + "/master", guest_temp + "/staging.json"],
+                            "rm", "-f", guest_temp + "/master", guest_temp + "/staging.json",
+                            guest_temp + "/base.vault.yml", guest_temp + "/candidate.vault.yml"],
                            capture_output=True, check=False)
             subprocess.run(["pct", "exec", str(args.ctid), "--",
                             "rmdir", guest_temp], capture_output=True, check=False)
@@ -242,9 +254,12 @@ def main():
     parser.add_argument("--pve-ip", required=True)
     parser.add_argument("--master-file")
     parser.add_argument("--staged-tokens")
+    parser.add_argument("--vault-file")
+    parser.add_argument("--candidate-file")
+    parser.add_argument("--output-file")
     args = parser.parse_args()
     if args.worker:
-        if not args.master_file or not args.staged_tokens:
+        if not args.master_file or not args.staged_tokens or not args.vault_file or not args.candidate_file:
             blocked("Guest worker requires secret file paths")
         worker(args)
     else:
