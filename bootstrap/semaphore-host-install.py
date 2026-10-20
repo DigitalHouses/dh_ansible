@@ -883,6 +883,45 @@ def publish_encrypted_pve_vault(source_vault: Path, candidate: Path,
     return commit_sha
 
 
+def pve_staged_enrollment_verified(site: str, runner_ip: str, pve_ip: str,
+                                   root_script: Path) -> bool:
+    """Resume already-issued canonical PVE token escrow without reissuing."""
+    path = ROOT_STAGE / f"pve-identities-{site}-ansible-v2-pending.json"
+    if not path.exists() and not path.is_symlink():
+        return False
+    if path.is_symlink() or not path.is_file():
+        raise Blocked("Canonical PVE escrow path is not a regular file")
+    info = path.stat()
+    if info.st_uid != 0 or info.st_mode & 0o077 or info.st_size > 16384:
+        raise Blocked("Canonical PVE escrow is not root-only or oversized")
+    data = json.loads(path.read_text("utf-8"))
+    expected_principals = {
+        "audit": "ansible-audit@pve",
+        "write": "ansible-writer@pve",
+        "linux": "ansible-linux",
+    }
+    if (data.get("identity_schema") != 2 or data.get("site_id") != site
+            or data.get("runner_ip") != runner_ip or data.get("pve_ip") != pve_ip
+            or data.get("principals") != expected_principals):
+        raise Blocked("Canonical PVE escrow identity mismatch")
+    values = data.get("pve_tokens", {})
+    if not isinstance(values, dict) or set(values) != {"audit", "write"}:
+        raise Blocked("Canonical PVE escrow missing both API secrets")
+    if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", value)
+               for value in values.values()):
+        raise Blocked("Canonical PVE escrow contains an invalid token secret")
+    # Verify existing PVE users, token IDs/ACL and original runner key
+    # WITHOUT --apply, hence no account/token/SSH mutations.
+    result = run("python3", str(root_script),
+                 "--site", site, "--runner-ctid", str(CTID),
+                 "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                 "--reconcile-restored", timeout=60)
+    if "PVE_RESTORED_IDENTITIES=READ_ONLY_PASS" not in result:
+        raise Blocked("Existing canonical PVE identities failed verification")
+    print("PVE_CANONICAL_IDENTITIES=STAGING_VERIFIED_NO_REISSUE", flush=True)
+    return True
+
+
 def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                                  checkout: Path, expected_fleet_commit: str,
                                  owner_master: str, env: dict,
@@ -939,11 +978,12 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
         record = assert_private_fleet_head(expected_fleet_commit, env)
         if base64.b64decode(record.get("content", "")) != source_vault.read_bytes():
             raise Blocked("Fleet source is not pinned to the current private main")
-        run("python3", str(source),
-            "--site", site, "--runner-ctid", str(CTID),
-            "--runner-ip", runner_ip, "--pve-ip", pve_ip,
-            "--apply", timeout=180)
-        print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
+        if not pve_staged_enrollment_verified(site, runner_ip, pve_ip, source):
+            run("python3", str(source),
+                "--site", site, "--runner-ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--apply", timeout=180)
+            print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
         candidate = tmp / "candidate.vault.yml"
         run("python3", str(worker),
             "--site", site, "--ctid", str(CTID),
