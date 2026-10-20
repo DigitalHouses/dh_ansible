@@ -424,15 +424,13 @@ def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", required=True)
-    parser.add_argument("--project-title", required=True)
+    parser.add_argument("--project-title")
     parser.add_argument("--admin-password-file", required=True, type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--sync-catalog", action="store_true")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", args.site):
         raise Blocked("Invalid site ID")
-    if not 1 <= len(args.project_title) <= 100:
-        raise Blocked("Invalid project title")
     if os.geteuid() != 0:
         raise Blocked("Run as root inside CT runner, not on PVE")
     if Path("/etc/pve/user.cfg").exists():
@@ -443,6 +441,13 @@ def main(argv=None):
     api = API()
     api.login(password)
     del password
+    if args.sync_catalog and not args.project_title:
+        projects = api.request("GET", "/projects")
+        if not isinstance(projects, list) or len(projects) != 1:
+            raise Blocked("Cannot infer unique Semaphore project for sync")
+        args.project_title = projects[0].get("name")
+    if not isinstance(args.project_title, str) or not 1 <= len(args.project_title) <= 100:
+        raise Blocked("Invalid project title")
     if args.sync_catalog:
         result = synchronize_catalog(api, args.site, args.project_title, apply=args.apply)
     else:
