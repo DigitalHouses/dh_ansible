@@ -44,3 +44,37 @@ module.synchronize_catalog(bearer, "home", "CI · Semaphore Test", apply=True)
 assert id_map == {v["name"]: v["id"] for v in bearer.request(
     "GET", f"/project/{result['project_id']}/templates")}
 print("SEMAPHORE_2_19_CATALOG_SELF_SYNC=PASS")
+
+# Simulate restored 4-task Semaphore project and migrate in place through
+# the real API. Historical task ids must not change.
+legacy = tuple((old, old, playbook, oldview)
+               for old, new, playbook, oldview, newview in module.LEGACY_MIGRATIONS)
+restored = module.provision(api, "home", "CI · Legacy Restore", True, templates=legacy)
+pid = restored["project_id"]
+path = f"/project/{pid}/templates"
+before = bearer.request("GET", path)
+assert len(before) == 4
+old_ids = {v["playbook"]: v["id"] for v in before}
+# Old seeder did not mark templates with the new catalog ownership text.
+for task in before:
+    details = bearer.request("GET", path + "/" + str(task["id"]))
+    details["description"] = ""
+    bearer.request("PUT", path + "/" + str(task["id"]), details)
+planned = module.migrate_accepted_four_task_catalog(
+    bearer, "home", "CI · Legacy Restore", apply=False)
+assert planned["state"] == "PLAN_ONLY"
+assert len(bearer.request("GET", path)) == 4
+migrated = module.migrate_accepted_four_task_catalog(
+    bearer, "home", "CI · Legacy Restore", apply=True)
+assert migrated["state"] == "APPLIED"
+after = bearer.request("GET", path)
+assert len(after) == 5
+assert [v["name"] for v in after if v["playbook"] in old_ids] != [
+    v["name"] for v in before]
+assert all(v["id"] == old_ids[v["playbook"]]
+           for v in after if v["playbook"] in old_ids)
+assert sum(v["name"] == "00-Обновить список задач" for v in after) == 1
+module.migrate_accepted_four_task_catalog(
+    bearer, "home", "CI · Legacy Restore", apply=True)
+assert {v["id"] for v in bearer.request("GET", path)} == {v["id"] for v in after}
+print("SEMAPHORE_2_19_RESTORED_MIGRATION=PASS")
