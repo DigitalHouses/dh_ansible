@@ -317,3 +317,11 @@ def test_catalog_source_contract_and_recovery_template_restrictions():
     assert "Existing Semaphore resource drift" in src
     assert "api.request(\"PUT\"" in src
     assert 'api.request("DELETE"' not in src
+
+
+def test_self_sync_waits_for_final_worker_status():
+    play = (BASE.parents[1] / "playbooks/request-semaphore-catalog-sync.yml").read_text()
+    assert "catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|PASS|')" in play
+    assert "catalog_sync_status.stdout == catalog_sync_id.stdout ~ '|FAILED'" in play
+    assert "until: catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|')" not in play
+    assert "catalog_sync_status.stdout.split('|') | length == 6" in play
