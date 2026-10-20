@@ -60,7 +60,9 @@
       register: catalog_sync_status
       changed_when: false
       failed_when: false
-      until: catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|')
+      until: >-
+        catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|PASS|')
+        or catalog_sync_status.stdout == catalog_sync_id.stdout ~ '|FAILED'
       retries: 90
       delay: 2
       check_mode: false
