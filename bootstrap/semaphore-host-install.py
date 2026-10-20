@@ -1179,8 +1179,8 @@ def commission_pve_preflight(args, checkout=None):
     return guest_python
 
 
-def commission_existing_pve_access(args):
-    """PVE root credential enrollment via the existing pinned Bootstrap."""
+def commission_existing_pve_access(args, *, verify_only=False):
+    """Root-only PVE commissioning or read-only verification of the encrypted Vault."""
     with tempfile.TemporaryDirectory(prefix="dh-pve-access-") as folder:
         work = Path(folder)
         if args.use_github_session:
@@ -1200,7 +1200,32 @@ def commission_existing_pve_access(args):
                          env, args.site, preauthorized=args.use_github_session)
         guest_python = commission_pve_preflight(args, checkout)
         master = validate_fleet_password(checkout)
-        assert_private_fleet_head(args.expected_fleet_commit, env)
+        current = assert_private_fleet_head(args.expected_fleet_commit, env)
+        original = checkout.parent / "fleet-detail" / "secrets/fleet.vault.yml"
+        if base64.b64decode(current.get("content", "")) != original.read_bytes():
+            raise Blocked("Pinned encrypted Vault does not match private main")
+        if verify_only:
+            # The saved master exists only in root-owned PVE /run while the
+            # verified encrypted Vault is compared against the original escrow.
+            with tempfile.TemporaryDirectory(prefix="dh-vault-verify-", dir="/run") as secret_dir:
+                master_file = Path(secret_dir) / "master"
+                master_file.write_bytes(master.encode("utf-8") + b"\n")
+                master_file.chmod(0o600)
+                importer = checkout / "bootstrap/import-pve-identities-vault.py"
+                output = run("python3", str(importer),
+                             "--verify-vault", "--site", args.site,
+                             "--ctid", str(CTID),
+                             "--runner-ip", str(ipaddress.IPv4Interface(args.runner_cidr).ip),
+                             "--pve-ip", args.pve_ip,
+                             "--master-file", str(master_file),
+                             "--vault-file", str(original),
+                             "--guest-python", guest_python, timeout=160)
+                if ("PVE_ENCRYPTED_VAULT_ESCROW_MATCH=PASS" not in output
+                        or "PVE_PUBLISHED_FLEET_RECOVERY=PASS" not in output):
+                    raise Blocked("Encrypted Fleet Vault acceptance not confirmed")
+            print("PVE_VAULT_RECOVERY=READ_ONLY_PASS", flush=True)
+            print("PVE_VAULT_SECRETS_EXPOSED=NO", flush=True)
+            return
         exact = "COMMISSION PVE ACCESS " + args.site
         print("PLAN: Create or restore canonical PVE identities; encrypt to Fleet Vault.", flush=True)
         print("PLAN: No guest recreation or Semaphore installation.", flush=True)
@@ -1223,6 +1248,8 @@ def main(argv=None):
     parser.add_argument("--expected-fleet-commit")
     parser.add_argument("--use-github-session", action="store_true")
     parser.add_argument("--commission-pve-access", action="store_true")
+    parser.add_argument("--verify-pve-access", action="store_true",
+                        help="Verify published encrypted Fleet Vault against PVE escrow without account changes")
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument("--resume-fresh", action="store_true",
                               help="Continue verified freshly booted empty CT1231")
@@ -1234,6 +1261,15 @@ def main(argv=None):
                               help="Complete verified running Semaphore; seed project only")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.verify_pve_access:
+        if any((args.commission_pve_access, args.resume, args.resume_fresh,
+                args.resume_ansible, args.resume_semaphore, args.apply)):
+            raise Blocked("Encrypted Vault verification cannot be combined with changes")
+        if not args.expected_commit or not args.expected_fleet_commit:
+            raise Blocked("Immutable code and Fleet SHAs required")
+        commission_pve_preflight(args)
+        commission_existing_pve_access(args, verify_only=True)
+        return 0
     if args.commission_pve_access:
         if any((args.resume, args.resume_ansible, args.resume_fresh, args.resume_semaphore)):
             raise Blocked("Commissioning cannot be combined with runner resume")
