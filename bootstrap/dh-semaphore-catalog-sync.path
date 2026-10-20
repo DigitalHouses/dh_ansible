@@ -1,0 +1,11 @@
+[Unit]
+Description=DigitalHouses Semaphore catalog sync request watcher
+
+[Path]
+PathExists=/var/lib/semaphore/dh-semaphore-catalog-sync.request
+Unit=dh-semaphore-catalog-sync.service
+TriggerLimitIntervalSec=10min
+TriggerLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target
