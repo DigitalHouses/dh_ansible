@@ -482,7 +482,7 @@ def test_remote_commander_staged_only_and_never_installed_at_bootstrap():
     assert set(m.REMOTE_INSTALL_FILES) == expected
     assert expected | auxiliaries <= set(m.CODE_FILES)
     assert m.REMOTE_BOOTSTRAP_DIR == "/opt/digitalhouses/bootstrap/remote-commander"
-    body = SRC.read_text().split("def apply(args, template):", 1)[1].split("\\ndef main(", 1)[0]
+    body = SRC.read_text().split("def apply(args, template):", 1)[1].split("\ndef main(", 1)[0]
     assert body.index("install_site_inventory(") < body.index("seed_semaphore(")
     assert body.index("seed_semaphore(") < body.index("stage_runner_remote_commander(")
     assert 'REMOTE_COMMANDER_ON_DEMAND=READY' in SRC.read_text()
@@ -700,3 +700,22 @@ def test_postfix_fix_never_relaxes_failed_dbus(monkeypatch):
         m.verify_fresh_system_bus(attempts=2, delay_seconds=0)
     assert commands == []
 
+
+
+def test_resume_fresh_recovers_vault_pve_identity_without_reenrollment():
+    """A failed first-boot retry still needs encrypted PVE SSH recovery."""
+    source = SRC.read_text()
+    body = source.split("def apply(args, template):", 1)[1].split(
+        "\ndef commission_pve_preflight(", 1)[0]
+    # Mature resume is excluded; empty fresh resume is intentionally INCLUDED.
+    assert "if not (args.resume or args.resume_ansible or args.resume_semaphore):" in body
+    assert "if not (args.resume or args.resume_fresh or args.resume_ansible" not in body
+    assert "provision_pve_identity_stage(args.site, args.runner_cidr," in body
+    assert body.index("stage_pve_access_audit(checkout)") < body.index(
+        "provision_pve_identity_stage(args.site, args.runner_cidr,"
+    )
+    # The provisioner first decrypts and recovers existing credentials.
+    provision = source.split("def provision_pve_identity_stage(", 1)[1].split(
+        "\ndef apply(", 1)[0]
+    assert 'if "PVE_FLEET_RECOVERY=PASS" in response:' in provision
+    assert "PVE_CREDENTIALS=RESTORED_FROM_FLEET" in provision
