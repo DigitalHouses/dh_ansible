@@ -36,3 +36,22 @@ def test_secure_read_rejects_loose_permissions(tmp_path):
         mod.secure_read(f,os.getuid())
     os.chmod(f,0o600)
     assert mod.secure_read(f,os.getuid())==b"fake-secret"
+
+
+def test_host_worker_honors_current_runtime_and_historical_pilot():
+    src = SCRIPT.read_text()
+    assert 'parser.add_argument("--guest-python", default="/opt/ansible/venv/bin/python")' in src
+    assert 'args.guest_python not in ("/opt/ansible/venv/bin/python",' in src
+    assert '"/opt/ansimble/venv/bin/python")' in src
+    assert 'pct(args.ctid, "test", "-x", args.guest_python)' in src
+    assert 'print(pct(args.ctid, args.guest_python,' in src
+    assert 'print(pct(args.ctid, "/opt/ansible/venv/bin/python",' not in src
+
+
+def test_root_installer_forwards_discovered_interpreter_for_staged_import():
+    src=(ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    assert '"--guest-python", guest_python, timeout=150' in src
+    assert 'guest_python = commission_pve_preflight(args, checkout)' in src
+    assert "guest_python=guest_python" in src
+    assert "PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS" in src
+    assert "PVE_CREDENTIALS=ENCRYPTED_FLEET_PUBLISHED" in src
