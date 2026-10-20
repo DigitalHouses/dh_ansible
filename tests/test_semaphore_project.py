@@ -389,3 +389,15 @@ def test_migration_descending_order_handles_overlapping_titles():
     m = module()
     assert [n[0][:2] for n in m.LEGACY_MIGRATIONS] == ["40", "30", "20", "10"]
     assert [n[1][:2] for n in m.LEGACY_MIGRATIONS] == ["50", "40", "30", "20"]
+
+
+def test_api_token_accepts_base64url_padding_without_relaxing_character_policy():
+    m = module()
+    assert m.valid_catalog_token("A" * 42 + "=")
+    assert m.valid_catalog_token("Ab_-" * 11)
+    assert m.valid_catalog_token("z" * 42 + "==")
+    for invalid in (None, "", "short", "A" * 42 + "+",
+                    "A" * 42 + "/", "A" * 42 + "=B",
+                    "A" * 42 + "===", "A" * 42 + "\\n",
+                    "A" * 257):
+        assert not m.valid_catalog_token(invalid)
