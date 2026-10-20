@@ -915,8 +915,12 @@ def apply(args, template):
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
-        provision_pve_identity_stage(args.site, args.runner_cidr,
-                                     args.pve_ip, checkout)
+        # Credential enrollment is part of a NEW bootstrap only; recovery
+        # and resume cannot silently issue API users/tokens or SSH keys.
+        if not (args.resume or args.resume_fresh or args.resume_ansible
+                or args.resume_semaphore):
+            provision_pve_identity_stage(args.site, args.runner_cidr,
+                                         args.pve_ip, checkout)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
