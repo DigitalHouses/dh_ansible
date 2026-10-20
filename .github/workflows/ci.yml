@@ -33,6 +33,7 @@ jobs:
         run: |
           bash -n bootstrap/install.sh
           bash -n bootstrap/remote-commander-install-request.sh
+          bash -n bootstrap/semaphore-catalog-sync-request.sh
           bash -n bootstrap/semaphore-launch.sh
       - name: Validate Ansible syntax
         run: |
@@ -40,6 +41,8 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-runner.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-runner-remote-commander.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-runner-remote-commander.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-cloudflare-tunnel.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-nut-baseline.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-provision.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-base.yml
