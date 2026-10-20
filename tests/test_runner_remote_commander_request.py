@@ -11,7 +11,10 @@ def test_request_is_local_and_unprivileged():
     assert p["gather_facts"] is False
     assert "remote_request_hostname.stdout == 'ansible-' ~ site.id" in src
     assert "dh-remote-commander-install.path" in src
-    assert 'content: "INSTALL\\n"' in src
+    assert "'PAIR' if remote_request_existing.stdout == 'active' else 'INSTALL'" in src
+    assert "remote_request_id.stdout" in src
+    assert "remote_pairing_record.stdout.split('|')[3]" in src
+    assert "remote_pairing_record.stdout.split('|')[4]" in src
     assert "sudo" not in src
 
 def test_root_watcher_is_single_purpose():
@@ -33,4 +36,20 @@ def test_request_shows_pairing_url_before_waiting():
     assert "Explain installation progress and device pairing" in names
     assert names.index("Explain installation progress and device pairing") < names.index("Await Remote Commander installation")
     assert "https://mcp.desktopcommander.app/device/verify" in src
-    assert "connection_status: NOT_VERIFIED" in src
+    assert "Show actual one-time pairing code and URL inside Semaphore" in names
+    assert names.index("Show actual one-time pairing code and URL inside Semaphore") > names.index("Await sanitized OAuth pairing status")
+    assert "mode: \"0600\"" in src
+    assert "remote_pairing_record.stdout.startswith('PAIR|' ~ remote_request_id.stdout ~ '|')" in src
+
+def test_pairing_export_remains_root_only_with_narrow_semaphore_view():
+    src=(ROOT / "bootstrap/remote-commander-install-request.sh").read_text()
+    assert "ACTION=" in src and "NONCE=" in src
+    assert "INSTALL|PAIR" in src
+    assert "journalctl" in src
+    assert '"_SYSTEMD_INVOCATION_ID=$invocation"' in src
+    assert "chown root:semaphore" in src
+    assert "chmod 0640" in src
+    assert 'publish_pairing "CODE|$code|$url"' in src
+    assert "PAIR_FILE=/run/dh-remote-commander-pairing.status" in src
+    assert "if [[ \"$ACTION\" == PAIR ]]" in src
+    assert "PAIR_URL=https://mcp.desktopcommander.app/device/verify" in src
