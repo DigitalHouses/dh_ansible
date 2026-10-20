@@ -1,0 +1,183 @@
+---
+# Fixed-purpose, root-owned, read-only PVE identity verification.
+# Run exclusively via the PVE access watcher; never give Semaphore root rights.
+- name: Verify this site's canonical PVE API and Linux identities
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load canonical site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Load site PVE endpoint
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - name: Load site PVE identities
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+    - name: Check local root-only runner and declared principals
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_access.api.audit.user == 'ansible-audit@pve'
+          - pve_access.api.write.user == 'ansible-writer@pve'
+          - pve_access.host.user == 'ansible-linux'
+          - pve.auth.user == pve_access.api.audit.user
+          - pve.host is defined
+    - name: Read effective local UID
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: local_uid
+      changed_when: false
+      check_mode: false
+    - name: Require fixed-purpose root watcher
+      ansible.builtin.assert:
+        that: [local_uid.stdout == '0']
+  tasks:
+    - name: Read private key metadata
+      ansible.builtin.stat:
+        path: "{{ pve_access.host.identity_file }}"
+        follow: false
+      register: private_key
+    - name: Read pinned SSH host identity metadata
+      ansible.builtin.stat:
+        path: "{{ pve_access.host.known_hosts_file }}"
+        follow: false
+      register: known_hosts
+    - name: Require secure root-only SSH materials
+      ansible.builtin.assert:
+        that:
+          - private_key.stat.isreg | default(false)
+          - not private_key.stat.islnk | default(false)
+          - private_key.stat.pw_name == 'root'
+          - private_key.stat.mode == '0600'
+          - known_hosts.stat.isreg | default(false)
+          - known_hosts.stat.mode == '0600'
+
+    - name: Check pinned PVE HTTPS certificate before sending tokens
+      ansible.builtin.shell: |
+        set -o pipefail
+        openssl s_client -connect {{ pve.host }}:{{ pve.port }} -servername {{ pve.host }} </dev/null 2>/dev/null |
+          openssl x509 -noout -fingerprint -sha256
+      args:
+        executable: /bin/bash
+      changed_when: false
+      register: tls_identity
+      check_mode: false
+    - name: Assert pinned PVE TLS identity
+      ansible.builtin.assert:
+        that:
+          - ('sha256 Fingerprint=' ~ pve.tls.sha256_fingerprint) in tls_identity.stdout
+
+    - name: Verify host-level SSH and passwordless sudo
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -T
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - "UserKnownHostsFile={{ pve_access.host.known_hosts_file }}"
+          - -o
+          - ConnectTimeout=5
+          - -i
+          - "{{ pve_access.host.identity_file }}"
+          - "{{ pve_access.host.user }}@{{ pve.host }}"
+          - sudo
+          - -n
+          - /usr/bin/id
+          - -u
+      changed_when: false
+      register: ssh_root_id
+      check_mode: false
+    - name: Assert PVE Linux sudo works
+      ansible.builtin.assert:
+        that: [ssh_root_id.stdout | trim == '0']
+
+    - name: Fetch canonical PVE token staging metadata through verified SSH
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -T
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - "UserKnownHostsFile={{ pve_access.host.known_hosts_file }}"
+          - -i
+          - "{{ pve_access.host.identity_file }}"
+          - "{{ pve_access.host.user }}@{{ pve.host }}"
+          - sudo
+          - -n
+          - /usr/bin/cat
+          - "/var/lib/digitalhouses/bootstrap/pve-identities-{{ site.id }}-ansible-v2-pending.json"
+      register: pve_staged_tokens_raw
+      changed_when: false
+      no_log: true
+      check_mode: false
+    - name: Parse PVE escrow in memory
+      ansible.builtin.set_fact:
+        pve_escrow: "{{ pve_staged_tokens_raw.stdout | from_json }}"
+      no_log: true
+      changed_when: false
+    - name: Require exact canonical escrow identity
+      ansible.builtin.assert:
+        that:
+          - pve_escrow.identity_schema | int == 2
+          - pve_escrow.site_id == site.id
+          - pve_escrow.pve_ip == (pve.host | string)
+          - pve_escrow.runner_ip == pve_access.host.source_ipv4
+          - pve_escrow.principals.audit == pve_access.api.audit.user
+          - pve_escrow.principals.write == pve_access.api.write.user
+          - pve_escrow.principals.linux == pve_access.host.user
+          - pve_escrow.pve_tokens.keys() | list | sort == ['audit','write']
+          - pve_escrow.pve_tokens.audit | length > 0
+          - pve_escrow.pve_tokens.write | length > 0
+      no_log: true
+
+    - name: Verify authenticated audit PVE API (GET only)
+      ansible.builtin.uri:
+        url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/status"
+        headers:
+          Authorization: "PVEAPIToken={{ pve_access.api.audit.user }}!{{ pve_access.api.audit.token_id }}={{ pve_escrow.pve_tokens.audit }}"
+        method: GET
+        return_content: false
+        validate_certs: false
+        timeout: 10
+        status_code: 200
+      no_log: true
+      changed_when: false
+
+    - name: Verify authenticated writer PVE API without writing
+      ansible.builtin.uri:
+        url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/status"
+        headers:
+          Authorization: "PVEAPIToken={{ pve_access.api.write.user }}!{{ pve_access.api.write.token_id }}={{ pve_escrow.pve_tokens.write }}"
+        method: GET
+        return_content: false
+        validate_certs: false
+        timeout: 10
+        status_code: 200
+      no_log: true
+      changed_when: false
+
+    - name: Report verified access without secret values
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          pve: "{{ pve.host }}"
+          audit_api: PASS
+          writer_api_read: PASS
+          linux_ssh_sudo: PASS
+          token_escrow: PRESENT
+          result: PASS
