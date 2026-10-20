@@ -278,7 +278,7 @@ def main() -> None:
         if key_file_state != "600:0:0":
             fail("BLOCKED: Restored runner private key missing or unsafe")
         restored_pub = runner_exec(str(args.runner_ctid), "cat", KEY_PATH + ".pub")
-        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\\r\\n]+)?",
+        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?",
                             restored_pub):
             fail("BLOCKED: Restored runner public key invalid")
         if not args.apply:
