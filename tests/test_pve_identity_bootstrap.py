@@ -129,6 +129,16 @@ def test_existing_canonical_staging_never_reissues_pve_tokens(monkeypatch, tmp_p
         },
     }))
     path.chmod(0o600)
+    # CI runs under an unprivileged user; emulate root ownership for this
+    # isolated unit test while preserving the production root-only gate.
+    real_stat = Path.stat
+    def synthetic_root_stat(target, *args, **kwargs):
+        actual = real_stat(target, *args, **kwargs)
+        if target != path:
+            return actual
+        from types import SimpleNamespace
+        return SimpleNamespace(st_uid=0, st_mode=actual.st_mode, st_size=actual.st_size)
+    monkeypatch.setattr(Path, "stat", synthetic_root_stat)
     calls = []
     def verified_read_only(*args, **kwargs):
         calls.append(args)
