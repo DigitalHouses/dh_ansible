@@ -32,6 +32,19 @@ BOOTSTRAP_TEMPLATES = (
     ("00-Обновить список задач", "Обновить список задач",
      "playbooks/request-semaphore-catalog-sync.yml", VIEWS[0]),
 )
+# One-time controlled upgrade from the accepted four-task Semaphore bootstrap.
+# Migrate in descending numeric order because new titles overlap old titles.
+# (old title, new title, exact playbook, expected old view, new view)
+LEGACY_MIGRATIONS = (
+    ("40-Проверка доступов PVE", "50-Проверка доступов PVE",
+     "playbooks/request-pve-access-audit.yml", VIEWS[3], VIEWS[3]),
+    ("30-Установить Remote Desktop Commander", "40-Установить Remote Desktop Commander",
+     "playbooks/request-runner-remote-commander.yml", VIEWS[2], VIEWS[2]),
+    ("20-Аудит локального runner", "30-Аудит локального runner",
+     "playbooks/audit-runner.yml", VIEWS[0], VIEWS[3]),
+    ("10-Проверка запуска Ansible", "20-Проверка запуска Ansible",
+     "playbooks/smoke-semaphore.yml", VIEWS[0], VIEWS[3]),
+)
 CATALOG_PATH = "catalog/semaphore-tasks.json"
 CATALOG_SOURCE = "DigitalHouses/dh_ansible"
 CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
@@ -471,6 +484,127 @@ def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
     return {"state": "APPLIED" if apply else "PLAN_ONLY", "project_id": named["id"]}
 
 
+
+def migrate_accepted_four_task_catalog(api, site: str, project_title: str,
+                                       *, apply: bool):
+    """One-off owner-authorized migration; preserve template IDs and task history.
+
+    Only the four known legacy templates, optionally plus the new recovery task,
+    are accepted. Validate ALL tasks before any changes and rename descending
+    to avoid 20/30/40 collisions. A partial prior migration is restartable.
+    """
+    existing_project = provision(api, site, project_title, False, templates=())
+    if type(existing_project.get("project_id")) is not int:
+        raise Blocked("Missing or drifted legacy project prerequisites")
+    pid = existing_project["project_id"]
+    base = f"/project/{pid}"
+    path = base + "/templates?sort=name&order=asc"
+    items = api.request("GET", path)
+    views = api.request("GET", base + "/views")
+    repositories = api.request("GET", base + "/repositories?sort=name&order=asc")
+    inventory = api.request("GET", base + "/inventory?sort=name&order=asc")
+    environments = api.request("GET", base + "/environment?sort=name&order=asc")
+    if not all(isinstance(t, list) for t in
+               (items, views, repositories, inventory, environments)):
+        raise Blocked("Unexpected Semaphore resource data for legacy migration")
+    repo = one_named(repositories, "DigitalHouses code")
+    inv = one_named(inventory, "Runner (local)")
+    env = one_named(environments, "Empty")
+    view_ids = {v.get("title"): v.get("id") for v in views}
+    if not (repo and inv and env and all(v in view_ids for v in VIEWS)):
+        raise Blocked("Legacy resource identities incomplete")
+    if len(items) not in (4, 5):
+        raise Blocked("Legacy migration requires exactly four existing tasks, optionally recovery 00")
+    expected_playbooks = {row[2] for row in LEGACY_MIGRATIONS}
+    sync_playbook = BOOTSTRAP_TEMPLATES[0][2]
+    all_playbooks = [t.get("playbook") for t in items]
+    if (len(set(all_playbooks)) != len(items)
+            or not expected_playbooks.issubset(set(all_playbooks))
+            or set(all_playbooks) - expected_playbooks - {sync_playbook}):
+        raise Blocked("Unknown or duplicated Semaphore playbook: legacy migration blocked")
+    recoveries = [t for t in items if t.get("playbook") == sync_playbook]
+    if recoveries:
+        if len(recoveries) != 1 or recoveries[0].get("name") != BOOTSTRAP_TEMPLATES[0][0]:
+            raise Blocked("Recovery task identity drift")
+        if recoveries[0].get("description") != MANAGED_DESCRIPTION:
+            raise Blocked("Unmanaged recovery task cannot be migrated")
+    all_expected = {
+        "project_id": pid, "app": "ansible", "arguments": "[]",
+        "type": "", "inventory_id": inv["id"],
+        "repository_id": repo["id"], "environment_id": env["id"],
+        "autorun": False, "allow_override_args_in_task": False,
+    }
+    plans = []
+    for old, new, playbook, oldview, newview in LEGACY_MIGRATIONS:
+        matching = [v for v in items if v.get("playbook") == playbook]
+        if len(matching) != 1:
+            raise Blocked("Missing legacy playbook: " + playbook)
+        t = matching[0]
+        if t.get("name") not in (old, new):
+            raise Blocked("Unexpected renamed legacy template: " + playbook)
+        if type(t.get("id")) is not int or t["id"] <= 0:
+            raise Blocked("Invalid legacy template ID")
+        if any(not template_equal(k, t.get(k), wanted)
+               for k, wanted in all_expected.items()):
+            raise Blocked("Legacy template configuration drift: " + old)
+        expected_view = oldview if t["name"] == old else newview
+        if t.get("view_id") != view_ids[expected_view]:
+            raise Blocked("Legacy template view drift: " + old)
+        description = t.get("description")
+        if t["name"] == old and description not in (None, ""):
+            raise Blocked("Old template ownership drift: " + old)
+        if t["name"] == new and description != MANAGED_DESCRIPTION:
+            raise Blocked("Renamed template ownership drift: " + new)
+        plans.append((t, old, new, view_ids[newview]))
+    for task, old, new, _ in plans:
+        if task["name"] == old:
+            print(f"PLAN_MIGRATE={old} -> {new} id={task['id']}", flush=True)
+        else:
+            print(f"MIGRATED_ALREADY={new} id={task['id']}", flush=True)
+    if not recoveries:
+        print("PLAN_CREATE=" + BOOTSTRAP_TEMPLATES[0][0], flush=True)
+    if not apply:
+        return {"state": "PLAN_ONLY", "project_id": pid}
+    for task, old, new, new_view_id in plans:
+        if task["name"] == new:
+            continue
+        template_id = task["id"]
+        detail_path = base + f"/templates/{template_id}"
+        detail = api.request("GET", detail_path)
+        if (not isinstance(detail, dict) or detail.get("id") != template_id
+                or detail.get("name") != old
+                or detail.get("playbook") != task["playbook"]
+                or any(not template_equal(k, detail.get(k), wanted)
+                       for k, wanted in all_expected.items())
+                or detail.get("view_id") != task["view_id"]
+                or detail.get("description") not in (None, "")):
+            raise Blocked("Legacy migration concurrency drift: " + old)
+        payload = dict(detail)
+        payload.update({"name": new, "view_id": new_view_id,
+                        "description": MANAGED_DESCRIPTION})
+        api.request("PUT", detail_path, payload)
+        after = api.request("GET", detail_path)
+        if (not isinstance(after, dict) or after.get("id") != template_id
+                or after.get("name") != new
+                or after.get("playbook") != task["playbook"]
+                or after.get("view_id") != new_view_id
+                or after.get("description") != MANAGED_DESCRIPTION):
+            raise Blocked("Legacy rename failed verification: " + old)
+        print(f"MIGRATED={old} -> {new} id={template_id}", flush=True)
+    result = provision(api, site, project_title, True, templates=BOOTSTRAP_TEMPLATES)
+    if result["state"] != "APPLIED":
+        raise Blocked("Recovery task creation was not confirmed")
+    after_all = api.request("GET", path)
+    expected_names = {row[1] for row in LEGACY_MIGRATIONS}
+    expected_names.add(BOOTSTRAP_TEMPLATES[0][0])
+    if (not isinstance(after_all, list)
+            or {t.get("name") for t in after_all} != expected_names
+            or len(after_all) != len(expected_names)):
+        raise Blocked("Post-migration template catalog differs from expected state")
+    print("MIGRATION=PASS_EXISTING_IDS_PRESERVED", flush=True)
+    return {"state": "APPLIED", "project_id": pid}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", required=True)
@@ -479,7 +613,9 @@ def main(argv=None):
     credentials.add_argument("--admin-password-file", type=Path)
     credentials.add_argument("--admin-token-file", type=Path)
     parser.add_argument("--apply", action="store_true")
-    parser.add_argument("--sync-catalog", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--sync-catalog", action="store_true")
+    modes.add_argument("--migrate-legacy", action="store_true")
     args = parser.parse_args(argv)
     if not re.fullmatch(r"[a-z][a-z0-9_-]{0,30}", args.site):
         raise Blocked("Invalid site ID")
@@ -513,6 +649,9 @@ def main(argv=None):
         raise Blocked("Invalid project title")
     if args.sync_catalog:
         result = synchronize_catalog(api, args.site, args.project_title, apply=args.apply)
+    elif args.migrate_legacy:
+        result = migrate_accepted_four_task_catalog(
+            api, args.site, args.project_title, apply=args.apply)
     else:
         result = provision(api, args.site, args.project_title, args.apply)
     print(f"SEMAPHORE_PROJECT={result['state']}", flush=True)
