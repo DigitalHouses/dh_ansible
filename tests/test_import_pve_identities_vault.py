@@ -17,7 +17,7 @@ def test_vault_import_uses_in_memory_crypto_not_plaintext_git():
     assert "vault.decrypt" in src and "vault.encrypt" in src
     assert "os.O_EXCL" in src
     assert "VAULT_CANDIDATE=PASS" in src
-    assert "getpass.getpass" in src
+    assert 'secure_read(Path(args.master_file))' in src
     assert "PVE_STAGING=RETAINED_UNTIL_GIT_VERIFY" in src
     assert "git push" not in src
 def test_host_worker_no_secret_in_cli_or_report():
