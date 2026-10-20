@@ -12,9 +12,9 @@ Local runner управляет Proxmox VE через официальный HTT
 
 Каждый site после bootstrap имеет три постоянных канала:
 
-1. `ansimble-audit@pve!audit` — read-only PVE API, роль `PVEAuditor` на `/`.
-2. `ansimble@pve!write` — штатный write PVE API, роль `PVEAdmin` на `/`.
-3. Linux/PAM user `ansimble` — SSH только с IP local runner и passwordless sudo
+1. `ansible-audit@pve!audit` — read-only PVE API, роль `PVEAuditor` на `/`.
+2. `ansible-writer@pve!write` — штатный write PVE API, роль `PVEAdmin` на `/`.
+3. Linux/PAM user `ansible-linux` — SSH только с IP local runner и passwordless sudo
    для host-level post-install, которого нет в PVE API.
 
 API tokens используют privilege separation. Backing user получает ту же роль на
@@ -32,13 +32,13 @@ Audit identity:
 
 ## Write capabilities
 
-Штатные PVE API writes выполняет `ansimble@pve!write` с `PVEAdmin` на `/`.
+Штатные PVE API writes выполняет `ansible-writer@pve!write` с `PVEAdmin` на `/`.
 Audit token никогда не расширяется до write. Более узкие capability tokens могут
 существовать только как временная миграционная мера; после принятия общего
 write identity они не должны оставаться конкурентными writer-ами.
 
 Host-level изменения (`apt`, `/etc`, NUT, systemd, sysctl и подобные)
-выполняются как Linux user `ansimble` через SSH key и sudo. Пароль account
+выполняются как Linux user `ansible-linux` через SSH key и sudo. Пароль account
 заблокирован; SSH key ограничивается source IP local runner. Private key и API
 token secrets имеют authoritative encrypted copy в
 `secrets/fleet.vault.yml` согласно ADR-0007.
@@ -47,7 +47,7 @@ token secrets имеют authoritative encrypted copy в
 Поэтому QEMU lifecycle-поля, для которых Proxmox требует `Sys.Modify` на
 корневом scope (в частности accepted VM operational state), не являются
 основанием расширять штатный API token до `Administrator`. Такие изменения
-выполняются через уже проверенный privileged host transport `ansimble` +
+выполняются через уже проверенный privileged host transport `ansible-linux` +
 pinned SSH + sudo, с read-before-write и независимой проверкой postconditions.
 
 ## TLS
@@ -58,7 +58,7 @@ PVE endpoint identity проверяется до API auth по pinned SHA-256 c
 
 Создание первой API identity требует одноразового административного действия на существующем PVE. После появления поддерживаемого PVE provisioning capability новые sites должны получать identities из общего bootstrap workflow.
 
-До создания постоянного Linux/PAM `ansimble` для host-level конфигурации,
+До создания постоянного Linux/PAM `ansible-linux` для host-level конфигурации,
 которую официальный PVE API не предоставляет, допускается временный bootstrap
 transport с local runner:
 
