@@ -48,4 +48,14 @@ export LANG=C.UTF-8 LC_ALL=C.UTF-8
   --sync-catalog --apply > "$LOG" 2>&1
 grep -Fxq "SEMAPHORE_PROJECT=APPLIED" "$LOG" || exit 2
 grep -Fxq "NO_INFRASTRUCTURE_TASKS_LAUNCHED=YES" "$LOG" || exit 2
-report PASS
+SOURCE_SHA="$(grep -E '^CATALOG_SOURCE_SHA=[0-9a-f]{40}
+ "$LOG" | tail -n 1 | cut -d= -f2)"
+[[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || exit 2
+count() { grep -c "^$1=" "$LOG" || true; }
+CREATED="$(count CATALOG_CREATED)"
+UPDATED="$(count CATALOG_UPDATED)"
+UNCHANGED="$(count CATALOG_UNCHANGED)"
+for value in "$CREATED" "$UPDATED" "$UNCHANGED"; do
+  [[ "$value" =~ ^[0-9]{1,3}$ ]] || exit 2
+done
+report "PASS|$SOURCE_SHA|$CREATED|$UPDATED|$UNCHANGED"
