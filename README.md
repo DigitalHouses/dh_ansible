@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="2d68ba478f070b89cd71b9888118f48d8c42bdd5"
-  local SHA="c84503825b38ebd29907e9f95d0240270dc05b19"
+  local REF="7fd6c4a61b1769570a74790841fc9e6da734f99f"
+  local SHA="647aed9ab3c7c953b33c1527ee838190c6a9c09e"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -84,7 +84,7 @@ CT1231 по-прежнему находятся прежние шаблоны; �
 и миграции, без уничтожения существующего Golden Backup.
 
 **Историческая приёмка 20.10.2026:** старый Bootstrap использовал задачи
-`10/20/30/40` и прошёл Fresh E2E. Новый одношаблонный Bootstrap ещё не принят.
+`10/20/30/40` и прошёл Fresh E2E. Новый одношаблонный Bootstrap прошёл живой CI-тест Semaphore 2.19 API, но ещё не принят в Fresh E2E.
 
 При запуске нового шаблона `40-Установить Remote Desktop Commander` показывает
 ссылку для подтверждения устройства и одноразовый код **в журнале Semaphore**.
