@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="428f4aa14849d953e7012ddb3a5f8e9305109d3f"
-  local SHA="6b93a84a0cb2c5630b356140b63aedf2ef4bfee9"
+  local REF="50a7a8f5184e750bf7af55f99fb67d96502637a3"
+  local SHA="53b2c7570f68583a62d5def69a4cf98062da2df8"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -85,6 +85,20 @@ echo "TERMINAL REMAINS OPEN"
 API-токены и SSH-ключ из зашифрованного Fleet Vault — без перевыпуска токенов.
 
 ## Приёмка
+
+20 октября 2026: **Fresh Bootstrap + recovery E2E `serzhan-home` = ACCEPTED**.
+Действующий CT1231 создан заново из официального Debian 13. Во время первого запуска выявлена
+ошибка необязательного Postfix в непривилегированном LXC; причина и обработка зафиксированы.
+После возобновления подготовлены HTTPS Semaphore, Ansible Core 2.21.4, локальный inventory,
+mDNS и PVE Access. Первоначальные credentials восстановлены из зашифрованного Fleet Vault
+**без перевыпуска токенов**. В Semaphore проверены задания:
+`10-Проверка запуска Ansible` Task #1 SUCCESS;
+`20-Аудит локального runner` Task #2 SUCCESS;
+`40-Проверка доступов PVE` Task #3 SUCCESS (`pve_access: PASS`).
+systemd healthy, Semaphore и оба root-owned watcher active, секретный SSH-ключ root:0600.
+Тест read-only PVE audit подтвердил реальные API-токены (GET) и SSH/sudo.
+Проверка восстановленной инфраструктуры принята. Сценарии **PVE write** и развёртывание
+NetAlertX являются отдельными задачами и этой приёмкой не утверждены.
 
 19 октября 2026: **Fresh Bootstrap E2E домашнего pilot runner принят** — официальный Debian 13 с нуля, HTTPS Semaphore 2.19.16, Ansible Core 2.21.4, два UI smoke-аудита SUCCESS и read-only повторный seeder PASS. Это **не** разрешение на инфраструктурные write-операции или массовое развёртывание.
 
