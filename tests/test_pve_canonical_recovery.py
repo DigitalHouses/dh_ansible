@@ -77,6 +77,8 @@ def test_recovers_exact_original_key_and_is_idempotent(monkeypatch, tmp_path, ca
                    check=True)
     ssh_bytes = original.read_text()
     tokens = {
+        "identity_schema": 2,
+        "principals": {"audit": "ansible-audit@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"},
         "audit_token_secret": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
         "write_token_secret": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
         "host_write_ssh_private_key": ssh_bytes,
@@ -92,3 +94,32 @@ def test_recovers_exact_original_key_and_is_idempotent(monkeypatch, tmp_path, ca
     assert out.count("PVE_FLEET_RECOVERY=PASS") == 2
     assert tokens["audit_token_secret"] not in out
     assert tokens["write_token_secret"] not in out
+
+def test_recovery_never_adopts_legacy_unversioned_pve_secrets(monkeypatch, tmp_path):
+    m, args, source, master = prepare(monkeypatch, tmp_path)
+    old = {
+        "audit_token_secret": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "write_token_secret": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "host_write_ssh_private_key": "historical-key-must-not-be-adopted",
+    }
+    master.write_bytes(encrypted(source, old) + b"\n")
+    master.chmod(0o600)
+    with pytest.raises(RuntimeError, match="Unversioned or conflicting"):
+        m.recover_worker(args)
+    assert not m.PRIVATE_KEY.exists()
+
+
+def test_recovery_refuses_wrong_canonical_principals(monkeypatch, tmp_path):
+    m, args, source, master = prepare(monkeypatch, tmp_path)
+    old = {
+        "identity_schema": 2,
+        "principals": {"audit": "somebody-else@pve", "write": "ansible-writer@pve", "linux": "ansible-linux"},
+        "audit_token_secret": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        "write_token_secret": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        "host_write_ssh_private_key": "historical-key-must-not-be-adopted",
+    }
+    master.write_bytes(encrypted(source, old) + b"\n")
+    master.chmod(0o600)
+    with pytest.raises(RuntimeError, match="Unversioned or conflicting"):
+        m.recover_worker(args)
+    assert not m.PRIVATE_KEY.exists()
