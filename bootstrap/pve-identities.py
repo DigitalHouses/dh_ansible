@@ -218,6 +218,7 @@ def main() -> None:
     parser.add_argument("--runner-ip", required=True)
     parser.add_argument("--pve-ip", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--reconcile-restored", action="store_true")
     args = parser.parse_args()
     if os.geteuid() != 0:
         fail("Run as root on PVE")
@@ -253,6 +254,41 @@ def main() -> None:
         exact_acl(acl, "user", u, role)
     for u, token, role in ((AUDIT_USER, "audit", "PVEAuditor"), (WRITE_USER, "write", "PVEAdmin")):
         exact_acl(acl, "token", f"{u}!{token}", role)
+    # The verified encrypted site Vault is the source of restored credentials.
+    # Here PVE root verifies identities and reauthorizes exactly the matching
+    # restored runner SSH public key, without issuing/rotating API tokens.
+    if args.reconcile_restored:
+        for user, token, role in ((AUDIT_USER, "audit", "PVEAuditor"),
+                                  (WRITE_USER, "write", "PVEAdmin")):
+            if not any(row.get("userid") == user for row in users):
+                fail(f"BLOCKED: Restored API principal missing: {user}")
+            ensure_list = records(
+                read_json("pveum", "user", "token", "list", user),
+                name=f"restored token for {user}")
+            if not any(row.get("tokenid") == token
+                       and str(row.get("privsep", "1")).lower() in ("1", "true")
+                       for row in ensure_list):
+                fail(f"BLOCKED: Restored PVE token missing or privileges differ: {user}")
+            if not exact_acl(acl, "user", user, role):
+                fail(f"BLOCKED: Restored API user ACL missing: {user}")
+            if not exact_acl(acl, "token", f"{user}!{token}", role):
+                fail(f"BLOCKED: Restored API token ACL missing: {user}")
+        key_file_state = runner_exec(str(args.runner_ctid), "stat", "-c",
+                                     "%a:%u:%g", KEY_PATH)
+        if key_file_state != "600:0:0":
+            fail("BLOCKED: Restored runner private key missing or unsafe")
+        restored_pub = runner_exec(str(args.runner_ctid), "cat", KEY_PATH + ".pub")
+        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\\r\\n]+)?",
+                            restored_pub):
+            fail("BLOCKED: Restored runner public key invalid")
+        if not args.apply:
+            print("PVE_RESTORED_IDENTITIES=READ_ONLY_PASS")
+            return
+        install_linux_user(str(source), restored_pub)
+        install_known_host(str(args.runner_ctid), str(target))
+        print("PVE_RESTORED_IDENTITIES=PASS (tokens preserved)")
+        return
+
     # Never issue a second credential if an existing PVE token or host
     # identity has lost its restore material. This gate is read-only.
     path = STAGING_DIR / f"pve-identities-{args.site}-ansible-v2-pending.json"
