@@ -154,10 +154,10 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     assert [x["id"] for x in original] == old_ids
     assert [x["task_id"] for x in original] == [i + 500 for i in old_ids]
     assert sum(method == "POST" for method, _, _ in api.calls) == n_post_before
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
     # Reapply is a no-op: no duplicate templates or repeated changes.
     m.provision(api, "demo-office", "Demo Site", True)
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
 
 
 def test_rename_alias_collision_blocks_without_writing():
@@ -190,7 +190,7 @@ def test_names_sort_globally_with_ten_step_gaps():
     m = module()
     titles = [name for name, _, _, _ in m.TEMPLATES]
     assert titles == sorted(titles)
-    assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30]
+    assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30, 40]
     assert all(isinstance(previous, str) for _, previous, _, _ in m.TEMPLATES)
 
 
