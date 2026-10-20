@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="e8ab7f455a5fdfdc2dd38752912d93fdbbe8296a"
-  local SHA="b1ce538d850e918e6545d531208fba241ac25af2"
+  local REF="da930a109f292c658d8edb0f00b51236c641943f"
+  local SHA="7d4235323a6d6862af95a81466b3ebc3c331e319"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -50,17 +50,27 @@ echo "TERMINAL REMAINS OPEN"
 
 В установщике закреплены SHA публичного Bootstrap, SHA его Git blob, версия/checksum GitHub CLI и независимо закреплённый Fleet commit. Ввод Vault master остаётся только на PVE. Отказ или неверный slug блокируют установку.
 
+## PVE Access · принятый E2E
+
+20 октября 2026: **PVE Access и зашифрованный Fleet Vault приняты** для `serzhan-home`.
+Канонические пользователи `ansible-audit@pve`, `ansible-writer@pve` и Linux `ansible-linux` созданы на PVE.
+Независимо подтверждены SSH/sudo, оба API-токена (только GET), совпадение SSH/TLS pin и восстановление
+двух токенов с исходным защищённым escrow из зашифрованного Fleet Vault в режиме read-only.
+Первый выпуск токенов повторно не выполнялся. Заключительный destructive Fresh E2E CT1231,
+включая Semaphore-шаблон `40`, **ещё не выполнен**.
+
 ## Semaphore · локальные операции
 
-При установке создаются три шаблона, привязанные к site-local inventory:
+При новой установке создаются четыре шаблона, привязанные к site-local inventory:
 
 - `10-Проверка запуска Ansible` — read-only smoke.
 - `20-Аудит локального runner` — read-only аудит identity, systemd, Git и Ansible.
 - `30-Установить Remote Desktop Commander` — **только по запросу оператора**, не запускается автоматически.
+- `40-Проверка доступов PVE` — независимый read-only аудит PVE API и Linux SSH через фиксированный root-owned watcher; Semaphore не получает root-доступ или токены.
 
 Стандарт имён **всех Semaphore-шаблонов** — `10-Название`, `20-Название`, `30-Название`: единая сквозная нумерация, шаг 10 для вставки новых задач (`15-Название`). Сортировка Semaphore по имени отражает эту очередность. Номера не создают автоматических зависимостей и не требуют запуска всех задач подряд. Seeder через официальный API переименовывает только проверенные исходные имена без номера с сохранением `template_id` и истории Task; при неизвестном имени, дублях или drift блокируется.
 
-У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм.
+У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `40` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
 
 ## Приёмка
 
