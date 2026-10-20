@@ -21,7 +21,7 @@ from pathlib import Path
 AUDIT_USER = "ansible-audit@pve"
 WRITE_USER = "ansible-writer@pve"
 HOST_USER = "ansible-linux"
-KEY_PATH = "/var/lib/ansimble/.ssh/pve_host_write_ed25519"
+KEY_PATH = "/var/lib/ansible/.ssh/pve_host_write_ed25519"
 STAGING_DIR = Path("/var/lib/digitalhouses/bootstrap")
 HOST_HOME = "/var/lib/ansible-linux"
 
@@ -79,7 +79,7 @@ def runner_exec(ctid: str, *cmd: str) -> str:
 
 
 def prepare_runner_key(ctid: str, site: str) -> str:
-    runner_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansimble/.ssh")
+    runner_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansible/.ssh")
     pub_path = KEY_PATH + ".pub"
     state = runner_exec(
         ctid, "python3", "-c",
@@ -107,7 +107,7 @@ def install_known_host(ctid: str, pve_ip: str) -> None:
         fail("Missing PVE SSH ED25519 host key")
     line = f"{pve_ip} {hostpub[0]} {hostpub[1]}"
     script = '''import os,pathlib,sys
-p=pathlib.Path('/var/lib/ansimble/.ssh/pve_host_audit_known_hosts')
+p=pathlib.Path('/var/lib/ansible/.ssh/pve_host_audit_known_hosts')
 line=sys.argv[1]
 if p.is_symlink(): raise SystemExit('BLOCKED: known_hosts symlink')
 if p.exists():
@@ -267,7 +267,7 @@ def main() -> None:
                 fail("BLOCKED: Existing canonical PVE token has no v2 escrow; restore from Fleet Vault")
     key_state = runner_exec(
         str(args.runner_ctid), "python3", "-c",
-        "import pathlib; p=pathlib.Path('/var/lib/ansimble/.ssh/pve_host_write_ed25519');"
+        "import pathlib; p=pathlib.Path('/var/lib/ansible/.ssh/pve_host_write_ed25519');"
         "q=pathlib.Path(str(p)+'.pub'); print(int(p.exists()),int(q.exists()))",
     )
     if key_state == "0 0" and staged:
