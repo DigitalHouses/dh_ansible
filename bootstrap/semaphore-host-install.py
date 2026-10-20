@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -1072,6 +1074,103 @@ def apply(args, template):
     print("GH_OAUTH_CONFIG=CLEANED_LOCALLY (revoke on GitHub if required)")
 
 
+def commission_pve_preflight(args, checkout=None):
+    """Non-destructive PVE root access preflight for an occupied CT1231."""
+    if os.geteuid() != 0 or not Path("/etc/pve/user.cfg").is_file():
+        raise Blocked("Commissioning requires root on the PVE host")
+    runner = ipaddress.IPv4Interface(args.runner_cidr)
+    host_ip = ipaddress.IPv4Address(args.pve_ip)
+    if runner.ip.packed[-1] != 231 or host_ip not in runner.network:
+        raise Blocked("Site runner and PVE address mismatch")
+    assigned = run("ip", "-4", "-o", "addr", "show")
+    if args.pve_ip not in [part.split("/")[0] for row in assigned.splitlines()
+                           for part in row.split() if "/" in part]:
+        raise Blocked("PVE IP is not assigned to this host")
+    fields = dict(row.split(": ", 1) for row in
+                  run("pct", "config", str(CTID)).splitlines() if ": " in row)
+    if fields.get("hostname") != runner_hostname(args.site) or fields.get("unprivileged") != "1":
+        raise Blocked("CT1231 guest identity does not match site")
+    if not all(item in fields.get("net0", "") for item in
+               (f"ip={args.runner_cidr}", f"gw={args.gateway}",
+                "bridge=vmbr0", "name=eth0")):
+        raise Blocked("CT1231 guest network differs from approved site")
+    if run("pct", "status", str(CTID)) != "status: running":
+        raise Blocked("Runner is not active")
+    if pct_guest("hostname") != runner_hostname(args.site):
+        raise Blocked("Runner's own hostname differs")
+    # Accept the old typo only for the live pilot; new builds use /opt/ansible.
+    canonical = "/opt/ansible/venv/bin/python"
+    previous = "/opt/ansimble/venv/bin/python"
+    guest_python = canonical if code("pct", "exec", str(CTID), "--", "test", "-x", canonical) == 0 else previous
+    if code("pct", "exec", str(CTID), "--", "test", "-x", guest_python) != 0:
+        raise Blocked("Runner has no approved Ansible environment")
+    if pct_guest(guest_python, "-c", "import ansible;print(ansible.__version__)") != "2.21.4":
+        raise Blocked("Runner Ansible version mismatch")
+    for service in ("digitalhouses-semaphore.service", "digitalhouses-remote-commander.service"):
+        if pct_guest("systemctl", "is-active", service) != "active":
+            raise Blocked("Existing runner service unavailable")
+    if checkout is not None:
+        private = checkout.parent / "fleet-detail" / "inventories" / args.site
+        def required_pin(filename, field):
+            rows = [line.strip().partition(":")[2].strip().strip('"')
+                    for line in (private / filename).read_text("utf-8").splitlines()
+                    if line.strip().startswith(field + ":")]
+            if len(rows) != 1:
+                raise Blocked("Missing or ambiguous site PVE pin: " + field)
+            return rows[0]
+        ssh_pin = required_pin("pve_access.yml", "server_host_key_fingerprint")
+        if not re.fullmatch(r"SHA256:[A-Za-z0-9+/=]+", ssh_pin):
+            raise Blocked("Invalid PVE SSH host fingerprint format")
+        observed_ssh = run("ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub")
+        if ssh_pin not in observed_ssh:
+            raise Blocked("PVE SSH ED25519 fingerprint does not match private Fleet")
+        tls_pin = required_pin("pve.yml", "sha256_fingerprint")
+        if not re.fullmatch(r"(?:[A-F0-9]{2}:){31}[A-F0-9]{2}", tls_pin):
+            raise Blocked("Invalid PVE HTTPS fingerprint format")
+        with socket.create_connection((args.pve_ip, 8006), timeout=5) as conn:
+            with ssl._create_unverified_context().wrap_socket(conn, server_hostname=args.pve_ip) as tls:
+                digest = hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest().upper()
+        observed_tls = ":".join(digest[index:index + 2] for index in range(0, 64, 2))
+        if tls_pin != observed_tls:
+            raise Blocked("PVE HTTPS certificate differs from pinned private Fleet")
+        print("PVE_FLEET_SSH_TLS_PINS=PASS", flush=True)
+    print("PVE_COMMISSION_PREFLIGHT=PASS; CT1231 remains installed", flush=True)
+    return guest_python
+
+
+def commission_existing_pve_access(args):
+    """PVE root credential enrollment via the existing pinned Bootstrap."""
+    with tempfile.TemporaryDirectory(prefix="dh-pve-access-") as folder:
+        work = Path(folder)
+        if args.use_github_session:
+            auth = Path(os.environ.get("GH_CONFIG_DIR", ""))
+            if not auth.is_absolute() or auth.is_symlink() or not auth.is_dir():
+                raise Blocked("Trusted GitHub session missing")
+            if auth.stat().st_uid != 0 or auth.stat().st_mode & 0o077:
+                raise Blocked("Unsafe GitHub authentication directory")
+        else:
+            auth = work / "gh"
+            auth.mkdir(mode=0o700)
+        gh = ensure_ephemeral_gh(work)
+        env = git_env(auth)
+        env["PATH"] = str(gh.parent) + os.pathsep + env.get("PATH", "")
+        checkout = work / "source"
+        authenticate_git(checkout, args.expected_commit, args.expected_fleet_commit,
+                         env, args.site, preauthorized=args.use_github_session)
+        guest_python = commission_pve_preflight(args, checkout)
+        master = validate_fleet_password(checkout)
+        assert_private_fleet_head(args.expected_fleet_commit, env)
+        exact = "COMMISSION PVE ACCESS " + args.site
+        print("PLAN: Create or restore canonical PVE identities; encrypt to Fleet Vault.", flush=True)
+        print("PLAN: No guest recreation or Semaphore installation.", flush=True)
+        if input("Type " + exact + " to authorize: ") != exact:
+            raise Blocked("PVE access enrollment declined")
+        provision_pve_identity_stage(args.site, args.runner_cidr, args.pve_ip,
+                                     checkout, args.expected_fleet_commit,
+                                     master, env, guest_python=guest_python)
+        print("PVE_ACCESS_COMMISSION=PASS", flush=True)
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", required=True)
@@ -1082,6 +1181,7 @@ def main(argv=None):
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-fleet-commit")
     parser.add_argument("--use-github-session", action="store_true")
+    parser.add_argument("--commission-pve-access", action="store_true")
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument("--resume-fresh", action="store_true",
                               help="Continue verified freshly booted empty CT1231")
@@ -1093,6 +1193,17 @@ def main(argv=None):
                               help="Complete verified running Semaphore; seed project only")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.commission_pve_access:
+        if any((args.resume, args.resume_ansible, args.resume_fresh, args.resume_semaphore)):
+            raise Blocked("Commissioning cannot be combined with runner resume")
+        commission_pve_preflight(args)
+        if not args.apply:
+            print("MODE=READ_ONLY; no authentication or changes")
+            return 0
+        if not args.expected_commit or not args.expected_fleet_commit:
+            raise Blocked("Immutable code/Fleet SHAs required")
+        commission_existing_pve_access(args)
+        return 0
     template = host_preflight(args.site, args.runner_cidr, args.gateway, args.pve_ip,
                               resume=args.resume, resume_ansible=args.resume_ansible,
                               resume_semaphore=args.resume_semaphore, resume_fresh=args.resume_fresh)
