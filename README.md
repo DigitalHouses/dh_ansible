@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="50a7a8f5184e750bf7af55f99fb67d96502637a3"
-  local SHA="53b2c7570f68583a62d5def69a4cf98062da2df8"
+  local REF="2ffb2f59acd12e545b6d8ea652a0f8e585cfd23b"
+  local SHA="29d0df96a32e385098838ff5df3a45ea96b6ff2a"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -71,6 +71,16 @@ echo "TERMINAL REMAINS OPEN"
 Стандарт имён **всех Semaphore-шаблонов** — `10-Название`, `20-Название`, `30-Название`: единая сквозная нумерация, шаг 10 для вставки новых задач (`15-Название`). Сортировка Semaphore по имени отражает эту очередность. Номера не создают автоматических зависимостей и не требуют запуска всех задач подряд. Seeder через официальный API переименовывает только проверенные исходные имена без номера с сохранением `template_id` и истории Task; при неизвестном имени, дублях или drift блокируется.
 
 У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `40` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
+
+### Fresh Bootstrap · transient pct exec SIGHUP
+
+В E2E 20.10.2026 Bootstrap смог создать Debian 13, установить Ansible и HTTPS Semaphore,
+но после `SEMAPHORE_TEMPLATES=PASS` один из вызовов `pct exec ... install -d` вернул `129`.
+Exit 129 совместим с SIGHUP; причина сигнала по журналу не определена.
+Только создание root-owned bootstrap-каталогов (идемпотентное `install -d`) теперь имеет
+**не более 3 попыток** с диагностикой `GUEST_DIRECTORY_ATTACH_INTERRUPTED`.
+Другие операции PVE, Semaphore, GitHub и Vault не повторяются автоматически.
+Повторный полностью успешный Fresh E2E необходим перед созданием Golden backup.
 
 ### Debian 13 · штатная обработка Postfix в LXC
 
