@@ -34,6 +34,7 @@ BOOTSTRAP_TEMPLATES = (
 )
 CATALOG_PATH = "catalog/semaphore-tasks.json"
 CATALOG_SOURCE = "DigitalHouses/dh_ansible"
+CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
 MANAGED_DESCRIPTION = "DigitalHouses · управляется каталогом dh_ansible"
 
 API_BASE = "https://127.0.0.1:3000/api"
@@ -55,12 +56,13 @@ def secure_file(path: Path) -> str:
 
 
 class API:
-    def __init__(self, base: str = API_BASE, *, ca_file="/etc/semaphore/tls.crt"):
+    def __init__(self, base: str = API_BASE, *, ca_file="/etc/semaphore/tls.crt", token=None):
         if base != API_BASE:
             raise Blocked("Seeder API must be localhost HTTPS, not remote")
         if not Path(ca_file).is_file() or Path(ca_file).is_symlink():
             raise Blocked("Trusted Semaphore local HTTPS certificate missing")
         self.base = base
+        self.token = token
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(CookieJar()),
             urllib.request.HTTPSHandler(context=ssl.create_default_context(cafile=ca_file)),
@@ -69,6 +71,8 @@ class API:
     def request(self, method: str, path: str, body=None):
         payload = json.dumps(body, ensure_ascii=False).encode() if body is not None else None
         headers = {"Accept": "application/json"}
+        if self.token is not None:
+            headers["Authorization"] = "Bearer " + self.token
         if payload is not None:
             headers["Content-Type"] = "application/json"
         request = urllib.request.Request(
@@ -256,6 +260,30 @@ def provision(api, site: str, project_title: str, apply: bool, *, templates=None
 
 
 
+
+def create_catalog_api_token_once(api):
+    """Keep a revocable Semaphore API token root-only; UI password may rotate."""
+    if CATALOG_TOKEN_PATH.exists() or CATALOG_TOKEN_PATH.is_symlink():
+        token = secure_file(CATALOG_TOKEN_PATH)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+            raise Blocked("Existing Semaphore catalog token invalid")
+        return
+    answer = api.request("POST", "/user/tokens")
+    token = answer.get("id") if isinstance(answer, dict) else None
+    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+        raise Blocked("Semaphore API returned unexpected token format")
+    fd = os.open(CATALOG_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="ascii") as out:
+            out.write(token + "\n")
+    except BaseException:
+        CATALOG_TOKEN_PATH.unlink(missing_ok=True)
+        raise
+    if secure_file(CATALOG_TOKEN_PATH) != token:
+        raise Blocked("Could not verify root-only Semaphore catalog token")
+    print("SEMAPHORE_CATALOG_API_TOKEN=ROOT_ONLY_CREATED", flush=True)
+
+
 def read_public_catalog():
     """Read a validated, immutable snapshot of the public catalog on each run."""
     def get_json(url: str, size: int = 128_000):
@@ -425,7 +453,9 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--site", required=True)
     parser.add_argument("--project-title")
-    parser.add_argument("--admin-password-file", required=True, type=Path)
+    credentials = parser.add_mutually_exclusive_group(required=True)
+    credentials.add_argument("--admin-password-file", type=Path)
+    credentials.add_argument("--admin-token-file", type=Path)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--sync-catalog", action="store_true")
     args = parser.parse_args(argv)
@@ -437,10 +467,21 @@ def main(argv=None):
         raise Blocked("Never run Seeder on PVE host")
     if os.uname().nodename != f"ansible-{args.site}":
         raise Blocked("Unexpected guest hostname")
-    password = secure_file(args.admin_password_file)
-    api = API()
-    api.login(password)
-    del password
+    if args.sync_catalog and args.admin_token_file is None:
+        raise Blocked("Catalog synchronization requires root-owned revocable API token")
+    if args.admin_token_file:
+        token = secure_file(args.admin_token_file)
+        if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+            raise Blocked("Invalid Semaphore API token")
+        api = API(token=token)
+        del token
+    else:
+        password = secure_file(args.admin_password_file)
+        api = API()
+        api.login(password)
+        del password
+        if args.apply:
+            create_catalog_api_token_once(api)
     if args.sync_catalog and not args.project_title:
         projects = api.request("GET", "/projects")
         if not isinstance(projects, list) or len(projects) != 1:
