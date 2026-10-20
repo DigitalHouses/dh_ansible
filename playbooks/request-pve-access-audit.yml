@@ -50,7 +50,16 @@
       failed_when: false
       retries: 90
       delay: 3
-      until: pve_audit_status.stdout == 'PASS:' ~ pve_audit_request_id.stdout
+      until: >-
+        pve_audit_status.stdout in [
+          'PASS:' ~ pve_audit_request_id.stdout,
+          'FAILED:' ~ pve_audit_request_id.stdout
+        ]
+    - name: Require successful independent PVE audit
+      ansible.builtin.assert:
+        that:
+          - pve_audit_status.stdout == 'PASS:' ~ pve_audit_request_id.stdout
+        fail_msg: "PVE Access audit failed. Inspect root-only /var/log/dh-pve-access-audit.log."
     - name: Report independent PVE audit
       ansible.builtin.debug:
         msg:
