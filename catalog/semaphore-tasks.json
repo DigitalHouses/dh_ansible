@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "tasks": [
+    {
+      "title": "00-Обновить список задач",
+      "playbook": "playbooks/request-semaphore-catalog-sync.yml",
+      "view": "01 · Подготовка"
+    },
+    {
+      "title": "10-Cloudflare · Туннель объекта (план)",
+      "playbook": "playbooks/plan-cloudflare-tunnel.yml",
+      "view": "01 · Подготовка"
+    },
+    {
+      "title": "20-Проверка запуска Ansible",
+      "playbook": "playbooks/smoke-semaphore.yml",
+      "view": "04 · Приёмка"
+    },
+    {
+      "title": "30-Аудит локального runner",
+      "playbook": "playbooks/audit-runner.yml",
+      "view": "04 · Приёмка"
+    },
+    {
+      "title": "40-Установить Remote Desktop Commander",
+      "playbook": "playbooks/request-runner-remote-commander.yml",
+      "view": "03 · Обслуживание"
+    },
+    {
+      "title": "50-Проверка доступов PVE",
+      "playbook": "playbooks/request-pve-access-audit.yml",
+      "view": "04 · Приёмка"
+    }
+  ]
+}
