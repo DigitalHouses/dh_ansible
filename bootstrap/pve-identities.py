@@ -129,10 +129,10 @@ def install_linux_user(source_ip: str, key: str) -> None:
             "--home-dir", HOST_HOME, "--shell", "/bin/bash", HOST_USER)
         account = pwd.getpwnam(HOST_USER)
     if account.pw_uid == 0 or account.pw_dir != HOST_HOME or account.pw_shell != "/bin/bash":
-        fail("BLOCKED: Existing Linux ansimble identity differs")
+        fail("BLOCKED: Existing Linux ansible-linux identity differs")
     shadow = run("getent", "shadow", HOST_USER).split(":", 2)[1]
     if not shadow.startswith(("!", "*")):
-        fail("BLOCKED: Existing Linux ansimble has an enabled password")
+        fail("BLOCKED: Existing Linux ansible-linux has an enabled password")
     sshdir = Path(account.pw_dir) / ".ssh"
     if sshdir.is_symlink():
         fail("BLOCKED: Linux .ssh is symlink")
@@ -178,7 +178,7 @@ def ensure_pve_user(user: str, role: str, users: list[dict], acls: list[dict]) -
         if existing.get("groups") not in (None, ""):
             fail(f"BLOCKED: Existing {user} has groups")
     else:
-        run("pveum", "user", "add", user, "--comment", "DigitalHouses Ansimble-2 site runner")
+        run("pveum", "user", "add", user, "--comment", "DigitalHouses Ansible site runner")
     if not exact_acl(acls, "user", user, role):
         run("pveum", "acl", "modify", "/", "--users", user, "--roles", role, "--propagate", "1")
 
@@ -200,7 +200,7 @@ def ensure_api_token(user: str, tokenid: str, role: str, staging: dict, path: Pa
         if existing_value is not None:
             fail(f"BLOCKED: Staged {fullid} secret exists but PVE token is missing")
         response = read_json("pveum", "user", "token", "add", user, tokenid,
-                             "--privsep", "1", "--comment", "DigitalHouses Ansimble-2 bootstrap")
+                             "--privsep", "1", "--comment", "DigitalHouses Ansible bootstrap")
         secret = response.get("value") if isinstance(response, dict) else None
         if not isinstance(secret, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", secret):
             fail(f"BLOCKED: Token creation response for {fullid} unexpected; do not retry blindly")
