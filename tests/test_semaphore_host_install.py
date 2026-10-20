@@ -680,7 +680,7 @@ def test_postfix_fix_never_masks_when_another_unit_failed(monkeypatch):
     calls = []
     def fake_guest(*args, **kwargs):
         calls.append(args)
-        return ("● postfix.service loaded failed failed Postfix\\n"
+        return ("● postfix.service loaded failed failed Postfix\n"
                 "● other.service loaded failed failed Other")
     monkeypatch.setattr(m, "pct_guest", fake_guest)
     assert m.reconcile_first_boot_postfix_only() is False
