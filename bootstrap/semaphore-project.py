@@ -48,6 +48,7 @@ LEGACY_MIGRATIONS = (
 CATALOG_PATH = "catalog/semaphore-tasks.json"
 CATALOG_SOURCE = "DigitalHouses/dh_ansible"
 CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
+CATALOG_TOKEN_FORMAT = re.compile(r"[A-Za-z0-9_-]{20,254}={0,2}")
 MANAGED_DESCRIPTION = "DigitalHouses · управляется каталогом dh_ansible"
 
 API_BASE = "https://127.0.0.1:3000/api"
@@ -75,6 +76,7 @@ class API:
         if not Path(ca_file).is_file() or Path(ca_file).is_symlink():
             raise Blocked("Trusted Semaphore local HTTPS certificate missing")
         self.base = base
+        self.ca_file = ca_file
         self.token = token
         self.opener = urllib.request.build_opener(
             urllib.request.HTTPCookieProcessor(CookieJar()),
@@ -295,17 +297,32 @@ def provision(api, site: str, project_title: str, apply: bool, *, templates=None
 
 
 
+def valid_catalog_token(value):
+    """Semaphore 2.19 issues Base64URL tokens with optional '=' padding."""
+    return (isinstance(value, str)
+            and CATALOG_TOKEN_FORMAT.fullmatch(value) is not None)
+
+
 def create_catalog_api_token_once(api):
     """Keep a revocable Semaphore API token root-only; UI password may rotate."""
     if CATALOG_TOKEN_PATH.exists() or CATALOG_TOKEN_PATH.is_symlink():
         token = secure_file(CATALOG_TOKEN_PATH)
-        if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+        if not valid_catalog_token(token):
             raise Blocked("Existing Semaphore catalog token invalid")
         return
     answer = api.request("POST", "/user/tokens")
     token = answer.get("id") if isinstance(answer, dict) else None
-    if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+    if not valid_catalog_token(token):
         raise Blocked("Semaphore API returned unexpected token format")
+    # An API token is sensitive. Verify it actually authorizes read-only API
+    # access before persisting; never expose any part of it in logs.
+    checker = API(ca_file=api.ca_file, token=token)
+    try:
+        projects = checker.request("GET", "/projects")
+    except Blocked as error:
+        raise Blocked("Created Semaphore API token failed authorization") from error
+    if not isinstance(projects, list):
+        raise Blocked("Created Semaphore API token returned invalid project data")
     fd = os.open(CATALOG_TOKEN_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="ascii") as out:
@@ -629,7 +646,7 @@ def main(argv=None):
         raise Blocked("Catalog synchronization requires root-owned revocable API token")
     if args.admin_token_file:
         token = secure_file(args.admin_token_file)
-        if not re.fullmatch(r"[A-Za-z0-9_-]{20,256}", token):
+        if not valid_catalog_token(token):
             raise Blocked("Invalid Semaphore API token")
         api = API(token=token)
         del token
