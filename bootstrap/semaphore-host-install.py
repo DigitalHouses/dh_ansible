@@ -244,7 +244,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
                            "/etc/systemd/system/digitalhouses-semaphore.service",
                            "/usr/bin/semaphore", "/root/dh-semaphore-2.19.16.deb"):
                 if code("pct", "exec", str(CTID), "--", "test", "-e", marker) == 0:
-                    raise Blocked("Guest has partial Semaphore runtime; recovery audit required")
+                    raise Blocked(f"Guest has partial Semaphore runtime: {marker}; recovery audit required")
         if resume_ansible:
             if code("pct", "exec", str(CTID), "--", "test", "-d",
                     "/opt/ansible/venv") != 0:
@@ -264,7 +264,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
                                "/var/lib/semaphore", "/etc/semaphore",
                                "/root/dh-fleet-deploy-key"):
                     if code("pct", "exec", str(CTID), "--", "test", "-e", marker) == 0:
-                        raise Blocked("Fresh resume guest has deployment artifacts")
+                        raise Blocked(f"Fresh resume guest has deployment artifact: {marker}")
                 if pct_guest("stat", "-c", "%a:%u:%g:%F", "/etc") != "755:0:0:directory":
                     raise Blocked("Fresh resume requires repaired /etc")
                 verify_fresh_system_bus()
