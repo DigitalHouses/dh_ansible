@@ -34,6 +34,7 @@ SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
 ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 CODE_FILES = (
     "bootstrap/pve-identities.py",
+    "bootstrap/import-pve-identities-vault.py",
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
@@ -610,14 +611,12 @@ def validate_fleet_password(checkout):
     digest = hashlib.sha256(vault.read_bytes()).hexdigest()
     ciphertext = gate.read_pinned_vault(vault, digest)
     password = getpass.getpass("OWNER: Fleet master password (hidden): ")
-    try:
-        authenticated = gate.password_authenticates(ciphertext, password.encode("utf-8"))
-    finally:
-        del password
+    authenticated = gate.password_authenticates(ciphertext, password.encode("utf-8"))
     if not authenticated:
         raise Blocked("Fleet master password rejected; PVE unchanged")
     print("FLEET_MASTER_PASSWORD=PASS (not stored)", flush=True)
     print("FULL_VAULT_DECRYPTION=PENDING_AFTER_ANSIBLE", flush=True)
+    return password
 
 
 def pct_guest(*argv, timeout=180):
@@ -792,26 +791,102 @@ def stage_runner_remote_commander(site, checkout):
     print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
-def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
-                                 checkout: Path) -> None:
-    """Root-only PVE identity bootstrap; never silently rotate existing tokens.
+def assert_private_fleet_head(expected_fleet_commit: str, env: dict) -> dict:
+    """No secret issue until private Git HEAD agrees with the pinned snapshot."""
+    target = "repos/" + FLEET_REPO
+    current = json.loads(run("gh", "api", target + "/git/ref/heads/main",
+                             timeout=25, env=env))
+    if current.get("object", {}).get("sha") != expected_fleet_commit:
+        raise Blocked("Fleet HEAD differs from pinned release; do not issue tokens")
+    record = json.loads(run("gh", "api", target + "/contents/secrets/fleet.vault.yml?ref=main",
+                            timeout=25, env=env))
+    if record.get("type") != "file" or record.get("encoding") != "base64":
+        raise Blocked("Fleet Vault source is not a regular file")
+    return record
 
-    This first phase issues new canonical principals into root-only escrow.
-    The encrypted Fleet Vault must be published and independently accepted
-    before it can become a routine unattended credential source.
+
+def publish_encrypted_pve_vault(source_vault: Path, candidate: Path,
+                                expected_fleet_commit: str, env: dict) -> str:
+    """Publish ONLY encrypted Vault ciphertext using GitHub Contents CAS."""
+    current = assert_private_fleet_head(expected_fleet_commit, env)
+    current_bytes = base64.b64decode(current["content"])
+    if current_bytes != source_vault.read_bytes():
+        raise Blocked("Pinned Fleet Vault content differs from GitHub main")
+    proposed = candidate.read_bytes()
+    if not proposed.startswith(b"$ANSIBLE_VAULT;") or len(proposed) > 4 * 1024 * 1024:
+        raise Blocked("Invalid encrypted Fleet Vault candidate")
+    payload = {
+        "message": "Fleet: store canonical PVE site access credentials (encrypted)",
+        "content": base64.b64encode(proposed).decode("ascii"),
+        "sha": current["sha"],
+        "branch": "main",
+    }
+    with tempfile.TemporaryDirectory(prefix="dh-fleet-publication-", dir="/run") as loc:
+        request_path = Path(loc) / "request.json"
+        request_path.write_text(json.dumps(payload), encoding="utf-8")
+        request_path.chmod(0o600)
+        response = json.loads(run(
+            "gh", "api", "--method", "PUT",
+            "repos/" + FLEET_REPO + "/contents/secrets/fleet.vault.yml",
+            "--input", str(request_path), timeout=60, env=env,
+        ))
+        commit_sha = response.get("commit", {}).get("sha")
+        if not isinstance(commit_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", commit_sha):
+            raise Blocked("GitHub Vault write uncertain; reconcile read-only, no retry")
+    # Never retry the write when a network/API result is ambiguous.
+    record = json.loads(run(
+        "gh", "api", "repos/" + FLEET_REPO + "/contents/secrets/fleet.vault.yml?ref=" + commit_sha,
+        timeout=30, env=env))
+    if base64.b64decode(record.get("content", "")) != proposed:
+        raise Blocked("Committed encrypted Vault verification failed")
+    print("FLEET_VAULT_ENCRYPTED_PUBLICATION=PASS", flush=True)
+    print("FLEET_NEW_COMMIT=" + commit_sha, flush=True)
+    return commit_sha
+
+
+def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
+                                 checkout: Path, expected_fleet_commit: str,
+                                 owner_master: str, env: dict) -> None:
+    """Create credentials as PVE root; seal to Fleet Vault before declaring PASS.
+
+    Fail closed on concurrent Fleet changes; no secret values in stdout or argv.
     """
+    record = assert_private_fleet_head(expected_fleet_commit, env)
+    source_vault = checkout.parent / "fleet-detail/secrets/fleet.vault.yml"
+    if base64.b64decode(record.get("content", "")) != source_vault.read_bytes():
+        raise Blocked("Fleet source is not pinned to the current private main")
     source = checkout / "bootstrap/pve-identities.py"
-    if source.is_symlink() or not source.is_file():
-        raise Blocked("Pinned PVE identity bootstrap missing")
+    worker = checkout / "bootstrap/import-pve-identities-vault.py"
+    if any(path.is_symlink() or not path.is_file() for path in (source, worker)):
+        raise Blocked("Pinned PVE identity bootstrap or Vault worker missing")
     runner_ip = str(ipaddress.IPv4Interface(runner_cidr).ip)
+    # PVE Linux user/tokens have not been created before all gates above.
     run("python3", str(source),
-        "--site", site,
-        "--runner-ctid", str(CTID),
-        "--runner-ip", runner_ip,
-        "--pve-ip", pve_ip,
+        "--site", site, "--runner-ctid", str(CTID),
+        "--runner-ip", runner_ip, "--pve-ip", pve_ip,
         "--apply", timeout=180)
     print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
-    print("PVE_CREDENTIALS=VAULT_IMPORT_PENDING", flush=True)
+
+    # Required data remain root-only on PVE, and all guest secrets are temporary.
+    pct_guest("install", "-d", "-m", "0700", "/opt/digitalhouses/bootstrap")
+    run("pct", "push", str(CTID), str(worker),
+        "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py")
+    pct_guest("chmod", "0700", "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py")
+    with tempfile.TemporaryDirectory(prefix="dh-pve-vault-", dir="/run") as loc:
+        tmp = Path(loc)
+        master_path = tmp / "master"
+        master_path.write_bytes(owner_master.encode("utf-8") + b"\\n")
+        master_path.chmod(0o600)
+        candidate = tmp / "candidate.vault.yml"
+        run("python3", str(worker),
+            "--site", site, "--ctid", str(CTID),
+            "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+            "--master-file", str(master_path),
+            "--vault-file", str(source_vault),
+            "--output-file", str(candidate), timeout=150)
+        publish_encrypted_pve_vault(source_vault, candidate,
+                                    expected_fleet_commit, env)
+    print("PVE_CREDENTIALS=ENCRYPTED_FLEET_PUBLISHED", flush=True)
 
 
 def resolve_project_title(checkout: Path, site: str, provided: str | None) -> str:
@@ -859,7 +934,7 @@ def apply(args, template):
         site_files = authenticate_git(checkout, args.expected_commit,
                                       args.expected_fleet_commit, env, args.site,
                                       preauthorized=args.use_github_session)
-        validate_fleet_password(checkout)
+        owner_master = validate_fleet_password(checkout)
         verify_site_escrow(checkout, args.site)
         # Site ID y/n is confirmed by the public installer before auth.
         # Resume operations still require an explicit extra confirmation.
@@ -920,7 +995,8 @@ def apply(args, template):
         if not (args.resume or args.resume_fresh or args.resume_ansible
                 or args.resume_semaphore):
             provision_pve_identity_stage(args.site, args.runner_cidr,
-                                         args.pve_ip, checkout)
+                                         args.pve_ip, checkout,
+                                         args.expected_fleet_commit, owner_master, env)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
