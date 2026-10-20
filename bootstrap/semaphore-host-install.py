@@ -671,20 +671,56 @@ def ensure_debian_etc_before_first_boot():
     print("GUEST_ETC_PREBOOT=VERIFIED", flush=True)
 
 
+def reconcile_first_boot_postfix_only() -> bool:
+    """Handle the Debian 13 LXC Postfix mount namespace incompatibility.
+
+    Postfix is unrelated to this runner. Never excuse degraded systemd when
+    *any* other failed unit is present. Use native systemd mask/reset-failed;
+    do not change LXC privileges or systemd's global readiness contract.
+    """
+    failed = pct_guest("systemctl", "list-units", "--failed", "--all",
+                       "--no-legend", "--plain", "--no-pager")
+    units = []
+    for line in failed.splitlines():
+        fields = line.split()
+        unit = next((part for part in fields if part.endswith(
+            (".service", ".socket", ".mount", ".target", ".timer"))), None)
+        if unit:
+            units.append(unit)
+    if units != ["postfix.service"]:
+        return False
+    pct_guest("systemctl", "mask", "--now", "postfix.service")
+    pct_guest("systemctl", "reset-failed", "postfix.service")
+    print("FRESH_DEBIAN_POSTFIX=MASKED_UNNEEDED_LXC_SERVICE", flush=True)
+    return True
+
+
 def verify_fresh_system_bus(*, attempts=30, delay_seconds=2):
-    """Wait for first-boot systemd and D-Bus, without masking persistent failure."""
+    """Wait for healthy first-boot systemd and D-Bus; fix only known Postfix."""
     probes = (
         ("dbus.service", ("systemctl", "is-active", "dbus.service")),
         ("dbus.socket", ("systemctl", "is-active", "dbus.socket")),
         ("systemd", ("systemctl", "is-system-running")),
     )
     last = []
+    postfix_reconciled = False
     for attempt in range(attempts):
         last = [(name, code("pct", "exec", str(CTID), "--", *command))
                 for name, command in probes]
         if all(rc == 0 for _, rc in last):
             print("FRESH_DEBIAN_DBUS=PASS", flush=True)
             return
+        if (not postfix_reconciled and last == [
+                ("dbus.service", 0), ("dbus.socket", 0), ("systemd", 1)]):
+            # Only attempt a one-time reconciliation when D-Bus is working
+            # and systemd is degraded. Any unknown failure remains blocking.
+            postfix_reconciled = reconcile_first_boot_postfix_only()
+            if postfix_reconciled:
+                last = [(name, code("pct", "exec", str(CTID), "--", *command))
+                        for name, command in probes]
+                if all(rc == 0 for _, rc in last):
+                    print("FRESH_DEBIAN_DBUS=PASS", flush=True)
+                    return
         if attempt + 1 < attempts:
             time.sleep(delay_seconds)
     print("FRESH_DEBIAN_DBUS=FAILED " +
