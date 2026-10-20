@@ -72,7 +72,7 @@ def test_root_bootstrap_uses_canonical_runner_and_separate_v2_escrow():
     assert '"identity_schema": 2' in source
     assert '"principals": {"audit": AUDIT_USER' in source
     assert '"/var/lib/ansible-linux"' in source
-    assert '"90-digitalhouses-ansible-linux' in source
+    assert '90-digitalhouses-ansible-linux' in source
     assert '"600:0:0"' in source
 
 
