@@ -284,3 +284,36 @@ def test_00_catalog_rejects_unsafe_existing_collision(monkeypatch):
         m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
     after = len([x for x in api.calls if x[0] in ("POST", "PUT")])
     assert before == after
+
+
+def test_single_initial_task_is_safe_self_sync():
+    m = module()
+    assert len(m.BOOTSTRAP_TEMPLATES) == 1
+    assert m.BOOTSTRAP_TEMPLATES[0][0] == "00-Обновить список задач"
+    assert m.BOOTSTRAP_TEMPLATES[0][2] == "playbooks/request-semaphore-catalog-sync.yml"
+    sync = (BASE.parent / "semaphore-catalog-sync-request.sh").read_text()
+    assert "semaphore:semaphore:600" in sync
+    assert "SYNC:" in sync and "SITE=" in sync
+    assert "dh-semaphore-catalog-api-token" in sync
+    assert "--sync-catalog --apply" in sync
+    assert "chown root:semaphore" in sync and "chmod 0640" in sync
+    assert "SOURCE_SHA=" in sync
+    assert "/etc/pve/user.cfg" not in sync
+    play = (BASE.parents[1] / "playbooks/request-semaphore-catalog-sync.yml").read_text()
+    assert "become: false" in play
+    assert "dh-semaphore-catalog-sync.path" in play
+    assert "remote_user:" not in play
+    assert "source_commit" in play and "created:" in play
+
+
+def test_catalog_source_contract_and_recovery_template_restrictions():
+    src = BASE.read_text()
+    assert "api.github.com/repos/" in src
+    assert "raw.githubusercontent.com/" in src
+    assert "CATALOG_SOURCE_SHA=" in src
+    assert "Catalog cannot change the bootstrap recovery task" in src
+    assert "Catalog playbook missing or oversized" in src
+    assert "Never rewrite bootstrap recovery task" in src
+    assert "Existing Semaphore resource drift" in src
+    assert "api.request(\"PUT\"" in src
+    assert 'api.request("DELETE"' not in src
