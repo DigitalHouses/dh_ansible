@@ -18,11 +18,12 @@ import sys
 import tempfile
 from pathlib import Path
 
-AUDIT_USER = "ansimble-audit@pve"
-WRITE_USER = "ansimble@pve"
-HOST_USER = "ansimble"
-KEY_PATH = "/var/lib/ansimble/.ssh/pve_host_write_ed25519"
+AUDIT_USER = "ansible-audit@pve"
+WRITE_USER = "ansible-writer@pve"
+HOST_USER = "ansible-linux"
+KEY_PATH = "/var/lib/ansible/.ssh/pve_host_write_ed25519"
 STAGING_DIR = Path("/var/lib/digitalhouses/bootstrap")
+HOST_HOME = "/var/lib/ansible-linux"
 
 
 def fail(message: str) -> None:
@@ -77,12 +78,8 @@ def runner_exec(ctid: str, *cmd: str) -> str:
     return run("pct", "exec", ctid, "--", *cmd)
 
 
-def runner_user_exec(ctid: str, *cmd: str) -> str:
-    return runner_exec(ctid, "runuser", "-u", HOST_USER, "--", *cmd)
-
-
 def prepare_runner_key(ctid: str, site: str) -> str:
-    runner_user_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansimble/.ssh")
+    runner_exec(ctid, "install", "-d", "-m", "0700", "/var/lib/ansible/.ssh")
     pub_path = KEY_PATH + ".pub"
     state = runner_exec(
         ctid, "python3", "-c",
@@ -90,13 +87,17 @@ def prepare_runner_key(ctid: str, site: str) -> str:
         "print(int(a.exists()),int(b.exists()))", KEY_PATH, pub_path,
     )
     if state == "0 0":
-        runner_user_exec(ctid, "ssh-keygen", "-q", "-t", "ed25519", "-N", "",
+        runner_exec(ctid, "ssh-keygen", "-q", "-t", "ed25519", "-N", "",
                          "-f", KEY_PATH, "-C", f"digitalhouses-{site}-pve-host")
     elif state != "1 1":
         fail("BLOCKED: Incomplete runner SSH key pair; no overwrite")
     key = runner_exec(ctid, "cat", pub_path).strip()
     if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?", key):
         fail("Invalid runner ED25519 public key")
+    # Semaphore cannot read the PVE host-write private key.
+    mode = runner_exec(ctid, "stat", "-c", "%a:%u:%g", KEY_PATH)
+    if mode != "600:0:0":
+        fail("BLOCKED: Runner host-write private key must remain root-only")
     return key
 
 
@@ -106,7 +107,7 @@ def install_known_host(ctid: str, pve_ip: str) -> None:
         fail("Missing PVE SSH ED25519 host key")
     line = f"{pve_ip} {hostpub[0]} {hostpub[1]}"
     script = '''import os,pathlib,sys
-p=pathlib.Path('/var/lib/ansimble/.ssh/pve_host_audit_known_hosts')
+p=pathlib.Path('/var/lib/ansible/.ssh/pve_host_audit_known_hosts')
 line=sys.argv[1]
 if p.is_symlink(): raise SystemExit('BLOCKED: known_hosts symlink')
 if p.exists():
@@ -117,7 +118,7 @@ else:
     with os.fdopen(fd,'w') as f: f.write(line+'\\n')
 print('PINNED_HOST_KEY=PASS')
 '''
-    print(runner_user_exec(ctid, "python3", "-c", script, line))
+    print(runner_exec(ctid, "python3", "-c", script, line))
 
 
 def install_linux_user(source_ip: str, key: str) -> None:
@@ -125,13 +126,13 @@ def install_linux_user(source_ip: str, key: str) -> None:
         account = pwd.getpwnam(HOST_USER)
     except KeyError:
         run("useradd", "--system", "--user-group", "--create-home",
-            "--home-dir", "/var/lib/ansimble", "--shell", "/bin/bash", HOST_USER)
+            "--home-dir", HOST_HOME, "--shell", "/bin/bash", HOST_USER)
         account = pwd.getpwnam(HOST_USER)
-    if account.pw_uid == 0 or account.pw_dir != "/var/lib/ansimble" or account.pw_shell != "/bin/bash":
-        fail("BLOCKED: Existing Linux ansimble identity differs")
+    if account.pw_uid == 0 or account.pw_dir != HOST_HOME or account.pw_shell != "/bin/bash":
+        fail("BLOCKED: Existing Linux ansible-linux identity differs")
     shadow = run("getent", "shadow", HOST_USER).split(":", 2)[1]
     if not shadow.startswith(("!", "*")):
-        fail("BLOCKED: Existing Linux ansimble has an enabled password")
+        fail("BLOCKED: Existing Linux ansible-linux has an enabled password")
     sshdir = Path(account.pw_dir) / ".ssh"
     if sshdir.is_symlink():
         fail("BLOCKED: Linux .ssh is symlink")
@@ -154,8 +155,8 @@ def install_linux_user(source_ip: str, key: str) -> None:
             fh.write(managed_line + "\n")
     os.chown(authorized, account.pw_uid, account.pw_gid)
     os.chmod(authorized, 0o600)
-    sudoers = Path("/etc/sudoers.d/90-digitalhouses-ansimble")
-    desired = "ansimble ALL=(root) NOPASSWD: ALL\n"
+    sudoers = Path("/etc/sudoers.d/90-digitalhouses-ansible-linux")
+    desired = "ansible-linux ALL=(root) NOPASSWD: ALL\n"
     if sudoers.is_symlink():
         fail("BLOCKED: sudoers path symlink")
     if sudoers.exists() and sudoers.read_text() != desired:
@@ -177,7 +178,7 @@ def ensure_pve_user(user: str, role: str, users: list[dict], acls: list[dict]) -
         if existing.get("groups") not in (None, ""):
             fail(f"BLOCKED: Existing {user} has groups")
     else:
-        run("pveum", "user", "add", user, "--comment", "DigitalHouses Ansimble-2 site runner")
+        run("pveum", "user", "add", user, "--comment", "DigitalHouses Ansible site runner")
     if not exact_acl(acls, "user", user, role):
         run("pveum", "acl", "modify", "/", "--users", user, "--roles", role, "--propagate", "1")
 
@@ -199,7 +200,7 @@ def ensure_api_token(user: str, tokenid: str, role: str, staging: dict, path: Pa
         if existing_value is not None:
             fail(f"BLOCKED: Staged {fullid} secret exists but PVE token is missing")
         response = read_json("pveum", "user", "token", "add", user, tokenid,
-                             "--privsep", "1", "--comment", "DigitalHouses Ansimble-2 bootstrap")
+                             "--privsep", "1", "--comment", "DigitalHouses Ansible bootstrap")
         secret = response.get("value") if isinstance(response, dict) else None
         if not isinstance(secret, str) or not re.fullmatch(r"[0-9a-fA-F-]{36}", secret):
             fail(f"BLOCKED: Token creation response for {fullid} unexpected; do not retry blindly")
@@ -217,6 +218,7 @@ def main() -> None:
     parser.add_argument("--runner-ip", required=True)
     parser.add_argument("--pve-ip", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--reconcile-restored", action="store_true")
     args = parser.parse_args()
     if os.geteuid() != 0:
         fail("Run as root on PVE")
@@ -238,11 +240,11 @@ def main() -> None:
                for row in local_addresses.splitlines() if len(row.split()) >= 4):
         fail("BLOCKED: PVE IP not assigned to this host")
     conf = run("pct", "config", str(args.runner_ctid))
-    if f"hostname: ansimble-{args.site}" not in conf or f"ip={source}/" not in conf:
+    if f"hostname: ansible-{args.site}" not in conf or f"ip={source}/" not in conf:
         fail("BLOCKED: Runner CTID/site/IP does not match PVE configuration")
     if run("pct", "status", str(args.runner_ctid)) != "status: running":
         fail("BLOCKED: Runner is not running")
-    if runner_exec(str(args.runner_ctid), "hostname") != f"ansimble-{args.site}":
+    if runner_exec(str(args.runner_ctid), "hostname") != f"ansible-{args.site}":
         fail("BLOCKED: Runner guest hostname mismatch")
     if source == target:
         fail("BLOCKED: Runner and PVE addresses must differ")
@@ -252,23 +254,89 @@ def main() -> None:
         exact_acl(acl, "user", u, role)
     for u, token, role in ((AUDIT_USER, "audit", "PVEAuditor"), (WRITE_USER, "write", "PVEAdmin")):
         exact_acl(acl, "token", f"{u}!{token}", role)
+    # The verified encrypted site Vault is the source of restored credentials.
+    # Here PVE root verifies identities and reauthorizes exactly the matching
+    # restored runner SSH public key, without issuing/rotating API tokens.
+    if args.reconcile_restored:
+        for user, token, role in ((AUDIT_USER, "audit", "PVEAuditor"),
+                                  (WRITE_USER, "write", "PVEAdmin")):
+            if not any(row.get("userid") == user for row in users):
+                fail(f"BLOCKED: Restored API principal missing: {user}")
+            ensure_list = records(
+                read_json("pveum", "user", "token", "list", user),
+                name=f"restored token for {user}")
+            if not any(row.get("tokenid") == token
+                       and str(row.get("privsep", "1")).lower() in ("1", "true")
+                       for row in ensure_list):
+                fail(f"BLOCKED: Restored PVE token missing or privileges differ: {user}")
+            if not exact_acl(acl, "user", user, role):
+                fail(f"BLOCKED: Restored API user ACL missing: {user}")
+            if not exact_acl(acl, "token", f"{user}!{token}", role):
+                fail(f"BLOCKED: Restored API token ACL missing: {user}")
+        key_file_state = runner_exec(str(args.runner_ctid), "stat", "-c",
+                                     "%a:%u:%g", KEY_PATH)
+        if key_file_state != "600:0:0":
+            fail("BLOCKED: Restored runner private key missing or unsafe")
+        restored_pub = runner_exec(str(args.runner_ctid), "cat", KEY_PATH + ".pub")
+        if not re.fullmatch(r"ssh-ed25519 [A-Za-z0-9+/=]+(?: [^\r\n]+)?",
+                            restored_pub):
+            fail("BLOCKED: Restored runner public key invalid")
+        if not args.apply:
+            print("PVE_RESTORED_IDENTITIES=READ_ONLY_PASS")
+            return
+        install_linux_user(str(source), restored_pub)
+        install_known_host(str(args.runner_ctid), str(target))
+        print("PVE_RESTORED_IDENTITIES=PASS (tokens preserved)")
+        return
+
+    # Never issue a second credential if an existing PVE token or host
+    # identity has lost its restore material. This gate is read-only.
+    path = STAGING_DIR / f"pve-identities-{args.site}-ansible-v2-pending.json"
+    staged = path.is_file() and not path.is_symlink()
+    if path.exists() and not staged:
+        fail("BLOCKED: Unexpected canonical identity staging type")
+    for user, token in ((AUDIT_USER, "audit"), (WRITE_USER, "write")):
+        if any(u.get("userid") == user for u in users):
+            existing = records(read_json("pveum", "user", "token", "list", user),
+                               name=f"canonical token list for {user}")
+            if any(row.get("tokenid") == token for row in existing) and not staged:
+                fail("BLOCKED: Existing canonical PVE token has no v2 escrow; restore from Fleet Vault")
+    key_state = runner_exec(
+        str(args.runner_ctid), "python3", "-c",
+        "import pathlib; p=pathlib.Path('/var/lib/ansible/.ssh/pve_host_write_ed25519');"
+        "q=pathlib.Path(str(p)+'.pub'); print(int(p.exists()),int(q.exists()))",
+    )
+    if key_state == "0 0" and staged:
+        fail("BLOCKED: Rebuilt runner has no PVE private key; restore from Fleet Vault, do not rotate")
+    if key_state == "0 0":
+        try:
+            pwd.getpwnam(HOST_USER)
+        except KeyError:
+            pass
+        else:
+            fail("BLOCKED: Existing canonical PVE Linux principal but no runner key; recover first")
     print(f"PREFLIGHT=PASS SITE={args.site} RUNNER_CTID={args.runner_ctid}")
     if not args.apply:
         print("MODE=READ_ONLY; add --apply after reviewing the plan")
         return
     STAGING_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(STAGING_DIR, 0o700)
-    path = STAGING_DIR / f"pve-identities-{args.site}-pending.json"
+    # Identity v2 intentionally does not reuse historical token escrow.
     if path.is_symlink():
         fail("BLOCKED: Staging path symlink")
     if path.exists():
         if path.stat().st_uid != 0 or path.stat().st_mode & 0o077:
             fail("BLOCKED: Unsafe staging file permissions")
         staging = json.loads(path.read_text())
-        if staging.get("site_id") != args.site:
+        if staging.get("site_id") != args.site or staging.get("identity_schema") != 2:
+            fail("BLOCKED: Staging identity schema mismatch")
+        if staging.get("principals") != {"audit": AUDIT_USER, "write": WRITE_USER, "linux": HOST_USER}:
+            fail("BLOCKED: Staging principal mismatch")
             fail("BLOCKED: Staging file site mismatch")
     else:
-        staging = {"site_id": args.site, "runner_ip": str(source),
+        staging = {"site_id": args.site, "identity_schema": 2,
+                   "principals": {"audit": AUDIT_USER, "write": WRITE_USER, "linux": HOST_USER},
+                   "runner_ip": str(source),
                    "pve_ip": str(target), "pve_tokens": {}, "status": "VAULT_PENDING"}
         save_staging(path, staging)
     if staging.get("runner_ip") != str(source) or staging.get("pve_ip") != str(target):

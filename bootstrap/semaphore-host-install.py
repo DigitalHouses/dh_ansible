@@ -19,6 +19,8 @@ import os
 from pathlib import Path
 import re
 import shutil
+import socket
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -30,9 +32,16 @@ CTID = 1231
 CODE_REPO = "DigitalHouses/dh_ansible"
 FLEET_REPO = "DigitalHouses/dh_ansible_fleet_detail"
 BRIDGE = "vmbr0"
-SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
+SITE_INVENTORY_BASE = "/var/lib/ansible/site-data"
 ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 CODE_FILES = (
+    "bootstrap/pve-identities.py",
+    "bootstrap/import-pve-identities-vault.py",
+    "playbooks/audit-pve-access.yml",
+    "playbooks/request-pve-access-audit.yml",
+    "bootstrap/pve-access-audit-request.sh",
+    "bootstrap/dh-pve-access-audit.service",
+    "bootstrap/dh-pve-access-audit.path",
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
@@ -202,7 +211,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
             pct_guest("test", "-f", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py")
             pct_guest("test", "-f", "/opt/digitalhouses/bootstrap/runner.txt")
         if resume_semaphore:
-            for marker in ("/opt/ansimble/venv/bin/ansible-playbook",
+            for marker in ("/opt/ansible/venv/bin/ansible-playbook",
                            "/etc/semaphore/config.json",
                            "/etc/semaphore/tls.crt",
                            "/var/lib/semaphore/database.sqlite",
@@ -238,20 +247,20 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
                     raise Blocked("Guest has partial Semaphore runtime; recovery audit required")
         if resume_ansible:
             if code("pct", "exec", str(CTID), "--", "test", "-d",
-                    "/opt/ansimble/venv") != 0:
+                    "/opt/ansible/venv") != 0:
                 raise Blocked("Expected existing Ansible venv missing")
             version = pct_guest("env", "LC_ALL=C.UTF-8", "LANG=C.UTF-8",
-                                "/opt/ansimble/venv/bin/ansible-playbook", "--version")
+                                "/opt/ansible/venv/bin/ansible-playbook", "--version")
             if "ansible-playbook [core 2.21.4]" not in version:
                 raise Blocked("Existing Ansible version differs from release")
-            pct_guest("/opt/ansimble/venv/bin/python", "-m", "pip", "check")
+            pct_guest("/opt/ansible/venv/bin/python", "-m", "pip", "check")
             print("CT1231=VERIFIED_EXISTING_ANSIBLE_ONLY", flush=True)
         elif not resume_semaphore:
             if code("pct", "exec", str(CTID), "--", "test", "-e",
-                    "/opt/ansimble/venv") == 0:
+                    "/opt/ansible/venv") == 0:
                 raise Blocked("Guest has partial Ansible installation; use controlled resume")
             if resume_fresh:
-                for marker in ("/opt/digitalhouses/bootstrap", "/opt/ansimble",
+                for marker in ("/opt/digitalhouses/bootstrap", "/opt/ansible",
                                "/var/lib/semaphore", "/etc/semaphore",
                                "/root/dh-fleet-deploy-key"):
                     if code("pct", "exec", str(CTID), "--", "test", "-e", marker) == 0:
@@ -526,7 +535,7 @@ def install_site_inventory(site, paths, checkout):
                 raise Blocked("Guest site file checksum mismatch")
         if pct_guest("stat", "-c", "%a:%U:%G", target) != "640:root:semaphore":
             raise Blocked("Guest inventory permissions mismatch")
-    for forbidden in ("/var/lib/ansimble/fleet-detail",
+    for forbidden in ("/var/lib/ansible/fleet-detail",
                       "/root/dh-fleet-deploy-key",
                       site_root + "/secrets/fleet.vault.yml"):
         if code("pct", "exec", str(CTID), "--", "test", "-e", forbidden) == 0:
@@ -609,14 +618,12 @@ def validate_fleet_password(checkout):
     digest = hashlib.sha256(vault.read_bytes()).hexdigest()
     ciphertext = gate.read_pinned_vault(vault, digest)
     password = getpass.getpass("OWNER: Fleet master password (hidden): ")
-    try:
-        authenticated = gate.password_authenticates(ciphertext, password.encode("utf-8"))
-    finally:
-        del password
+    authenticated = gate.password_authenticates(ciphertext, password.encode("utf-8"))
     if not authenticated:
         raise Blocked("Fleet master password rejected; PVE unchanged")
     print("FLEET_MASTER_PASSWORD=PASS (not stored)", flush=True)
     print("FULL_VAULT_DECRYPTION=PENDING_AFTER_ANSIBLE", flush=True)
+    return password
 
 
 def pct_guest(*argv, timeout=180):
@@ -791,6 +798,205 @@ def stage_runner_remote_commander(site, checkout):
     print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
+def stage_pve_access_audit(checkout: Path) -> None:
+    """Stage only a fixed read-only root executor, activated by Semaphore."""
+    folder = "/opt/digitalhouses/bootstrap/pve-access"
+    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder)
+    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder + "/playbooks")
+    source = checkout / "playbooks/audit-pve-access.yml"
+    if not source.is_file() or source.is_symlink():
+        raise Blocked("Pinned PVE access playbook missing")
+    target = folder + "/playbooks/audit-pve-access.yml"
+    run("pct", "push", str(CTID), str(source), target, timeout=30)
+    pct_guest("chmod", "0644", target)
+    handoff = (
+        ("bootstrap/pve-access-audit-request.sh",
+         "/usr/local/sbin/dh-pve-access-audit", "0700"),
+        ("bootstrap/dh-pve-access-audit.service",
+         "/etc/systemd/system/dh-pve-access-audit.service", "0644"),
+        ("bootstrap/dh-pve-access-audit.path",
+         "/etc/systemd/system/dh-pve-access-audit.path", "0644"),
+    )
+    for relative, destination, mode in handoff:
+        item = checkout / relative
+        if item.is_symlink() or not item.is_file():
+            raise Blocked("Pinned PVE access audit worker missing")
+        run("pct", "push", str(CTID), str(item), destination, timeout=30)
+        pct_guest("chmod", mode, destination)
+    pct_guest("systemctl", "daemon-reload")
+    pct_guest("systemctl", "enable", "--now", "dh-pve-access-audit.path")
+    if pct_guest("systemctl", "is-active", "dh-pve-access-audit.path") != "active":
+        raise Blocked("Fixed-purpose PVE access audit watcher inactive")
+    print("PVE_ACCESS_SEMAPHORE_AUDIT=READY", flush=True)
+
+
+def assert_private_fleet_head(expected_fleet_commit: str, env: dict) -> dict:
+    """No secret issue until private Git HEAD agrees with the pinned snapshot."""
+    target = "repos/" + FLEET_REPO
+    current = json.loads(run("gh", "api", target + "/git/ref/heads/main",
+                             timeout=25, env=env))
+    if current.get("object", {}).get("sha") != expected_fleet_commit:
+        raise Blocked("Fleet HEAD differs from pinned release; do not issue tokens")
+    record = json.loads(run("gh", "api", target + "/contents/secrets/fleet.vault.yml?ref=main",
+                            timeout=25, env=env))
+    if record.get("type") != "file" or record.get("encoding") != "base64":
+        raise Blocked("Fleet Vault source is not a regular file")
+    return record
+
+
+def publish_encrypted_pve_vault(source_vault: Path, candidate: Path,
+                                expected_fleet_commit: str, env: dict) -> str:
+    """Publish ONLY encrypted Vault ciphertext using GitHub Contents CAS."""
+    current = assert_private_fleet_head(expected_fleet_commit, env)
+    current_bytes = base64.b64decode(current["content"])
+    if current_bytes != source_vault.read_bytes():
+        raise Blocked("Pinned Fleet Vault content differs from GitHub main")
+    proposed = candidate.read_bytes()
+    if not proposed.startswith(b"$ANSIBLE_VAULT;") or len(proposed) > 4 * 1024 * 1024:
+        raise Blocked("Invalid encrypted Fleet Vault candidate")
+    payload = {
+        "message": "Fleet: store canonical PVE site access credentials (encrypted)",
+        "content": base64.b64encode(proposed).decode("ascii"),
+        "sha": current["sha"],
+        "branch": "main",
+    }
+    with tempfile.TemporaryDirectory(prefix="dh-fleet-publication-", dir="/run") as loc:
+        request_path = Path(loc) / "request.json"
+        request_path.write_text(json.dumps(payload), encoding="utf-8")
+        request_path.chmod(0o600)
+        response = json.loads(run(
+            "gh", "api", "--method", "PUT",
+            "repos/" + FLEET_REPO + "/contents/secrets/fleet.vault.yml",
+            "--input", str(request_path), timeout=60, env=env,
+        ))
+        commit_sha = response.get("commit", {}).get("sha")
+        if not isinstance(commit_sha, str) or not re.fullmatch(r"[a-f0-9]{40}", commit_sha):
+            raise Blocked("GitHub Vault write uncertain; reconcile read-only, no retry")
+    # Never retry the write when a network/API result is ambiguous.
+    record = json.loads(run(
+        "gh", "api", "repos/" + FLEET_REPO + "/contents/secrets/fleet.vault.yml?ref=" + commit_sha,
+        timeout=30, env=env))
+    if base64.b64decode(record.get("content", "")) != proposed:
+        raise Blocked("Committed encrypted Vault verification failed")
+    print("FLEET_VAULT_ENCRYPTED_PUBLICATION=PASS", flush=True)
+    print("FLEET_NEW_COMMIT=" + commit_sha, flush=True)
+    return commit_sha
+
+
+def pve_staged_enrollment_verified(site: str, runner_ip: str, pve_ip: str,
+                                   root_script: Path) -> bool:
+    """Resume already-issued canonical PVE token escrow without reissuing."""
+    path = ROOT_STAGE / f"pve-identities-{site}-ansible-v2-pending.json"
+    if not path.exists() and not path.is_symlink():
+        return False
+    if path.is_symlink() or not path.is_file():
+        raise Blocked("Canonical PVE escrow path is not a regular file")
+    info = path.stat()
+    if info.st_uid != 0 or info.st_mode & 0o077 or info.st_size > 16384:
+        raise Blocked("Canonical PVE escrow is not root-only or oversized")
+    data = json.loads(path.read_text("utf-8"))
+    expected_principals = {
+        "audit": "ansible-audit@pve",
+        "write": "ansible-writer@pve",
+        "linux": "ansible-linux",
+    }
+    if (data.get("identity_schema") != 2 or data.get("site_id") != site
+            or data.get("runner_ip") != runner_ip or data.get("pve_ip") != pve_ip
+            or data.get("principals") != expected_principals):
+        raise Blocked("Canonical PVE escrow identity mismatch")
+    values = data.get("pve_tokens", {})
+    if not isinstance(values, dict) or set(values) != {"audit", "write"}:
+        raise Blocked("Canonical PVE escrow missing both API secrets")
+    if not all(isinstance(value, str) and re.fullmatch(r"[0-9a-fA-F-]{36}", value)
+               for value in values.values()):
+        raise Blocked("Canonical PVE escrow contains an invalid token secret")
+    # Verify existing PVE users, token IDs/ACL and original runner key
+    # WITHOUT --apply, hence no account/token/SSH mutations.
+    result = run("python3", str(root_script),
+                 "--site", site, "--runner-ctid", str(CTID),
+                 "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                 "--reconcile-restored", timeout=60)
+    if "PVE_RESTORED_IDENTITIES=READ_ONLY_PASS" not in result:
+        raise Blocked("Existing canonical PVE identities failed verification")
+    print("PVE_CANONICAL_IDENTITIES=STAGING_VERIFIED_NO_REISSUE", flush=True)
+    return True
+
+
+def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
+                                 checkout: Path, expected_fleet_commit: str,
+                                 owner_master: str, env: dict,
+                                 *, guest_python: str = "/opt/ansible/venv/bin/python") -> None:
+    """Restore canonical credentials from Fleet or enroll and publish new ones."""
+    source_vault = checkout.parent / "fleet-detail/secrets/fleet.vault.yml"
+    source = checkout / "bootstrap/pve-identities.py"
+    worker = checkout / "bootstrap/import-pve-identities-vault.py"
+    if any(path.is_symlink() or not path.is_file()
+           for path in (source_vault, source, worker)):
+        raise Blocked("Pinned PVE credentials inputs are missing")
+    runner_ip = str(ipaddress.IPv4Interface(runner_cidr).ip)
+    guest_worker = "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py"
+    pct_guest("install", "-d", "-m", "0700", "/opt/digitalhouses/bootstrap")
+    run("pct", "push", str(CTID), str(worker), guest_worker)
+    pct_guest("chmod", "0700", guest_worker)
+    with tempfile.TemporaryDirectory(prefix="dh-pve-vault-", dir="/run") as loc:
+        tmp = Path(loc)
+        master_path = tmp / "master"
+        master_path.write_bytes(owner_master.encode("utf-8") + b"\n")
+        master_path.chmod(0o600)
+        guest_temp = "/dev/shm/dh-pve-identity"
+        # An interrupted prior operation must be reconciled, never overwritten.
+        pct_guest("install", "-d", "-m", "0700", guest_temp)
+        try:
+            run("pct", "push", str(CTID), str(master_path), guest_temp + "/master")
+            run("pct", "push", str(CTID), str(source_vault), guest_temp + "/base.vault.yml")
+            pct_guest("chmod", "0600", guest_temp + "/master",
+                      guest_temp + "/base.vault.yml")
+            response = pct_guest(
+                guest_python, guest_worker,
+                "--recover", "--site", site, "--ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--master-file", guest_temp + "/master",
+                "--vault-file", guest_temp + "/base.vault.yml", timeout=90)
+        finally:
+            # Secrets remain temporary regardless of operation success.
+            pct_guest("rm", "-f", guest_temp + "/master",
+                      guest_temp + "/base.vault.yml")
+            pct_guest("rmdir", guest_temp)
+        if "PVE_FLEET_RECOVERY=PASS" in response:
+            # Existing PVE tokens remain unchanged. Only the authorized
+            # restored SSH key may be reattached to the original host.
+            run("python3", str(source),
+                "--site", site, "--runner-ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--reconcile-restored", "--apply", timeout=90)
+            print("PVE_CREDENTIALS=RESTORED_FROM_FLEET", flush=True)
+            return
+        if "PVE_FLEET_RECOVERY=ABSENT" not in response:
+            raise Blocked("Unknown encrypted Fleet PVE recovery state")
+        # Only new identities may be created. Source is pinned, publication
+        # requires exact GitHub main HEAD/CAS to avoid overwriting concurrent changes.
+        record = assert_private_fleet_head(expected_fleet_commit, env)
+        if base64.b64decode(record.get("content", "")) != source_vault.read_bytes():
+            raise Blocked("Fleet source is not pinned to the current private main")
+        if not pve_staged_enrollment_verified(site, runner_ip, pve_ip, source):
+            run("python3", str(source),
+                "--site", site, "--runner-ctid", str(CTID),
+                "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+                "--apply", timeout=180)
+            print("PVE_CANONICAL_IDENTITIES=ROOT_STAGE_PASS", flush=True)
+        candidate = tmp / "candidate.vault.yml"
+        run("python3", str(worker),
+            "--site", site, "--ctid", str(CTID),
+            "--runner-ip", runner_ip, "--pve-ip", pve_ip,
+            "--master-file", str(master_path),
+            "--vault-file", str(source_vault),
+            "--output-file", str(candidate),
+            "--guest-python", guest_python, timeout=150)
+        publish_encrypted_pve_vault(source_vault, candidate,
+                                    expected_fleet_commit, env)
+    print("PVE_CREDENTIALS=ENCRYPTED_FLEET_PUBLISHED", flush=True)
+
+
 def resolve_project_title(checkout: Path, site: str, provided: str | None) -> str:
     """Site names are inventory data rather than special-cased code."""
     if provided:
@@ -836,7 +1042,7 @@ def apply(args, template):
         site_files = authenticate_git(checkout, args.expected_commit,
                                       args.expected_fleet_commit, env, args.site,
                                       preauthorized=args.use_github_session)
-        validate_fleet_password(checkout)
+        owner_master = validate_fleet_password(checkout)
         verify_site_escrow(checkout, args.site)
         # Site ID y/n is confirmed by the public installer before auth.
         # Resume operations still require an explicit extra confirmation.
@@ -892,6 +1098,14 @@ def apply(args, template):
             print("SEMAPHORE_ADMIN_API_AUTH=PASS", flush=True)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
+        stage_pve_access_audit(checkout)
+        # Credential enrollment is part of a NEW bootstrap only; recovery
+        # and resume cannot silently issue API users/tokens or SSH keys.
+        if not (args.resume or args.resume_fresh or args.resume_ansible
+                or args.resume_semaphore):
+            provision_pve_identity_stage(args.site, args.runner_cidr,
+                                         args.pve_ip, checkout,
+                                         args.expected_fleet_commit, owner_master, env)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
@@ -899,6 +1113,128 @@ def apply(args, template):
     print("SITE_RUNTIME_SECRET_ISSUANCE=NOT_YET_ACCEPTED")
     print("PVE_WRITE_OPERATIONS=NOT_ENABLED")
     print("GH_OAUTH_CONFIG=CLEANED_LOCALLY (revoke on GitHub if required)")
+
+
+def commission_pve_preflight(args, checkout=None):
+    """Non-destructive PVE root access preflight for an occupied CT1231."""
+    if os.geteuid() != 0 or not Path("/etc/pve/user.cfg").is_file():
+        raise Blocked("Commissioning requires root on the PVE host")
+    runner = ipaddress.IPv4Interface(args.runner_cidr)
+    host_ip = ipaddress.IPv4Address(args.pve_ip)
+    if runner.ip.packed[-1] != 231 or host_ip not in runner.network:
+        raise Blocked("Site runner and PVE address mismatch")
+    assigned = run("ip", "-4", "-o", "addr", "show")
+    if args.pve_ip not in [part.split("/")[0] for row in assigned.splitlines()
+                           for part in row.split() if "/" in part]:
+        raise Blocked("PVE IP is not assigned to this host")
+    fields = dict(row.split(": ", 1) for row in
+                  run("pct", "config", str(CTID)).splitlines() if ": " in row)
+    if fields.get("hostname") != runner_hostname(args.site) or fields.get("unprivileged") != "1":
+        raise Blocked("CT1231 guest identity does not match site")
+    if not all(item in fields.get("net0", "") for item in
+               (f"ip={args.runner_cidr}", f"gw={args.gateway}",
+                "bridge=vmbr0", "name=eth0")):
+        raise Blocked("CT1231 guest network differs from approved site")
+    if run("pct", "status", str(CTID)) != "status: running":
+        raise Blocked("Runner is not active")
+    if pct_guest("hostname") != runner_hostname(args.site):
+        raise Blocked("Runner's own hostname differs")
+    # Accept the old typo only for the live pilot; new builds use /opt/ansible.
+    canonical = "/opt/ansible/venv/bin/python"
+    previous = "/opt/ansimble/venv/bin/python"
+    guest_python = canonical if code("pct", "exec", str(CTID), "--", "test", "-x", canonical) == 0 else previous
+    if code("pct", "exec", str(CTID), "--", "test", "-x", guest_python) != 0:
+        raise Blocked("Runner has no approved Ansible environment")
+    if pct_guest(guest_python, "-c", "import ansible;print(ansible.__version__)") != "2.21.4":
+        raise Blocked("Runner Ansible version mismatch")
+    for service in ("digitalhouses-semaphore.service", "digitalhouses-remote-commander.service"):
+        if pct_guest("systemctl", "is-active", service) != "active":
+            raise Blocked("Existing runner service unavailable")
+    if checkout is not None:
+        private = checkout.parent / "fleet-detail" / "inventories" / args.site
+        def required_pin(filename, field):
+            rows = [line.strip().partition(":")[2].strip().strip('"')
+                    for line in (private / filename).read_text("utf-8").splitlines()
+                    if line.strip().startswith(field + ":")]
+            if len(rows) != 1:
+                raise Blocked("Missing or ambiguous site PVE pin: " + field)
+            return rows[0]
+        ssh_pin = required_pin("pve_access.yml", "server_host_key_fingerprint")
+        if not re.fullmatch(r"SHA256:[A-Za-z0-9+/=]+", ssh_pin):
+            raise Blocked("Invalid PVE SSH host fingerprint format")
+        observed_ssh = run("ssh-keygen", "-lf", "/etc/ssh/ssh_host_ed25519_key.pub")
+        if ssh_pin not in observed_ssh:
+            raise Blocked("PVE SSH ED25519 fingerprint does not match private Fleet")
+        tls_pin = required_pin("pve.yml", "sha256_fingerprint")
+        if not re.fullmatch(r"(?:[A-F0-9]{2}:){31}[A-F0-9]{2}", tls_pin):
+            raise Blocked("Invalid PVE HTTPS fingerprint format")
+        with socket.create_connection((args.pve_ip, 8006), timeout=5) as conn:
+            with ssl._create_unverified_context().wrap_socket(conn, server_hostname=args.pve_ip) as tls:
+                digest = hashlib.sha256(tls.getpeercert(binary_form=True)).hexdigest().upper()
+        observed_tls = ":".join(digest[index:index + 2] for index in range(0, 64, 2))
+        if tls_pin != observed_tls:
+            raise Blocked("PVE HTTPS certificate differs from pinned private Fleet")
+        print("PVE_FLEET_SSH_TLS_PINS=PASS", flush=True)
+    print("PVE_COMMISSION_PREFLIGHT=PASS; CT1231 remains installed", flush=True)
+    return guest_python
+
+
+def commission_existing_pve_access(args, *, verify_only=False):
+    """Root-only PVE commissioning or read-only verification of the encrypted Vault."""
+    with tempfile.TemporaryDirectory(prefix="dh-pve-access-") as folder:
+        work = Path(folder)
+        if args.use_github_session:
+            auth = Path(os.environ.get("GH_CONFIG_DIR", ""))
+            if not auth.is_absolute() or auth.is_symlink() or not auth.is_dir():
+                raise Blocked("Trusted GitHub session missing")
+            if auth.stat().st_uid != 0 or auth.stat().st_mode & 0o077:
+                raise Blocked("Unsafe GitHub authentication directory")
+        else:
+            auth = work / "gh"
+            auth.mkdir(mode=0o700)
+        gh = ensure_ephemeral_gh(work)
+        env = git_env(auth)
+        env["PATH"] = str(gh.parent) + os.pathsep + env.get("PATH", "")
+        checkout = work / "source"
+        authenticate_git(checkout, args.expected_commit, args.expected_fleet_commit,
+                         env, args.site, preauthorized=args.use_github_session)
+        guest_python = commission_pve_preflight(args, checkout)
+        master = validate_fleet_password(checkout)
+        current = assert_private_fleet_head(args.expected_fleet_commit, env)
+        original = checkout.parent / "fleet-detail" / "secrets/fleet.vault.yml"
+        if base64.b64decode(current.get("content", "")) != original.read_bytes():
+            raise Blocked("Pinned encrypted Vault does not match private main")
+        if verify_only:
+            # The saved master exists only in root-owned PVE /run while the
+            # verified encrypted Vault is compared against the original escrow.
+            with tempfile.TemporaryDirectory(prefix="dh-vault-verify-", dir="/run") as secret_dir:
+                master_file = Path(secret_dir) / "master"
+                master_file.write_bytes(master.encode("utf-8") + b"\n")
+                master_file.chmod(0o600)
+                importer = checkout / "bootstrap/import-pve-identities-vault.py"
+                output = run("python3", str(importer),
+                             "--verify-vault", "--site", args.site,
+                             "--ctid", str(CTID),
+                             "--runner-ip", str(ipaddress.IPv4Interface(args.runner_cidr).ip),
+                             "--pve-ip", args.pve_ip,
+                             "--master-file", str(master_file),
+                             "--vault-file", str(original),
+                             "--guest-python", guest_python, timeout=160)
+                if ("PVE_ENCRYPTED_VAULT_ESCROW_MATCH=PASS" not in output
+                        or "PVE_PUBLISHED_FLEET_RECOVERY=PASS" not in output):
+                    raise Blocked("Encrypted Fleet Vault acceptance not confirmed")
+            print("PVE_VAULT_RECOVERY=READ_ONLY_PASS", flush=True)
+            print("PVE_VAULT_SECRETS_EXPOSED=NO", flush=True)
+            return
+        exact = "COMMISSION PVE ACCESS " + args.site
+        print("PLAN: Create or restore canonical PVE identities; encrypt to Fleet Vault.", flush=True)
+        print("PLAN: No guest recreation or Semaphore installation.", flush=True)
+        if input("Type " + exact + " to authorize: ") != exact:
+            raise Blocked("PVE access enrollment declined")
+        provision_pve_identity_stage(args.site, args.runner_cidr, args.pve_ip,
+                                     checkout, args.expected_fleet_commit,
+                                     master, env, guest_python=guest_python)
+        print("PVE_ACCESS_COMMISSION=PASS", flush=True)
 
 
 def main(argv=None):
@@ -911,6 +1247,9 @@ def main(argv=None):
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-fleet-commit")
     parser.add_argument("--use-github-session", action="store_true")
+    parser.add_argument("--commission-pve-access", action="store_true")
+    parser.add_argument("--verify-pve-access", action="store_true",
+                        help="Verify published encrypted Fleet Vault against PVE escrow without account changes")
     resume_group = parser.add_mutually_exclusive_group()
     resume_group.add_argument("--resume-fresh", action="store_true",
                               help="Continue verified freshly booted empty CT1231")
@@ -922,6 +1261,26 @@ def main(argv=None):
                               help="Complete verified running Semaphore; seed project only")
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
+    if args.verify_pve_access:
+        if any((args.commission_pve_access, args.resume, args.resume_fresh,
+                args.resume_ansible, args.resume_semaphore, args.apply)):
+            raise Blocked("Encrypted Vault verification cannot be combined with changes")
+        if not args.expected_commit or not args.expected_fleet_commit:
+            raise Blocked("Immutable code and Fleet SHAs required")
+        commission_pve_preflight(args)
+        commission_existing_pve_access(args, verify_only=True)
+        return 0
+    if args.commission_pve_access:
+        if any((args.resume, args.resume_ansible, args.resume_fresh, args.resume_semaphore)):
+            raise Blocked("Commissioning cannot be combined with runner resume")
+        commission_pve_preflight(args)
+        if not args.apply:
+            print("MODE=READ_ONLY; no authentication or changes")
+            return 0
+        if not args.expected_commit or not args.expected_fleet_commit:
+            raise Blocked("Immutable code/Fleet SHAs required")
+        commission_existing_pve_access(args)
+        return 0
     template = host_preflight(args.site, args.runner_cidr, args.gateway, args.pve_ip,
                               resume=args.resume, resume_ansible=args.resume_ansible,
                               resume_semaphore=args.resume_semaphore, resume_fresh=args.resume_fresh)

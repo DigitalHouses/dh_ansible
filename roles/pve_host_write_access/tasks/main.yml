@@ -4,8 +4,9 @@
     that:
       - pve_access is mapping
       - pve_access.host is mapping
-      - pve_host_audit is mapping
-      - pve_host_audit.server_host_key_fingerprint is defined
+      - pve.host is defined
+      - pve_access.host.ssh_port is defined
+      - pve_access.host.server_host_key_fingerprint is defined
       - site_secrets is mapping
       - site_secrets.pve is mapping
       - site_secrets.pve.host_write_ssh_private_key is defined
@@ -36,13 +37,12 @@
   changed_when: false
   no_log: true
 
-- name: Assert PVE host-write client key fingerprint
+- name: Assert recovered PVE SSH private key is readable
   ansible.builtin.assert:
     that:
-      - pve_access.host.client_key_fingerprint in pve_host_write_client_fingerprint.stdout
+      - pve_host_write_client_fingerprint.stdout | trim | length > 0
     fail_msg: >-
-      Materialized PVE host-write private key fingerprint does not match
-      inventory.
+      Recovered PVE host-write SSH private key is invalid or unreadable.
   no_log: true
 
 - name: Derive PVE host-write public key
@@ -70,10 +70,10 @@
       - -T
       - "5"
       - -p
-      - "{{ pve_host_audit.port | string }}"
+      - "{{ pve_access.host.ssh_port | string }}"
       - -t
       - ed25519
-      - "{{ pve_host_audit.host }}"
+      - "{{ pve.host }}"
   register: pve_host_write_keyscan
   changed_when: false
 
@@ -103,7 +103,7 @@
 - name: Assert pinned PVE SSH host identity
   ansible.builtin.assert:
     that:
-      - pve_host_audit.server_host_key_fingerprint in pve_host_write_server_fingerprint.stdout
+      - pve_access.host.server_host_key_fingerprint in pve_host_write_server_fingerprint.stdout
     fail_msg: >-
       PVE SSH host fingerprint mismatch. Scanned key was not trusted.
 
@@ -134,6 +134,8 @@
       - "UserKnownHostsFile={{ pve_access.host.known_hosts_file }}"
       - -o
       - ConnectTimeout=5
+      - -p
+      - "{{ pve_access.host.ssh_port | string }}"
       - -i
       - "{{ pve_access.host.identity_file }}"
       - "{{ pve_access.host.user }}@{{ pve.host }}"

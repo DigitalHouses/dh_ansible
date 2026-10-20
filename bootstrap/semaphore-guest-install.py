@@ -35,7 +35,7 @@ CERT = Path("/etc/semaphore/tls.crt")
 KEY = Path("/etc/semaphore/tls.key")
 ADMIN_SECRET = Path("/root/dh-semaphore-initial-admin-password")
 UNIT = Path("/etc/systemd/system/digitalhouses-semaphore.service")
-VENV = Path("/opt/ansimble/venv")
+VENV = Path("/opt/ansible/venv")
 APT_PKGS = ("python3", "python3-venv", "python3-pip", "ca-certificates", "curl",
             "openssl", "git", "openssh-client", "tzdata", "avahi-daemon", "avahi-utils")
 
@@ -265,7 +265,7 @@ Wants=network-online.target
 Type=simple
 User=semaphore
 Group=semaphore
-Environment=PATH=/opt/ansimble/venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PATH=/opt/ansible/venv/bin:/usr/local/bin:/usr/bin:/bin
 Environment=LANG=C.UTF-8
 Environment=LC_ALL=C.UTF-8
 ExecStart=/usr/bin/semaphore server --config /etc/semaphore/config.json

@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 CTID = 1231
-PRIVATE_GUEST_KEY = "/var/lib/ansimble/.ssh/pve_host_write_ed25519"
+PRIVATE_GUEST_KEY = "/var/lib/ansible/.ssh/pve_host_write_ed25519"
 PVE_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 
 
@@ -73,12 +73,12 @@ def audit(args):
     if rc != 0:
         return False
     cfg = parse_pve_config(raw)
-    identity_ok = (cfg.get("hostname") == f"ansimble-{args.site}"
+    identity_ok = (cfg.get("hostname") == f"ansible-{args.site}"
                    and cfg.get("unprivileged") == "1"
                    and f"ip={expected}" in cfg.get("net0", "")
                    and "nesting=1" in cfg.get("features", ""))
     all_ok &= check(identity_ok, "RUNNER_IDENTITY",
-                    "CT1231 is not the expected unprivileged Ansimble runner")
+                    "CT1231 is not the expected unprivileged Ansible runner")
     disks = [k for k in cfg if re.fullmatch(r"mp\d+|unused\d+|dev\d+|hookscript", k)]
     custom_lxc = [k for k in cfg if k.startswith("lxc.")]
     all_ok &= check(not disks and not custom_lxc, "EXTRA_MOUNTS_DEVICES",

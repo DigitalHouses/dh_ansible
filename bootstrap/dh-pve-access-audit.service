@@ -1,0 +1,13 @@
+[Unit]
+Description=DigitalHouses PVE Access fixed read-only audit
+After=network-online.target digitalhouses-semaphore.service
+Wants=network-online.target
+ConditionPathExists=/var/lib/semaphore/dh-pve-access-audit.request
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/dh-pve-access-audit
+TimeoutStartSec=300
+NoNewPrivileges=true
+PrivateTmp=true

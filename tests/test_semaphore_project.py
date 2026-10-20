@@ -44,17 +44,19 @@ class FakeAPI:
         raise AssertionError("No other methods allowed")
 
 
-def test_clean_apply_creates_two_audits_and_one_manual_installer():
+def test_clean_apply_creates_runner_smoke_remote_and_pve_access_audit():
     m = module()
     api = FakeAPI()
     result = m.provision(api, "demo-office", "Тестовый дом", True)
     assert result["state"] == "APPLIED"
     names = [c[2]["name"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")]
     assert names == ["10-Проверка запуска Ansible", "20-Аудит локального runner",
-                     "30-Установить Remote Desktop Commander"]
+                     "30-Установить Remote Desktop Commander",
+                     "40-Проверка доступов PVE"]
     assert [c[2]["playbook"] for c in api.calls if c[0] == "POST" and c[1].endswith("/templates")] == [
         "playbooks/smoke-semaphore.yml", "playbooks/audit-runner.yml",
-        "playbooks/request-runner-remote-commander.yml"]
+        "playbooks/request-runner-remote-commander.yml",
+        "playbooks/request-pve-access-audit.yml"]
     count = len([c for c in api.calls if c[0] == "POST"])
     again = m.provision(api, "demo-office", "Тестовый дом", True)
     assert again["state"] == "APPLIED"
@@ -108,12 +110,12 @@ def test_public_code_private_fleet_inventory_boundary():
     assert code["ssh_key_id"] == by_name["Public Git (none)"]["id"]
     inventory = next(items for path, items in resources.items() if path.endswith("/inventory"))[0]
     assert inventory["type"] == "file"
-    assert inventory["inventory"] == "/var/lib/ansimble/site-data/demo-office/hosts.yml"
+    assert inventory["inventory"] == "/var/lib/ansible/site-data/demo-office/hosts.yml"
     assert "repository_id" not in inventory
     assert inventory["ssh_key_id"] == by_name["Runner inventory (local-only)"]["id"]
     templates = next(items for path, items in resources.items()
                      if path.endswith("/templates"))
-    assert len(templates) == 3
+    assert len(templates) == 4
     assert all(item["repository_id"] == code["id"] for item in templates)
     assert all(item["inventory_id"] == inventory["id"] for item in templates)
 
@@ -138,7 +140,7 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     path = next(key for key in api.records if key.endswith("/templates"))
     original = list(api.records[path])
     old_ids = [x["id"] for x in original]
-    # Simulate the 3 unnumbered templates present in Semaphore 2.19.
+    # Simulate originally seeded unnumbered templates (including audit 40).
     for existing, (_, old_name, _, _) in zip(original, m.TEMPLATES):
         existing["name"] = old_name
         existing["task_id"] = existing["id"] + 500
@@ -152,10 +154,10 @@ def test_numbered_templates_retain_existing_ids_and_task_history():
     assert [x["id"] for x in original] == old_ids
     assert [x["task_id"] for x in original] == [i + 500 for i in old_ids]
     assert sum(method == "POST" for method, _, _ in api.calls) == n_post_before
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
     # Reapply is a no-op: no duplicate templates or repeated changes.
     m.provision(api, "demo-office", "Demo Site", True)
-    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 3
+    assert sum(method == "PUT" for method, _, _ in api.calls) == n_put_before + 4
 
 
 def test_rename_alias_collision_blocks_without_writing():
@@ -188,7 +190,7 @@ def test_names_sort_globally_with_ten_step_gaps():
     m = module()
     titles = [name for name, _, _, _ in m.TEMPLATES]
     assert titles == sorted(titles)
-    assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30]
+    assert [int(name.split("-", 1)[0]) for name in titles] == [10, 20, 30, 40]
     assert all(isinstance(previous, str) for _, previous, _, _ in m.TEMPLATES)
 
 
