@@ -144,6 +144,60 @@ def recover_worker(args):
     print("PVE_FLEET_RECOVERY=PASS")
 
 
+def verify_worker(args):
+    """Read-only proof that encrypted Fleet equals root-only PVE escrow.
+
+    Never print decrypted credentials, key material or token fingerprints.
+    """
+    from ansible.parsing.vault import VaultLib, VaultSecret
+    import yaml
+    if os.geteuid() != 0 or checked("hostname") != f"ansible-{args.site}":
+        blocked("Wrong runner for PVE Vault acceptance")
+    master = secure_read(Path(args.master_file)).rstrip(b"\r\n")
+    if len(master) < 8:
+        blocked("Invalid Fleet master password")
+    ciphertext = secure_read(Path(args.vault_file))
+    if not ciphertext.startswith(b"$ANSIBLE_VAULT;"):
+        blocked("Expected encrypted Fleet Vault source")
+    try:
+        cleartext = VaultLib([("default", VaultSecret(master))]).decrypt(ciphertext)
+        secret_tree = yaml.safe_load(cleartext)
+    except Exception:
+        blocked("Encrypted Fleet Vault could not be verified")
+    if not isinstance(secret_tree, dict):
+        blocked("Fleet Vault contents are not a mapping")
+    fleet = secret_tree.get("fleet_secrets", {})
+    sites = fleet.get("sites", {}) if isinstance(fleet, dict) else {}
+    if not isinstance(sites, dict) or not isinstance(sites.get(args.site), dict):
+        blocked("Site secret namespace missing from Fleet Vault")
+    pve = sites[args.site].get("pve", {})
+    if not isinstance(pve, dict):
+        blocked("Site PVE credentials missing")
+    if pve.get("identity_schema") != PVE_SCHEMA or pve.get("principals") != PVE_PRINCIPALS:
+        blocked("Canonical PVE identities missing or incorrectly bound")
+    stage = json.loads(secure_read(Path(args.staged_tokens)))
+    if (stage.get("site_id") != args.site or stage.get("identity_schema") != PVE_SCHEMA
+            or stage.get("principals") != PVE_PRINCIPALS
+            or stage.get("runner_ip") != args.runner_ip
+            or stage.get("pve_ip") != args.pve_ip):
+        blocked("PVE escrow metadata conflicts with encrypted Fleet")
+    tokens = stage.get("pve_tokens", {})
+    if not isinstance(tokens, dict) or set(tokens) != {"audit", "write"}:
+        blocked("PVE escrow token set incomplete")
+    if (pve.get("audit_token_secret") != tokens["audit"]
+            or pve.get("write_token_secret") != tokens["write"]):
+        blocked("Encrypted Fleet API tokens differ from PVE escrow")
+    key = pve.get("host_write_ssh_private_key")
+    if not isinstance(key, str) or (key.rstrip("\r\n") + "\n").encode() != secure_read(PRIVATE_KEY):
+        blocked("Encrypted Fleet private SSH key differs from runner")
+    actual_pub = checked("ssh-keygen", "-y", "-P", "", "-f", str(PRIVATE_KEY)).split()
+    existing_pub = PUBLIC_KEY.read_text("utf-8").split()
+    if len(actual_pub) < 2 or actual_pub[:2] != existing_pub[:2]:
+        blocked("Existing PVE client SSH key pair does not match")
+    print("PVE_ENCRYPTED_VAULT_ESCROW_MATCH=PASS")
+    print("PVE_VAULT_SECRET_VALUES_PRINTED=NO")
+
+
 def worker(args):
     from ansible.parsing.vault import VaultLib, VaultSecret
     import yaml
@@ -273,7 +327,7 @@ def host(args):
         blocked("PVE identity staging address mismatch")
     if set(bundle.get("pve_tokens", {})) != {"audit", "write"}:
         blocked("Both PVE tokens must exist before Vault import")
-    if not args.vault_file or not args.master_file or not args.output_file:
+    if not args.vault_file or not args.master_file or (not args.verify_vault and not args.output_file):
         blocked("PVE must provide trusted vault, master, and encrypted output paths")
     secure_read(Path(args.vault_file))
     secure_read(Path(args.master_file))
@@ -303,21 +357,25 @@ def host(args):
                 guest_temp + "/staging.json", guest_temp + "/base.vault.yml")
             print(pct(args.ctid, args.guest_python,
                       "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
-                      "--worker", "--site", args.site, "--ctid", str(args.ctid),
+                      "--verify-worker" if args.verify_vault else "--worker",
+                      "--site", args.site, "--ctid", str(args.ctid),
                       "--runner-ip", args.runner_ip, "--pve-ip", args.pve_ip,
                       "--master-file", guest_temp + "/master",
                       "--staged-tokens", guest_temp + "/staging.json",
                       "--vault-file", guest_temp + "/base.vault.yml",
                       "--candidate-file", guest_temp + "/candidate.vault.yml"))
-            if Path(args.output_file).exists():
-                blocked("Encrypted candidate output already exists")
-            checked("pct", "pull", str(args.ctid), guest_temp + "/candidate.vault.yml",
-                    str(args.output_file))
-            os.chmod(args.output_file, 0o600)
-            encrypted = secure_read(Path(args.output_file))
-            if not encrypted.startswith(b"$ANSIBLE_VAULT;"):
-                blocked("Returned candidate is not Ansible Vault ciphertext")
-            print("ENCRYPTED_OUTPUT=PASS")
+            if args.verify_vault:
+                print("PVE_PUBLISHED_FLEET_RECOVERY=PASS")
+            else:
+                if Path(args.output_file).exists():
+                    blocked("Encrypted candidate output already exists")
+                checked("pct", "pull", str(args.ctid), guest_temp + "/candidate.vault.yml",
+                        str(args.output_file))
+                os.chmod(args.output_file, 0o600)
+                encrypted = secure_read(Path(args.output_file))
+                if not encrypted.startswith(b"$ANSIBLE_VAULT;"):
+                    blocked("Returned candidate is not Ansible Vault ciphertext")
+                print("ENCRYPTED_OUTPUT=PASS")
         finally:
             subprocess.run(["pct", "exec", str(args.ctid), "--",
                             "rm", "-f", guest_temp + "/master", guest_temp + "/staging.json",
@@ -333,6 +391,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--worker", action="store_true")
     parser.add_argument("--recover", action="store_true")
+    parser.add_argument("--verify-worker", action="store_true")
+    parser.add_argument("--verify-vault", action="store_true")
     parser.add_argument("--site", required=True)
     parser.add_argument("--ctid", type=int, required=True)
     parser.add_argument("--runner-ip", required=True)
@@ -344,7 +404,13 @@ def main():
     parser.add_argument("--output-file")
     parser.add_argument("--guest-python", default="/opt/ansible/venv/bin/python")
     args = parser.parse_args()
-    if args.recover:
+    if sum(bool(x) for x in (args.worker, args.recover, args.verify_worker, args.verify_vault)) > 1:
+        blocked("Conflicting Fleet Vault operation modes")
+    if args.verify_worker:
+        if not args.master_file or not args.vault_file or not args.staged_tokens:
+            blocked("Verified encrypted Fleet and escrow are required")
+        verify_worker(args)
+    elif args.recover:
         if not args.master_file or not args.vault_file:
             blocked("Runner recovery requires secure temporary Fleet Vault files")
         recover_worker(args)
