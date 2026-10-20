@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="da930a109f292c658d8edb0f00b51236c641943f"
-  local SHA="7d4235323a6d6862af95a81466b3ebc3c331e319"
+  local REF="428f4aa14849d953e7012ddb3a5f8e9305109d3f"
+  local SHA="6b93a84a0cb2c5630b356140b63aedf2ef4bfee9"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -71,6 +71,18 @@ echo "TERMINAL REMAINS OPEN"
 Стандарт имён **всех Semaphore-шаблонов** — `10-Название`, `20-Название`, `30-Название`: единая сквозная нумерация, шаг 10 для вставки новых задач (`15-Название`). Сортировка Semaphore по имени отражает эту очередность. Номера не создают автоматических зависимостей и не требуют запуска всех задач подряд. Seeder через официальный API переименовывает только проверенные исходные имена без номера с сохранением `template_id` и истории Task; при неизвестном имени, дублях или drift блокируется.
 
 У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `40` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
+
+### Debian 13 · штатная обработка Postfix в LXC
+
+Для нового `CT1231` Bootstrap требует работающих `dbus.service`, `dbus.socket` и здорового systemd.
+Если единственный упавший systemd-unit — `postfix.service`, который не нужен runner и не может
+настроить mount namespace внутри непривилегированного LXC, Bootstrap штатно выполняет
+`systemctl mask --now postfix.service` и `systemctl reset-failed postfix.service`.
+Любые другие сбои systemd по-прежнему блокируют установку.
+
+При остановке сразу после первого запуска Debian разрешён `--resume-fresh`.
+Этот режим повторно не создаёт CT и **восстанавливает** ранее выданные PVE
+API-токены и SSH-ключ из зашифрованного Fleet Vault — без перевыпуска токенов.
 
 ## Приёмка
 
