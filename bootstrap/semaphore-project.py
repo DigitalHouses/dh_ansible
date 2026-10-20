@@ -3,7 +3,7 @@
 
 Never edits Semaphore SQLite directly. Idempotent: existing names are checked
 for exact identity; drift fails closed. Installs two read-only templates and
-one explicitly operator-started local Remote Commander installation template.
+one optional Remote Commander installer and an independent PVE access audit.
 Admin password supplied through a root-only file, never CLI arguments.
 """
 from __future__ import annotations
@@ -35,6 +35,8 @@ TEMPLATES = (
      "playbooks/audit-runner.yml", VIEWS[0]),
     ("30-Установить Remote Desktop Commander", "Установить Remote Desktop Commander",
      "playbooks/request-runner-remote-commander.yml", VIEWS[2]),
+    ("40-Проверка доступов PVE", "Проверка доступов PVE",
+     "playbooks/request-pve-access-audit.yml", VIEWS[3]),
 )
 API_BASE = "https://127.0.0.1:3000/api"
 
