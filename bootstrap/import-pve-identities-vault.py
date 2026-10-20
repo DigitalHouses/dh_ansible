@@ -192,13 +192,6 @@ def host(args):
         blocked("PVE must provide trusted vault, master, and encrypted output paths")
     secure_read(Path(args.vault_file))
     secure_read(Path(args.master_file))
-    # Preflight candidate absent before asking for master.
-    status = subprocess.run(
-        ["pct", "exec", str(args.ctid), "--", "test", "-e", str(vault_candidate(args.site))],
-        capture_output=True, check=False,
-    ).returncode
-    if status != 1:
-        blocked("Candidate exists or target cannot be checked")
     print("PVE_STAGE=PASS")
     print("RUNNER_VAULT_SOURCE=PASS")
     print("MASTER_PASSWORD=LOCAL_TERMINAL_ONLY")
@@ -217,7 +210,7 @@ def host(args):
             checked("pct", "push", str(args.ctid), str(staging), guest_temp + "/staging.json")
             checked("pct", "push", str(args.ctid), str(args.vault_file), guest_temp + "/base.vault.yml")
             pct(args.ctid, "chmod", "0600", guest_temp + "/master",
-                guest_temp + "/staging.json")
+                guest_temp + "/staging.json", guest_temp + "/base.vault.yml")
             print(pct(args.ctid, "/opt/ansimble/venv/bin/python",
                       "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
                       "--worker", "--site", args.site, "--ctid", str(args.ctid),
@@ -230,6 +223,7 @@ def host(args):
                 blocked("Encrypted candidate output already exists")
             checked("pct", "pull", str(args.ctid), guest_temp + "/candidate.vault.yml",
                     str(args.output_file))
+            os.chmod(args.output_file, 0o600)
             encrypted = secure_read(Path(args.output_file))
             if not encrypted.startswith(b"$ANSIBLE_VAULT;"):
                 blocked("Returned candidate is not Ansible Vault ciphertext")
