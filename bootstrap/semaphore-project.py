@@ -147,8 +147,11 @@ def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
     required = ("project_id", "playbook", "arguments", "type", "app",
                 "inventory_id", "repository_id", "environment_id", "view_id",
                 "autorun", "allow_override_args_in_task")
-    if any(current.get(field) != desired.get(field) for field in required):
-        raise Blocked(f"Existing Semaphore resource drift: {current.get('name')}")
+    drift_fields = [field for field in required
+                    if current.get(field) != desired.get(field)]
+    if drift_fields:
+        raise Blocked(f"Existing Semaphore resource drift: {current.get('name')} "
+                      f"fields={','.join(drift_fields)}")
     if current.get("name") == title:
         return current
     template_id = current.get("id")
