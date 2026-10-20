@@ -1,0 +1,79 @@
+---
+# Initial and recoverable Semaphore task, unprivileged and local-only.
+- name: Synchronize DigitalHouses Semaphore task catalog
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load canonical site metadata
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Require only the site-local runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname in ['runner', 'localhost']
+          - (ansible_connection | default('')) == 'local'
+          - site.id is defined
+          - site.owner_slug is defined
+          - site.type is defined
+          - site.id == site.owner_slug ~ '-' ~ site.type
+    - name: Check local runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      register: catalog_runner_hostname
+      changed_when: false
+      check_mode: false
+    - name: Check fixed root-owned catalog watcher
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-semaphore-catalog-sync.path]
+      register: catalog_watcher
+      changed_when: false
+      check_mode: false
+    - name: Validate runner and watcher before submitting a request
+      ansible.builtin.assert:
+        that:
+          - catalog_runner_hostname.stdout == 'ansible-' ~ site.id
+          - catalog_watcher.stdout == 'active'
+  tasks:
+    - name: Explain the self-update contract
+      ansible.builtin.debug:
+        msg:
+          - "Read DigitalHouses/dh_ansible public catalog; protect existing IDs/history."
+          - "Create new approved templates and update known managed templates."
+          - "Do not run loaded infrastructure tasks automatically."
+          - "Keep this 00 recovery task unchanged, and never delete unknown tasks."
+    - name: Generate a unique synchronization ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: catalog_sync_id
+      changed_when: false
+      check_mode: false
+    - name: Ask the fixed root worker to synchronize the catalog
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-semaphore-catalog-sync.request
+        content: "SYNC:{{ catalog_sync_id.stdout }}\n"
+        mode: "0600"
+    - name: Wait for this exact catalog synchronization result
+      ansible.builtin.command:
+        argv: [cat, /run/dh-semaphore-catalog-sync.status]
+      register: catalog_sync_status
+      changed_when: false
+      failed_when: false
+      until: catalog_sync_status.stdout.startswith(catalog_sync_id.stdout ~ '|')
+      retries: 90
+      delay: 2
+      check_mode: false
+    - name: Require successful catalog sync
+      ansible.builtin.assert:
+        that:
+          - catalog_sync_status.stdout == catalog_sync_id.stdout ~ '|PASS'
+        fail_msg: "Catalog sync failed; inspect root-only /var/log/dh-semaphore-catalog-sync.log"
+    - name: Report synced task catalog
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          site: "{{ site.id }}"
+          catalog: "DigitalHouses/dh_ansible"
+          retained_bootstrap_task: "00-Обновить список задач"
+          infrastructure_tasks_executed: false
