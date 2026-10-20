@@ -66,7 +66,7 @@ def test_partial_canonical_secrets_fail_closed(monkeypatch, tmp_path):
     m, args, source, master = prepare(monkeypatch, tmp_path)
     master.write_bytes(encrypted(source, {"audit_token_secret": "a" * 36}) + b"\n")
     master.chmod(0o600)
-    with pytest.raises(RuntimeError, match="Incomplete canonical"):
+    with pytest.raises(RuntimeError, match="Unversioned or conflicting"):
         m.recover_worker(args)
 
 
