@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 CTID = 1231
-PRIVATE_GUEST_KEY = "/var/lib/ansimble/.ssh/pve_host_write_ed25519"
+PRIVATE_GUEST_KEY = "/var/lib/ansible/.ssh/pve_host_write_ed25519"
 PVE_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 
 
