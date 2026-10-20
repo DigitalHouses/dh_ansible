@@ -1,0 +1,59 @@
+---
+# Semaphore user can only write a fixed-purpose audit request.
+- name: Request independent read-only PVE access audit
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Validate exact site-local runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+    - name: Read runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      changed_when: false
+      register: pve_audit_hostname
+    - name: Validate hostname and prepared root watcher
+      ansible.builtin.assert:
+        that: [pve_audit_hostname.stdout == 'ansible-' ~ site.id]
+    - name: Check root audit watcher is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-pve-access-audit.path]
+      register: pve_audit_watcher
+      changed_when: false
+    - name: Require active fixed-purpose watcher
+      ansible.builtin.assert:
+        that: [pve_audit_watcher.stdout == 'active']
+  tasks:
+    - name: Create unique audit request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      changed_when: false
+      register: pve_audit_request_id
+    - name: Send one local read-only PVE audit request
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-pve-access-audit.request
+        content: "AUDIT:{{ pve_audit_request_id.stdout }}\n"
+        mode: '0600'
+    - name: Read audit result from root-only fixed-purpose worker
+      ansible.builtin.command:
+        argv: [cat, /run/dh-pve-access-audit.status]
+      register: pve_audit_status
+      changed_when: false
+      failed_when: false
+      retries: 90
+      delay: 3
+      until: pve_audit_status.stdout == 'PASS:' ~ pve_audit_request_id.stdout
+    - name: Report independent PVE audit
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          pve_access: PASS
+          result: PASS
