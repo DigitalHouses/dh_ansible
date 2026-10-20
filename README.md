@@ -18,8 +18,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="2ffb2f59acd12e545b6d8ea652a0f8e585cfd23b"
-  local SHA="29d0df96a32e385098838ff5df3a45ea96b6ff2a"
+  local REF="847fd984d70f60621a9336dbe83d621bef2226b1"
+  local SHA="574a3cee1a23f05f622113f68acaf4e2ff7e9b33"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
@@ -69,6 +69,19 @@ echo "TERMINAL REMAINS OPEN"
 - `40-Проверка доступов PVE` — независимый read-only аудит PVE API и Linux SSH через фиксированный root-owned watcher; Semaphore не получает root-доступ или токены.
 
 Стандарт имён **всех Semaphore-шаблонов** — `10-Название`, `20-Название`, `30-Название`: единая сквозная нумерация, шаг 10 для вставки новых задач (`15-Название`). Сортировка Semaphore по имени отражает эту очередность. Номера не создают автоматических зависимостей и не требуют запуска всех задач подряд. Seeder через официальный API переименовывает только проверенные исходные имена без номера с сохранением `template_id` и истории Task; при неизвестном имени, дублях или drift блокируется.
+
+При первом запуске шаблон `30-Установить Remote Desktop Commander` показывает
+ссылку для подтверждения устройства и одноразовый код **в журнале Semaphore**.
+Root-owned обработчик принимает только запросы `INSTALL:<uuid>` и `PAIR:<uuid>`,
+читает только текущий запуск службы (systemd InvocationID), ограничивает возраст
+кода 13 минутами и публикует исключительно очищенную строку статуса
+в `/run/dh-remote-commander-pairing.status` (root:semaphore, `0640`).
+Полный systemd journal, OAuth-сессия и секреты не предоставляются Semaphore.
+Если служба уже работает, `PAIR` показывает текущий код без повторной установки.
+Отдельно проверяется статус устройства Online: статус `active` в systemd его не доказывает.
+
+Загрузка Chrome может инициироваться самим Desktop Commander для функции `write_pdf`.
+Она не является частью процедуры авторизации Remote MCP.
 
 У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `40` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
 
