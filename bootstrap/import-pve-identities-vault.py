@@ -71,7 +71,7 @@ def recover_worker(args):
     import yaml
     if os.geteuid() != 0 or checked("hostname") != f"ansible-{args.site}":
         blocked("Wrong runner for canonical PVE recovery")
-    master = secure_read(Path(args.master_file)).rstrip(b"\\r\\n")
+    master = secure_read(Path(args.master_file)).rstrip(b"\r\n")
     plaintext = VaultLib([("default", VaultSecret(master))]).decrypt(
         secure_read(Path(args.vault_file)))
     vault = yaml.safe_load(plaintext)
@@ -102,7 +102,7 @@ def recover_worker(args):
         blocked("SSH identity is a symlink")
     private.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(private.parent, 0o700)
-    key_bytes = (key.rstrip("\\r\\n") + "\\n").encode()
+    key_bytes = (key.rstrip("\r\n") + "\n").encode()
     if private.exists():
         if secure_read(private) != key_bytes:
             blocked("Existing runner SSH key conflicts with encrypted Fleet Vault")
@@ -121,7 +121,7 @@ def recover_worker(args):
     else:
         fd = os.open(PUBLIC_KEY, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         with os.fdopen(fd, "w") as out:
-            out.write(public_line + "\\n")
+            out.write(public_line + "\n")
     print("PVE_FLEET_RECOVERY=PASS")
 
 
