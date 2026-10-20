@@ -86,3 +86,57 @@ def test_installer_stages_identity_from_pinned_code_under_pve_root():
     assert source.index("stage_runner_remote_commander(args.site, checkout)") < source.index(
         "provision_pve_identity_stage(args.site, args.runner_cidr,"
     )
+
+def test_restored_ed25519_public_key_regex_accepts_comments():
+    import ast
+    import re
+    tree = ast.parse(BOOTSTRAP.read_text())
+    expressions = (
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "fullmatch"
+        and len(node.args) >= 2
+        and isinstance(node.args[1], ast.Name)
+        and node.args[1].id == "restored_pub"
+    )
+    expr = next(expressions)
+    pattern = ast.literal_eval(expr.args[0])
+    assert re.fullmatch(pattern, "ssh-ed25519 " + "A" * 44 + " digitalhouses-serzhan-home-pve-host")
+    assert not re.fullmatch(pattern, "ssh-ed25519 " + "A" * 44 + "\\nINJECTED")
+
+
+def test_existing_canonical_staging_never_reissues_pve_tokens(monkeypatch, tmp_path, capsys):
+    mod_spec = importlib.util.spec_from_file_location(
+        "pve_commission", ROOT / "bootstrap/semaphore-host-install.py")
+    mod = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(mod)
+    monkeypatch.setattr(mod, "ROOT_STAGE", tmp_path)
+    path = tmp_path / "pve-identities-serzhan-home-ansible-v2-pending.json"
+    path.write_text(json.dumps({
+        "site_id": "serzhan-home",
+        "identity_schema": 2,
+        "runner_ip": "192.168.11.231",
+        "pve_ip": "192.168.11.30",
+        "principals": {
+            "audit": "ansible-audit@pve",
+            "write": "ansible-writer@pve",
+            "linux": "ansible-linux",
+        },
+        "pve_tokens": {
+            "audit": "a" * 36,
+            "write": "b" * 36,
+        },
+    }))
+    path.chmod(0o600)
+    calls = []
+    def verified_read_only(*args, **kwargs):
+        calls.append(args)
+        return "PVE_RESTORED_IDENTITIES=READ_ONLY_PASS"
+    monkeypatch.setattr(mod, "run", verified_read_only)
+    assert mod.pve_staged_enrollment_verified(
+        "serzhan-home", "192.168.11.231", "192.168.11.30", tmp_path / "bootstrap.py")
+    assert len(calls) == 1
+    assert "--reconcile-restored" in calls[0]
+    assert "--apply" not in calls[0]
+    assert "STAGING_VERIFIED_NO_REISSUE" in capsys.readouterr().out
