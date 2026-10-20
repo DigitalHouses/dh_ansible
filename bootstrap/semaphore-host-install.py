@@ -630,6 +630,33 @@ def pct_guest(*argv, timeout=180):
     return run("pct", "exec", str(CTID), "--", *argv, timeout=timeout)
 
 
+def stage_guest_root_directory(path: str, *, stage: str) -> None:
+    """Create trusted bootstrap directories; retry only an interrupted pct attach.
+
+    PVE pct exec may return 129 (SIGHUP) despite a valid, still-running LXC.
+    install -d is idempotent, so a short bounded retry is safe even if it
+    created the directory before interruption. No other pct operation is retried.
+    """
+    root = "/opt/digitalhouses/bootstrap/"
+    if not path.startswith(root) or not re.fullmatch(r"[a-z0-9/_-]+", path):
+        raise Blocked("Unsafe staged guest directory")
+    for attempt in range(1, 4):
+        try:
+            pct_guest("install", "-d", "-o", "root", "-g", "root",
+                      "-m", "0755", path)
+            return
+        except Blocked as error:
+            if str(error) != "Command failed: pct, rc=129":
+                raise
+            print(f"GUEST_DIRECTORY_ATTACH_INTERRUPTED={stage} attempt={attempt}/3",
+                  flush=True)
+            if attempt == 3:
+                raise Blocked(
+                    f"Directory stage {stage} failed after 3 pct exec SIGHUP attempts"
+                ) from None
+            time.sleep(1)
+
+
 
 def ensure_debian_etc_before_first_boot():
     """Repair the Debian template /etc mode while CT1231 is still stopped.
@@ -803,7 +830,7 @@ def stage_runner_remote_commander(site, checkout):
     for item in REMOTE_INSTALL_FILES:
         folders.add(base + "/" + str(Path(item).parent))
     for folder in sorted(folders, key=lambda path: (path.count("/"), path)):
-        pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder)
+        stage_guest_root_directory(folder, stage="remote_commander")
 
     for item in REMOTE_INSTALL_FILES:
         source = checkout / item
@@ -837,8 +864,8 @@ def stage_runner_remote_commander(site, checkout):
 def stage_pve_access_audit(checkout: Path) -> None:
     """Stage only a fixed read-only root executor, activated by Semaphore."""
     folder = "/opt/digitalhouses/bootstrap/pve-access"
-    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder)
-    pct_guest("install", "-d", "-o", "root", "-g", "root", "-m", "0755", folder + "/playbooks")
+    stage_guest_root_directory(folder, stage="pve_access")
+    stage_guest_root_directory(folder + "/playbooks", stage="pve_access")
     source = checkout / "playbooks/audit-pve-access.yml"
     if not source.is_file() or source.is_symlink():
         raise Blocked("Pinned PVE access playbook missing")
