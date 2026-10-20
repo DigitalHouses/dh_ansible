@@ -719,3 +719,22 @@ def test_resume_fresh_recovers_vault_pve_identity_without_reenrollment():
         "\ndef apply(", 1)[0]
     assert 'if "PVE_FLEET_RECOVERY=PASS" in response:' in provision
     assert "PVE_CREDENTIALS=RESTORED_FROM_FLEET" in provision
+
+def test_semaphore_resume_supports_explicit_restore_only_pve_access():
+    src=SRC.read_text()
+    assert 'parser.add_argument("--restore-pve-access", action="store_true"' in src
+    assert "if args.restore_pve_access and not args.resume_semaphore:" in src
+    assert 'or (args.resume_semaphore and args.restore_pve_access)' in src
+    assert 'restore_only=bool(args.resume_semaphore)' in src
+    assert 'if restore_only:' in src
+    assert "PVE credential restore-only: canonical credentials absent" in src
+
+
+def test_restore_only_cli_rejects_wrong_resume_mode():
+    m=load()
+    argv=["--site","demo-home","--runner-cidr","198.51.100.231/24",
+          "--gateway","198.51.100.1","--pve-ip","198.51.100.30",
+          "--restore-pve-access"]
+    with pytest.raises(m.Blocked,match="requires --resume-semaphore"):
+        m.main(argv)
+
