@@ -275,7 +275,7 @@ def host(args):
             checked("pct", "push", str(args.ctid), str(args.vault_file), guest_temp + "/base.vault.yml")
             pct(args.ctid, "chmod", "0600", guest_temp + "/master",
                 guest_temp + "/staging.json", guest_temp + "/base.vault.yml")
-            print(pct(args.ctid, "/opt/ansimble/venv/bin/python",
+            print(pct(args.ctid, "/opt/ansible/venv/bin/python",
                       "/opt/digitalhouses/bootstrap/import-pve-identities-vault.py",
                       "--worker", "--site", args.site, "--ctid", str(args.ctid),
                       "--runner-ip", args.runner_ip, "--pve-ip", args.pve_ip,

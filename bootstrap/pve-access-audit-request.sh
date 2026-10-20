@@ -6,7 +6,7 @@ REQUEST=/var/lib/semaphore/dh-pve-access-audit.request
 STATUS=/run/dh-pve-access-audit.status
 LOG=/var/log/dh-pve-access-audit.log
 PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/audit-pve-access.yml
-INV_ROOT=/var/lib/ansimble/site-data
+INV_ROOT=/var/lib/ansible/site-data
 [[ "$(id -u)" == 0 ]] || exit 2
 [[ -f "$REQUEST" && ! -L "$REQUEST" ]] || exit 2
 [[ "$(stat -c '%U:%G:%a' "$REQUEST")" == 'semaphore:semaphore:600' ]] || exit 2
@@ -27,9 +27,9 @@ for target in "$PLAY" "$INV" "$META"; do
   [[ "$(stat -c '%u' "$target")" == 0 ]] || exit 2
 done
 [[ "$(stat -c '%a' "$PLAY")" == 644 ]] || exit 2
-[[ -x /opt/ansimble/venv/bin/ansible-playbook ]] || exit 2
+[[ -x /opt/ansible/venv/bin/ansible-playbook ]] || exit 2
 report RUNNING
 : > "$LOG"; chmod 0600 "$LOG"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
-/opt/ansimble/venv/bin/ansible-playbook -i "$INV" "$PLAY" >> "$LOG" 2>&1
+/opt/ansible/venv/bin/ansible-playbook -i "$INV" "$PLAY" >> "$LOG" 2>&1
 report PASS

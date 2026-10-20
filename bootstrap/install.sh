@@ -108,7 +108,7 @@ echo "LOG_MODE=SAFE_EVENTS_ONLY"
 
 confirm_site_id || exit 2
 
-WORK=$(mktemp -d /root/ansimble-network.XXXXXX)
+WORK=$(mktemp -d /root/ansible-network.XXXXXX)
 mkdir -m 700 "$WORK/gh-config"
 
 echo "=== DIGITALHOUSES · PUBLIC NETWORK BOOTSTRAP ==="

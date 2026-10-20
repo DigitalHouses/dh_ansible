@@ -70,7 +70,7 @@
 
 - name: Ensure Node.js download cache directory
   ansible.builtin.file:
-    path: /var/cache/ansimble
+    path: /var/cache/ansible
     state: directory
     owner: root
     group: root
@@ -80,7 +80,7 @@
 - name: Fetch verified pinned Node.js LTS archive
   ansible.builtin.get_url:
     url: "https://nodejs.org/dist/{{ remote_commander_node_version }}/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
-    dest: "/var/cache/ansimble/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
+    dest: "/var/cache/ansible/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
     checksum: "sha256:{{ remote_commander_node_checksums[remote_commander_arch.stdout] }}"
     owner: root
     group: root
@@ -98,7 +98,7 @@
 
 - name: Extract pinned Node.js distribution
   ansible.builtin.unarchive:
-    src: "/var/cache/ansimble/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
+    src: "/var/cache/ansible/node-{{ remote_commander_node_version }}-linux-{{ {'x86_64':'x64','aarch64':'arm64'}[remote_commander_arch.stdout] }}.tar.xz"
     dest: "{{ remote_commander_node_dir }}"
     remote_src: true
     extra_opts:

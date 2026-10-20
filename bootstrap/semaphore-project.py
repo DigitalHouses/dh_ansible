@@ -23,7 +23,7 @@ import urllib.parse
 import urllib.request
 
 CODE_GIT_URL = "https://github.com/DigitalHouses/dh_ansible.git"
-SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
+SITE_INVENTORY_BASE = "/var/lib/ansible/site-data"
 VIEWS = ("01 · Подготовка", "02 · Развёртывание", "03 · Обслуживание", "04 · Приёмка")
 # Global sortable numeric prefixes on Semaphore task names. Leave gaps of ten.
 # Tuple: canonical title, unnumbered previous name, playbook, view.

@@ -18,7 +18,7 @@ rm -f -- "$REQUEST"
 HOST="$(hostname)"
 [[ "$HOST" =~ ^ansible-([a-z][a-z0-9]*(-[a-z0-9]+)+)$ ]] || exit 2
 HOST_SITE="${BASH_REMATCH[1]}"
-SITE_DIR="/var/lib/ansimble/site-data"
+SITE_DIR="/var/lib/ansible/site-data"
 [[ -d "$SITE_DIR" && ! -L "$SITE_DIR" ]] || exit 2
 # Exactly one canonical site inventory per runner; never infer site_id
 # from the shorter owner-only hostname.
@@ -46,13 +46,13 @@ for path in "$BASE" "$BASE/playbooks" "$BASE/roles" \
   [[ "$(stat -c '%u' "$path")" == "0" ]] || exit 2
   [[ "$(stat -c '%a' "$path")" =~ ^(755|644)$ ]] || exit 2
 done
-[[ -x /opt/ansimble/venv/bin/ansible-playbook ]] || exit 2
+[[ -x /opt/ansible/venv/bin/ansible-playbook ]] || exit 2
 : > "$LOG"
 chmod 0600 "$LOG"
 report RUNNING
 export ANSIBLE_ROLES_PATH="$BASE/roles"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
-/opt/ansimble/venv/bin/ansible-playbook -i "$INVENTORY" \
+/opt/ansible/venv/bin/ansible-playbook -i "$INVENTORY" \
   "$BASE/playbooks/apply-runner-remote-commander.yml" >>"$LOG" 2>&1
 [[ "$(systemctl is-active digitalhouses-remote-commander.service)" == 'active' ]]
 report PASS

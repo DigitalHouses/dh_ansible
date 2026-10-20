@@ -30,7 +30,7 @@ CTID = 1231
 CODE_REPO = "DigitalHouses/dh_ansible"
 FLEET_REPO = "DigitalHouses/dh_ansible_fleet_detail"
 BRIDGE = "vmbr0"
-SITE_INVENTORY_BASE = "/var/lib/ansimble/site-data"
+SITE_INVENTORY_BASE = "/var/lib/ansible/site-data"
 ROOT_STAGE = Path("/var/lib/digitalhouses/bootstrap")
 CODE_FILES = (
     "bootstrap/pve-identities.py",
@@ -209,7 +209,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
             pct_guest("test", "-f", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py")
             pct_guest("test", "-f", "/opt/digitalhouses/bootstrap/runner.txt")
         if resume_semaphore:
-            for marker in ("/opt/ansimble/venv/bin/ansible-playbook",
+            for marker in ("/opt/ansible/venv/bin/ansible-playbook",
                            "/etc/semaphore/config.json",
                            "/etc/semaphore/tls.crt",
                            "/var/lib/semaphore/database.sqlite",
@@ -245,20 +245,20 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
                     raise Blocked("Guest has partial Semaphore runtime; recovery audit required")
         if resume_ansible:
             if code("pct", "exec", str(CTID), "--", "test", "-d",
-                    "/opt/ansimble/venv") != 0:
+                    "/opt/ansible/venv") != 0:
                 raise Blocked("Expected existing Ansible venv missing")
             version = pct_guest("env", "LC_ALL=C.UTF-8", "LANG=C.UTF-8",
-                                "/opt/ansimble/venv/bin/ansible-playbook", "--version")
+                                "/opt/ansible/venv/bin/ansible-playbook", "--version")
             if "ansible-playbook [core 2.21.4]" not in version:
                 raise Blocked("Existing Ansible version differs from release")
-            pct_guest("/opt/ansimble/venv/bin/python", "-m", "pip", "check")
+            pct_guest("/opt/ansible/venv/bin/python", "-m", "pip", "check")
             print("CT1231=VERIFIED_EXISTING_ANSIBLE_ONLY", flush=True)
         elif not resume_semaphore:
             if code("pct", "exec", str(CTID), "--", "test", "-e",
-                    "/opt/ansimble/venv") == 0:
+                    "/opt/ansible/venv") == 0:
                 raise Blocked("Guest has partial Ansible installation; use controlled resume")
             if resume_fresh:
-                for marker in ("/opt/digitalhouses/bootstrap", "/opt/ansimble",
+                for marker in ("/opt/digitalhouses/bootstrap", "/opt/ansible",
                                "/var/lib/semaphore", "/etc/semaphore",
                                "/root/dh-fleet-deploy-key"):
                     if code("pct", "exec", str(CTID), "--", "test", "-e", marker) == 0:
@@ -533,7 +533,7 @@ def install_site_inventory(site, paths, checkout):
                 raise Blocked("Guest site file checksum mismatch")
         if pct_guest("stat", "-c", "%a:%U:%G", target) != "640:root:semaphore":
             raise Blocked("Guest inventory permissions mismatch")
-    for forbidden in ("/var/lib/ansimble/fleet-detail",
+    for forbidden in ("/var/lib/ansible/fleet-detail",
                       "/root/dh-fleet-deploy-key",
                       site_root + "/secrets/fleet.vault.yml"):
         if code("pct", "exec", str(CTID), "--", "test", "-e", forbidden) == 0:
@@ -910,7 +910,7 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
             pct_guest("chmod", "0600", guest_temp + "/master",
                       guest_temp + "/base.vault.yml")
             response = pct_guest(
-                "/opt/ansimble/venv/bin/python", guest_worker,
+                "/opt/ansible/venv/bin/python", guest_worker,
                 "--recover", "--site", site, "--ctid", str(CTID),
                 "--runner-ip", runner_ip, "--pve-ip", pve_ip,
                 "--master-file", guest_temp + "/master",

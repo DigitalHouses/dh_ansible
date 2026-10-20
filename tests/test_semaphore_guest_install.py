@@ -26,7 +26,7 @@ def test_runtime_has_single_https_semaphore_and_no_wizard():
     s=SOURCE.read_text()
     assert "tls" in s and "enabled" in s
     assert 'https://127.0.0.1:3000/api/ping' in s
-    assert 'Environment=PATH=/opt/ansimble/venv/bin:' in s
+    assert 'Environment=PATH=/opt/ansible/venv/bin:' in s
     assert 'User=semaphore' in s
     assert 'semaphore server' in s
     assert "pct destroy" not in s and "pct create" not in s

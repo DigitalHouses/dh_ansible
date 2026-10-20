@@ -110,7 +110,7 @@ def test_public_code_private_fleet_inventory_boundary():
     assert code["ssh_key_id"] == by_name["Public Git (none)"]["id"]
     inventory = next(items for path, items in resources.items() if path.endswith("/inventory"))[0]
     assert inventory["type"] == "file"
-    assert inventory["inventory"] == "/var/lib/ansimble/site-data/demo-office/hosts.yml"
+    assert inventory["inventory"] == "/var/lib/ansible/site-data/demo-office/hosts.yml"
     assert "repository_id" not in inventory
     assert inventory["ssh_key_id"] == by_name["Runner inventory (local-only)"]["id"]
     templates = next(items for path, items in resources.items()
