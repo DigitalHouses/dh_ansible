@@ -11,7 +11,6 @@ def _yaml(path):
 
 
 def test_worker_is_not_registered_as_a_semaphore_task():
-    catalog = _yaml("catalog/semaphore-tasks.json") if False else None
     import json
     catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
     matches = [task for task in catalog["tasks"] if "NetAlertX" in task["title"]]
@@ -58,8 +57,9 @@ def test_graphql_isolation_is_loaded_before_native_app_and_requires_service():
     packages = str(_yaml("roles/netalertx_native/tasks/packages.yml"))
     assert "nftables" in packages
     firewall = _yaml("roles/netalertx_native/tasks/firewall.yml")
-    assert "nft, -c, -f, /etc/nftables.conf" in str(firewall)
-    assert "nft, list, chain, inet, dh_netalertx, input" in str(firewall)
+    commands = [task.get("ansible.builtin.command", {}).get("argv") for task in firewall]
+    assert ["nft", "-c", "-f", "/etc/nftables.conf"] in commands
+    assert ["nft", "list", "chain", "inet", "dh_netalertx", "input"] in commands
     rule = (ROOT / "roles/netalertx_native/templates/netalertx-nftables.conf.j2").read_text()
     assert 'iifname != "lo"' in rule
     assert "tcp dport {{ netalertx_native_api_port }} drop" in rule
