@@ -46,7 +46,8 @@
 - name: Refuse backend installation without active loopback-only API policy
   ansible.builtin.assert:
     that:
-      - "'iifname != "lo"' in netalertx_native_nft_effective.stdout"
+      - >-
+        'iifname != "lo"' in netalertx_native_nft_effective.stdout
       - "('tcp dport ' ~ (netalertx_native_api_port | string)) in netalertx_native_nft_effective.stdout"
       - "'drop' in netalertx_native_nft_effective.stdout"
     fail_msg: "GraphQL LAN isolation is not active. Native backend must NOT be started."
