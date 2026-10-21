@@ -1,7 +1,7 @@
 ---
 # One Semaphore entry point for the native NetAlertX lifecycle.
-# First commissioning gate is deliberately READ-ONLY: the privileged worker
-# and verified IP/DHCP/API isolation have not yet been authorized.
+# Only site provision and DHCP exclusion are human-approved; API isolation
+# must be verified live by the worker BEFORE the backend can start.
 - name: NetAlertX native deployment - audited plan
   hosts: site_runner
   gather_facts: false
@@ -40,13 +40,12 @@
     - role: netalertx_deployment_plan
 
   post_tasks:
-    - name: Calculate whether all independently reviewed provisioning gates are set
+    - name: Calculate whether site provision and DHCP exclusion are approved
       ansible.builtin.set_fact:
         netalertx_apply_allowed: >-
           {{
             netalertx.security.provision_approved | bool
             and netalertx.security.dhcp_exclusion_verified | bool
-            and netalertx.security.api_lan_isolation_verified | bool
           }}
 
     - name: Explain why this task remains a read-only plan
@@ -61,7 +60,7 @@
           note: "Private Fleet controls commissioning; protected existing guests stay untouched."
       when: not netalertx_apply_allowed | bool
 
-    - name: Request fixed-purpose privileged worker only after all approvals
+    - name: Request fixed-purpose worker with runtime API isolation verification
       when: netalertx_apply_allowed | bool
       block:
         - name: Require commissioned root-owned NetAlertX watcher
@@ -114,4 +113,4 @@
               vmid: "{{ netalertx.vmid }}"
               hostname: "{{ netalertx.hostname }}"
               web_url: "http://{{ netalertx.network.ipv4.split('/')[0] }}:{{ netalertx.application.web_port }}"
-              note: "Verified by the root worker: Web UI and external GraphQL isolation. Reboot and ARP acceptance require a separate test."
+              note: "API isolation is accepted only after the worker verifies live nftables and external TCP/20212 blocking."
