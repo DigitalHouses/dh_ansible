@@ -8,7 +8,6 @@
       - netalertx_pve_worker_approved | default(false) | bool
       - netalertx.security.provision_approved | bool
       - netalertx.security.dhcp_exclusion_verified | bool
-      - netalertx.security.api_lan_isolation_verified | bool
       - netalertx.deployment == 'native'
       - netalertx.platform == 'lxc'
       - netalertx.security.unprivileged | bool
@@ -27,7 +26,7 @@
       - netalertx.resources.memory_mb | int >= 512
       - netalertx.resources.rootfs_gb | int >= 8
       - netalertx.resources.storage is match('^[a-zA-Z0-9_-]+$')
-    fail_msg: "PVE provisioning blocked: worker authority, identity, DHCP/API gate or desired state failed."
+    fail_msg: "PVE provisioning blocked: worker authority, identity, DHCP gate or desired state failed."
 
 - name: Verify trusted PVE host identity
   ansible.builtin.command:
