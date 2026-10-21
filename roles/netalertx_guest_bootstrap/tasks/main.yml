@@ -1,0 +1,271 @@
+---
+# Executed as root on the site runner after PVE ownership checks. It touches
+# only the PVE-verified new CT. Do not use ssh-keyscan as a trust anchor.
+- name: Define root-owned guest SSH identity paths
+  ansible.builtin.set_fact:
+    netalertx_guest_key_file: "/var/lib/ansible/.ssh/netalertx-{{ site.id }}-ed25519"
+    netalertx_guest_known_hosts: "/var/lib/ansible/.ssh/netalertx-guests-known_hosts"
+    netalertx_guest_ledger: "/var/lib/ansible/managed-guests/{{ site.id }}/netalertx-{{ netalertx.vmid }}.identity"
+    netalertx_guest_pve_pubkey: "/run/dh-netalertx-{{ netalertx.vmid }}.pub"
+
+- name: Create root-only managed guest identity directory
+  ansible.builtin.file:
+    path: "/var/lib/ansible/managed-guests/{{ site.id }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Create unique guest SSH key only on initial commissioning
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -q
+      - -t
+      - ed25519
+      - -N
+      - ""
+      - -f
+      - "{{ netalertx_guest_key_file }}"
+      - -C
+      - "dh-netalertx-{{ site.id }}"
+    creates: "{{ netalertx_guest_key_file }}"
+
+- name: Read guest SSH public key
+  ansible.builtin.slurp:
+    src: "{{ netalertx_guest_key_file }}.pub"
+  register: netalertx_guest_pub
+  no_log: true
+
+- name: Inspect previous commissioning ledger
+  ansible.builtin.stat:
+    path: "{{ netalertx_guest_ledger }}"
+  register: netalertx_guest_ledger_stat
+
+- name: Check actual target LXC network flags again before enabling
+  ansible.builtin.command:
+    argv: [pct, config, "{{ netalertx.vmid }}"]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_pve_config
+  changed_when: false
+
+- name: Require exact owned target before ever starting network
+  ansible.builtin.assert:
+    that:
+      - "('hostname: ' ~ netalertx.hostname) in netalertx_guest_pve_config.stdout_lines"
+      - "('description: DigitalHouses native NetAlertX site=' ~ site.id) in netalertx_guest_pve_config.stdout_lines"
+      - "('ip=' ~ netalertx.network.ipv4) in netalertx_guest_pve_config.stdout"
+      - "'protection: 1' in netalertx_guest_pve_config.stdout_lines"
+
+- name: Enable only the new CT network after approved DHCP and isolation gates
+  ansible.builtin.command:
+    argv:
+      - pct
+      - set
+      - "{{ netalertx.vmid }}"
+      - --net0
+      - "name=eth0,bridge={{ netalertx.network.bridge }},ip={{ netalertx.network.ipv4 }},gw={{ netalertx.network.gateway }},ip6=manual,link_down=0,firewall=1"
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: "'link_down=1' in netalertx_guest_pve_config.stdout"
+
+- name: Read new CT power state
+  ansible.builtin.command:
+    argv: [pct, status, "{{ netalertx.vmid }}"]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_power
+  changed_when: false
+
+- name: Start ONLY the verified new CT when stopped
+  ansible.builtin.command:
+    argv: [pct, start, "{{ netalertx.vmid }}"]
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_power.stdout == 'status: stopped'
+
+- name: Verify new guest Debian version through trusted PVE console
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, cat, /etc/debian_version]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_debian
+  changed_when: false
+  retries: 12
+  delay: 5
+  until: netalertx_guest_debian.rc == 0
+
+- name: Require Debian 13 before any package changes
+  ansible.builtin.assert:
+    that: netalertx_guest_debian.stdout is match('^13\\.')
+
+- name: Check SSH daemon in isolated target CT
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, test, -x, /usr/sbin/sshd]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_sshd
+  failed_when: false
+  changed_when: false
+
+- name: Check Python interpreter in isolated target CT
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, test, -x, /usr/bin/python3]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_python
+  failed_when: false
+  changed_when: false
+
+- name: Refresh apt indexes ONLY when guest bootstrap packages are missing
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, apt-get, update]
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_sshd.rc != 0 or netalertx_guest_python.rc != 0
+
+- name: Install minimal guest SSH/Python transport through PVE console once
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, apt-get, install, -y, openssh-server, python3]
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_sshd.rc != 0 or netalertx_guest_python.rc != 0
+
+- name: Inspect existing root authorized_keys without overwriting
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, test, -f, /root/.ssh/authorized_keys]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_authorized_exists
+  changed_when: false
+  failed_when: false
+
+- name: Read existing authorized_keys when present
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, cat, /root/.ssh/authorized_keys]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_authorized
+  changed_when: false
+  no_log: true
+  when: netalertx_guest_authorized_exists.rc == 0
+
+- name: Refuse takeover of foreign guest SSH credentials
+  ansible.builtin.assert:
+    that:
+      - >-
+        netalertx_guest_authorized_exists.rc != 0
+        or
+        ((netalertx_guest_authorized.stdout | trim) ==
+        (netalertx_guest_pub.content | b64decode | trim))
+    fail_msg: "Existing root authorized_keys differs from Fleet-managed key."
+  no_log: true
+
+- name: Create guest root SSH directory only on first commissioning
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, install, -d, -m, "0700", /root/.ssh]
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_authorized_exists.rc != 0
+
+- name: Stage guest public key on trusted PVE only when missing
+  ansible.builtin.copy:
+    dest: "{{ netalertx_guest_pve_pubkey }}"
+    content: "{{ netalertx_guest_pub.content | b64decode }}"
+    owner: root
+    group: root
+    mode: "0600"
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_authorized_exists.rc != 0
+  no_log: true
+
+- name: Install only our public key through trusted PVE guest console
+  ansible.builtin.command:
+    argv:
+      - pct
+      - push
+      - "{{ netalertx.vmid }}"
+      - "{{ netalertx_guest_pve_pubkey }}"
+      - /root/.ssh/authorized_keys
+      - --perms
+      - "0600"
+      - --user
+      - root
+      - --group
+      - root
+  delegate_to: dh_netalertx_pve
+  become: true
+  when: netalertx_guest_authorized_exists.rc != 0
+
+- name: Remove temporary public key from PVE host after commissioning
+  ansible.builtin.file:
+    path: "{{ netalertx_guest_pve_pubkey }}"
+    state: absent
+  delegate_to: dh_netalertx_pve
+  become: true
+
+- name: Read immutable guest machine-id through PVE
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, cat, /etc/machine-id]
+  delegate_to: dh_netalertx_pve
+  become: true
+  changed_when: false
+  register: netalertx_guest_machine_id
+
+- name: Read guest SSH ED25519 host key through trusted PVE console
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ netalertx.vmid }}", --, cat, /etc/ssh/ssh_host_ed25519_key.pub]
+  delegate_to: dh_netalertx_pve
+  become: true
+  register: netalertx_guest_hostkey
+  changed_when: false
+
+- name: Validate machine-id and host public key
+  ansible.builtin.assert:
+    that:
+      - netalertx_guest_machine_id.stdout is match('^[0-9a-f]{32}$')
+      - netalertx_guest_hostkey.stdout is match('^ssh-ed25519 [A-Za-z0-9+/=]+')
+      - netalertx_guest_hostkey.stdout.split() | length >= 2
+
+- name: Form stable guest identity receipt
+  ansible.builtin.set_fact:
+    netalertx_guest_identity_receipt: "{{ netalertx_guest_machine_id.stdout }}|{{ netalertx_guest_hostkey.stdout.split()[:2] | join(' ') }}\n"
+
+- name: Read prior identity receipt if commissioned before
+  ansible.builtin.slurp:
+    src: "{{ netalertx_guest_ledger }}"
+  register: netalertx_guest_prior_identity
+  when: netalertx_guest_ledger_stat.stat.exists
+  no_log: true
+
+- name: Refuse drift or replacement of previously commissioned guest
+  ansible.builtin.assert:
+    that: (netalertx_guest_prior_identity.content | b64decode) == netalertx_guest_identity_receipt
+    fail_msg: "Guest machine-id or SSH host key rotated; refuse automatic adoption."
+  when: netalertx_guest_ledger_stat.stat.exists
+  no_log: true
+
+- name: Persist new guest identity once (do not overwrite on retry)
+  ansible.builtin.copy:
+    dest: "{{ netalertx_guest_ledger }}"
+    content: "{{ netalertx_guest_identity_receipt }}"
+    owner: root
+    group: root
+    mode: "0600"
+    force: false
+
+- name: Pin guest host key from trusted PVE console, never ssh-keyscan
+  ansible.builtin.known_hosts:
+    path: "{{ netalertx_guest_known_hosts }}"
+    name: "{{ netalertx.network.ipv4.split('/')[0] }}"
+    key: "{{ netalertx.network.ipv4.split('/')[0] }} {{ netalertx_guest_hostkey.stdout.split()[:2] | join(' ') }}"
+    state: present
+
+- name: Wait for guest SSH transport without disabling host-key validation
+  ansible.builtin.wait_for:
+    host: "{{ netalertx.network.ipv4.split('/')[0] }}"
+    port: 22
+    delay: 1
+    timeout: 90
