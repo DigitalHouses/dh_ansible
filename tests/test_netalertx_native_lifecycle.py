@@ -72,3 +72,22 @@ def test_pve_description_matches_only_canonical_record_with_optional_encoded_lf(
     assert text.count("('description: DigitalHouses native NetAlertX site=' ~ site.id)") == 2
     assert text.count(" in netalertx_pve_existing.stdout_lines") >= 2
     assert text.count(" in netalertx_pve_final.stdout_lines") >= 2
+
+
+def test_add_host_is_bookkeeping_and_onboot_requires_post_acceptance():
+    plays = _yaml("playbooks/deploy-netalertx-pve-from-worker.yml")
+    assert len(plays) == 3
+    add_hosts = [
+        task
+        for key in ("pre_tasks", "post_tasks")
+        for task in plays[0].get(key, [])
+        if "ansible.builtin.add_host" in task
+    ]
+    assert len(add_hosts) == 2
+    assert all(t.get("changed_when") is False for t in add_hosts)
+    assert plays[2]["hosts"] == "site_runner"
+    phase = str(plays[2]["tasks"])
+    assert "api_lan_isolation_verified" in phase
+    assert "protection: 1" in phase
+    assert "netalertx.lifecycle.onboot" in phase
+    assert "pct" in phase and "onboot" in phase

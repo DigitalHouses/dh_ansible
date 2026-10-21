@@ -49,6 +49,7 @@
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+      changed_when: false
   roles:
     - role: netalertx_deployment_plan
     - role: netalertx_pve_lxc
@@ -78,6 +79,7 @@
         netalertx_native_timezone: "{{ netalertx.application.timezone }}"
         netalertx_native_web_port: "{{ netalertx.application.web_port }}"
         netalertx_native_api_port: "{{ netalertx.application.api_port }}"
+      changed_when: false
 
 - name: Install native NetAlertX on the independently verified new guest
   hosts: netalertx_new_guest
@@ -117,3 +119,66 @@
           docker: false
           reboot_persistence: NOT_YET_TESTED
           network_arp_detection: NOT_YET_TESTED
+
+
+- name: Reconcile post-acceptance boot policy for the verified NEW NetAlertX CT
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read exact verified guest configuration from trusted PVE after E2E
+      ansible.builtin.command:
+        argv: [pct, config, "{{ netalertx.vmid }}"]
+      delegate_to: dh_netalertx_pve
+      become: true
+      register: netalertx_boot_conf
+      changed_when: false
+
+    - name: Require exact ownership and API acceptance before boot-policy change
+      ansible.builtin.assert:
+        that:
+          - "('hostname: ' ~ netalertx.hostname) in netalertx_boot_conf.stdout_lines"
+          - >-
+            ('description: DigitalHouses native NetAlertX site=' ~ site.id)
+            in netalertx_boot_conf.stdout_lines
+            or
+            ('description: DigitalHouses native NetAlertX site=' ~ site.id ~ '%0A')
+            in netalertx_boot_conf.stdout_lines
+          - "'protection: 1' in netalertx_boot_conf.stdout_lines"
+          - >-
+            not (netalertx.lifecycle.onboot | default(false) | bool)
+            or (netalertx.security.api_lan_isolation_verified | bool)
+        fail_msg: "Boot policy cannot change: identity or API post-acceptance gate failed."
+
+    - name: Set onboot only for accepted native NetAlertX when desired and currently disabled
+      ansible.builtin.command:
+        argv: [pct, set, "{{ netalertx.vmid }}", --onboot, "1"]
+      delegate_to: dh_netalertx_pve
+      become: true
+      when:
+        - netalertx.lifecycle.onboot | default(false) | bool
+        - "'onboot: 1' not in netalertx_boot_conf.stdout_lines"
+      changed_when: true
+
+    - name: Read effective PVE boot policy after reconciliation
+      ansible.builtin.command:
+        argv: [pct, config, "{{ netalertx.vmid }}"]
+      delegate_to: dh_netalertx_pve
+      become: true
+      register: netalertx_boot_verified
+      changed_when: false
+
+    - name: Verify onboot is managed only after accepted new guest E2E
+      ansible.builtin.assert:
+        that:
+          - >-
+            not (netalertx.lifecycle.onboot | default(false) | bool)
+            or 'onboot: 1' in netalertx_boot_verified.stdout_lines
+
+    - name: Report accepted native guest boot policy
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          vmid: "{{ netalertx.vmid }}"
+          reboot_verified_separately: true
+          onboot: "{{ 'enabled' if (netalertx.lifecycle.onboot | default(false) | bool) else 'commissioning_default' }}"
