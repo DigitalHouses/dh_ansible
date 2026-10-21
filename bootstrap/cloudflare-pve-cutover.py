@@ -201,6 +201,93 @@ def systemctl(*args):
     return proc.stdout.strip()
 
 
+CLOUDFLARED_APT_DIR = Path("/etc/apt/sources.list.d")
+CLOUDFLARED_APT_MAIN = Path("/etc/apt/sources.list")
+CLOUDFLARED_OWN_SOURCE = CLOUDFLARED_APT_DIR / "dh-cloudflared.list"
+CLOUDFLARED_OWN_KEY = Path("/usr/share/keyrings/dh-cloudflared.gpg")
+CLOUDFLARED_REPO = "https://pkg.cloudflare.com/cloudflared"
+
+
+def validate_existing_apt_key(value):
+    """Only reuse explicit root-owned signed-by keyrings, never apt-key/trusted=yes."""
+    key = Path(value)
+    require(key.is_absolute()
+            and key.parent in (Path("/usr/share/keyrings"), Path("/etc/apt/keyrings"))
+            and re.fullmatch(r"[A-Za-z0-9._-]+\.gpg", key.name),
+            "CLOUDFLARED_APT_SIGNED_BY_INVALID")
+    require(key.is_file() and not key.is_symlink(), "CLOUDFLARED_APT_KEY_MISSING")
+    info = key.stat()
+    require(info.st_uid == 0 and not info.st_mode & 0o022
+            and info.st_size > 0, "CLOUDFLARED_APT_KEY_UNTRUSTED")
+
+
+def find_existing_cloudflared_apt_source():
+    """Discover an existing *enabled* Cloudflare signed repo (other than ours).
+
+    Fail closed on unrecognized active Cloudflare source entries rather than
+    rewriting unknown APT config or allowing ambiguous Signed-By mappings.
+    """
+    sources = [CLOUDFLARED_APT_MAIN]
+    if CLOUDFLARED_APT_DIR.is_dir():
+        sources.extend(sorted(path for path in CLOUDFLARED_APT_DIR.iterdir()
+                              if path.suffix in (".list", ".sources")))
+    matches = []
+    for path in sources:
+        if path == CLOUDFLARED_OWN_SOURCE:
+            continue
+        require(not path.is_symlink(), "CLOUDFLARED_APT_SOURCE_SYMLINK")
+        if not path.is_file():
+            continue
+        info = path.stat()
+        require(info.st_uid == 0 and not info.st_mode & 0o022,
+                "CLOUDFLARED_APT_SOURCE_UNTRUSTED")
+        text = path.read_text(encoding="utf-8")
+        if path.suffix == ".sources":
+            for section in re.split(r"\n\s*\n", text):
+                lines = [x.strip() for x in section.splitlines()
+                         if x.strip() and not x.lstrip().startswith("#")]
+                fields = {}
+                for line in lines:
+                    if ":" in line:
+                        name, value = line.split(":", 1)
+                        fields[name.strip().lower()] = value.strip()
+                uris = fields.get("uris", "").split()
+                if not any(uri.rstrip("/") == CLOUDFLARED_REPO for uri in uris):
+                    continue
+                if fields.get("enabled", "yes").lower() == "no":
+                    continue
+                require(uris and all(uri.rstrip("/") == CLOUDFLARED_REPO for uri in uris)
+                        and fields.get("types") == "deb"
+                        and fields.get("suites") in ("any", "bookworm", "bullseye", "trixie")
+                        and fields.get("components") == "main"
+                        and fields.get("trusted", "no").lower() == "no",
+                        "CLOUDFLARED_APT_SOURCE_UNKNOWN")
+                key = fields.get("signed-by", "")
+                validate_existing_apt_key(key)
+                matches.append(path)
+        else:
+            for raw in text.splitlines():
+                line = raw.split("#", 1)[0].strip()
+                if not line or not line.startswith("deb "):
+                    continue
+                if CLOUDFLARED_REPO not in line:
+                    continue
+                found = re.fullmatch(
+                    r"deb\s+\[([^\]]+)\]\s+https://pkg\.cloudflare\.com/cloudflared/?"
+                    r"\s+(any|bookworm|bullseye|trixie)\s+main", line)
+                require(found is not None, "CLOUDFLARED_APT_SOURCE_UNKNOWN")
+                options = found.group(1).split()
+                require(all(part.startswith(("signed-by=", "arch=")) for part in options),
+                        "CLOUDFLARED_APT_SOURCE_UNKNOWN")
+                bindings = [part[len("signed-by="):] for part in options
+                            if part.startswith("signed-by=")]
+                require(len(bindings) == 1, "CLOUDFLARED_APT_SIGNED_BY_INVALID")
+                validate_existing_apt_key(bindings[0])
+                matches.append(path)
+    require(len(matches) <= 1, "CLOUDFLARED_APT_MULTIPLE_EXISTING_SOURCES")
+    return bool(matches)
+
+
 def install_missing_cloudflared():
     """Install only when absent using Cloudflare's signed Debian APT repository."""
     executable = shutil.which("cloudflared")
@@ -209,17 +296,28 @@ def install_missing_cloudflared():
         return executable
     require(Path("/usr/bin/apt-get").exists() and Path("/usr/bin/dpkg").exists(),
             "CLOUDFLARED_INSTALL_UNSUPPORTED_PLATFORM")
-    source = Path("/etc/apt/sources.list.d/dh-cloudflared.list")
-    key = Path("/usr/share/keyrings/dh-cloudflared.gpg")
+    source = CLOUDFLARED_OWN_SOURCE
+    key = CLOUDFLARED_OWN_KEY
     desired = ("deb [signed-by=/usr/share/keyrings/dh-cloudflared.gpg] "
                "https://pkg.cloudflare.com/cloudflared any main\n")
     if source.exists() or source.is_symlink():
         require(source.is_file() and not source.is_symlink()
+                and source.stat().st_uid == 0
+                and not source.stat().st_mode & 0o022
                 and source.read_text() == desired, "CLOUDFLARED_APT_SOURCE_CONFLICT")
-    if key.exists() or key.is_symlink():
-        require(key.is_file() and not key.is_symlink() and key.stat().st_uid == 0
-                and (key.stat().st_mode & 0o022) == 0, "CLOUDFLARED_APT_KEY_CONFLICT")
-    if not key.exists():
+    existing_vendor_source = find_existing_cloudflared_apt_source()
+    # An earlier installer revision could have added this exact duplicate.
+    # Only remove our OWN known source; never rewrite a vendor-owned entry.
+    if existing_vendor_source:
+        if source.exists():
+            source.unlink()
+            print("CLOUDFLARED_APT_DUPLICATE=REMOVED")
+        print("CLOUDFLARED_APT_SOURCE=REUSED_EXISTING")
+    else:
+        if key.exists() or key.is_symlink():
+            require(key.is_file() and not key.is_symlink() and key.stat().st_uid == 0
+                    and (key.stat().st_mode & 0o022) == 0, "CLOUDFLARED_APT_KEY_CONFLICT")
+    if not existing_vendor_source and not key.exists():
         req = urllib.request.Request(
             "https://pkg.cloudflare.com/cloudflare-main.gpg",
             headers={"User-Agent": "DigitalHouses-CloudflareInstaller/1"})
@@ -236,8 +334,9 @@ def install_missing_cloudflared():
                               input=data, capture_output=True, timeout=20)
         require(proc.returncode == 0, "CLOUDFLARED_APT_KEY_NOT_OPENPGP")
         atomic_binary(key, data, mode=0o644)
-    if not source.exists():
+    if not existing_vendor_source and not source.exists():
         atomic_new(source, desired, mode=0o644)
+        print("CLOUDFLARED_APT_SOURCE=CREATED")
     for command in (
         ["/usr/bin/apt-get", "update", "-o", "APT::Update::Error-Mode=any"],
         ["/usr/bin/apt-get", "install", "-y", "--no-install-recommends", "cloudflared"],
