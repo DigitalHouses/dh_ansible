@@ -81,6 +81,7 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-netalertx-install.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-netalertx-native.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/deploy-netalertx-pve-from-worker.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-nut-baseline.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-provision.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-base.yml
