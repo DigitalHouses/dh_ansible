@@ -64,3 +64,11 @@ def test_graphql_isolation_is_loaded_before_native_app_and_requires_service():
     assert "tcp dport {{ netalertx_native_api_port }} drop" in rule
     unit = (ROOT / "roles/netalertx_native/templates/netalertx.service.j2").read_text()
     assert "Requires=netalertx-runtime.service nftables.service" in unit
+
+
+def test_pve_description_matches_only_canonical_record_with_optional_encoded_lf():
+    text = (ROOT / "roles/netalertx_pve_lxc/tasks/main.yml").read_text()
+    assert text.count("~ '%0A'") == 2
+    assert text.count("('description: DigitalHouses native NetAlertX site=' ~ site.id)") == 2
+    assert text.count(" in netalertx_pve_existing.stdout_lines") >= 2
+    assert text.count(" in netalertx_pve_final.stdout_lines") >= 2

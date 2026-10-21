@@ -54,7 +54,7 @@
   ansible.builtin.assert:
     that:
       - "('hostname: ' ~ netalertx.hostname) in netalertx_guest_pve_config.stdout_lines"
-      - "('description: DigitalHouses native NetAlertX site=' ~ site.id) in netalertx_guest_pve_config.stdout_lines"
+      - "('description: DigitalHouses native NetAlertX site=' ~ site.id) in netalertx_guest_pve_config.stdout_lines or ('description: DigitalHouses native NetAlertX site=' ~ site.id ~ '%0A') in netalertx_guest_pve_config.stdout_lines"
       - "('ip=' ~ netalertx.network.ipv4) in netalertx_guest_pve_config.stdout"
       - "'protection: 1' in netalertx_guest_pve_config.stdout_lines"
 
