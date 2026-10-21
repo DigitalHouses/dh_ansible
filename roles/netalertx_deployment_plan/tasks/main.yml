@@ -1,0 +1,59 @@
+---
+# A concrete, safe inventory contract. No PVE/guest command is executed here.
+- name: Validate NetAlertX desired state and hard protection boundary
+  ansible.builtin.assert:
+    that:
+      - netalertx is mapping
+      - netalertx.enabled | bool
+      - netalertx.deployment == 'native'
+      - netalertx.platform == 'lxc'
+      - netalertx.vmid | int >= 1230
+      - netalertx.vmid | int <= 1254
+      - netalertx.hostname is match('^netalertx-[a-z][a-z0-9-]+$')
+      - netalertx.hostname == 'netalertx-' ~ site.id
+      - netalertx.os.distribution == 'debian'
+      - netalertx.os.major_version | int == 13
+      - netalertx.resources.cores | int >= 1
+      - netalertx.resources.memory_mb | int >= 512
+      - netalertx.resources.rootfs_gb | int >= 8
+      - netalertx.resources.storage | length > 0
+      - netalertx.security.unprivileged | bool
+      - (netalertx.vmid | int) not in (netalertx.security.protected_vmids | map('int') | list)
+      - netalertx.network.bridge | length > 0
+      - netalertx.network.ipv4 is match('^192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}/24$')
+      - netalertx.vmid | int == 1000 + (netalertx.network.ipv4.split('/')[0].split('.')[-1] | int)
+      - netalertx.network.gateway | length > 0
+      - netalertx.network.dns | length > 0
+      - not (netalertx.network.onboot_during_commissioning | bool)
+      - netalertx.application.source_commit is match('^[0-9a-f]{40}$')
+      - netalertx.application.release | length > 0
+      - netalertx.application.web_port | int == 20211
+      - netalertx.application.api_port | int == 20212
+      - netalertx.application.scan_subnets is sequence
+      - netalertx.application.scan_subnets | length > 0
+    fail_msg: "NetAlertX inventory inconsistent; no PVE/guest changes permitted."
+
+- name: Show exact isolated NetAlertX deployment plan
+  ansible.builtin.debug:
+    msg:
+      result: PLAN_ONLY
+      site: "{{ site.id }}"
+      deployment: native
+      target_vmid: "{{ netalertx.vmid }}"
+      target_hostname: "{{ netalertx.hostname }}"
+      target_ip: "{{ netalertx.network.ipv4 }}"
+      network_bridge: "{{ netalertx.network.bridge }}"
+      os: Debian_13
+      resources: "{{ netalertx.resources }}"
+      upstream_release: "{{ netalertx.application.release }}"
+      upstream_commit: "{{ netalertx.application.source_commit }}"
+      protected_vmids: "{{ netalertx.security.protected_vmids }}"
+      dhcp_exclusion_verified: "{{ netalertx.security.dhcp_exclusion_verified | bool }}"
+      api_lan_isolation_verified: "{{ netalertx.security.api_lan_isolation_verified | bool }}"
+      provision_approved: "{{ netalertx.security.provision_approved | bool }}"
+      pve_live_guest_identity: NOT_YET_VERIFIED_BY_PRIVILEGED_WORKER
+      dhcp_authority: NOT_YET_VERIFIED
+      privileged_deployment_worker: NOT_YET_COMMISSIONED
+      changes: NONE
+      installation: NOT_PERFORMED
+      note: "Нативная установка заблокирована до отдельной PVE-preflight и commissioning защищённого исполнителя."
