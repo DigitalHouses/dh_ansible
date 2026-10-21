@@ -1,32 +1,125 @@
 ---
-# READ-ONLY contract inspection; does not claim to provision Cloudflare.
-- name: Plan site Cloudflare Tunnel routes without applying
+# Read-only site-local preflight for the canonical Cloudflare route.
+# A privileged Cloudflare API/PVE connector worker is NOT installed by this play.
+- name: Audit canonical Cloudflare site entrypoint and plan next action
   hosts: site_runner
   gather_facts: false
   become: false
+  vars:
+    cloudflare_dns_zone: digitalhouses.vip
   pre_tasks:
-    - name: Load site identity
+    - name: Load canonical site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
-    - name: Verify the canonical site scope
+
+    - name: Load canonical PVE identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Restrict execution to the site-local runner
       ansible.builtin.assert:
         that:
           - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
           - (ansible_connection | default('')) == 'local'
           - site.id is defined
           - site.owner_slug is defined
           - site.type is defined
+          - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve.host is defined
+          - pve.host is match('^[0-9.]+$')
+          - pve.port | int == 8006
+        fail_msg: "Wrong site/runner/PVE identity; no Cloudflare requests made"
+
+    - name: Read local runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      changed_when: false
+      register: cloudflare_runner_hostname
+
+    - name: Bind the execution to the expected runner
+      ansible.builtin.assert:
+        that:
+          - cloudflare_runner_hostname.stdout == 'ansible-' ~ site.id
+
+    - name: Derive canonical Cloudflare resources
+      ansible.builtin.set_fact:
+        cloudflare_expected_tunnel: "{{ site.id }}"
+        cloudflare_pve_hostname: "dh-{{ site.id }}-pve.{{ cloudflare_dns_zone }}"
+        cloudflare_legacy_pve_hostname: "{{ site.id }}-pve.{{ cloudflare_dns_zone }}"
+        cloudflare_pve_origin: "https://{{ pve.host }}:{{ pve.port }}"
+      changed_when: false
+
   tasks:
-    - name: Explain the approved tunnel name and hostnames
+    - name: Check local PVE HTTPS origin availability (certificate validated separately)
+      ansible.builtin.uri:
+        url: "{{ cloudflare_pve_origin }}"
+        method: GET
+        follow_redirects: none
+        validate_certs: false
+        status_code: [200, 301, 302, 303, 307, 308, 401, 403]
+        timeout: 8
+      register: cloudflare_local_pve
+      changed_when: false
+      failed_when: false
+
+    - name: Resolve canonical Cloudflare hostname
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ cloudflare_pve_hostname }}"]
+      register: cloudflare_dns_result
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect unauthenticated canonical public response without redirects
+      ansible.builtin.uri:
+        url: "https://{{ cloudflare_pve_hostname }}"
+        method: GET
+        follow_redirects: none
+        validate_certs: true
+        status_code: [200, 301, 302, 303, 307, 308, 401, 403, 404, 502, 503, 530]
+        timeout: 12
+      register: cloudflare_public_response
+      changed_when: false
+      failed_when: false
+      when: cloudflare_dns_result.rc == 0
+
+    - name: Inspect old public PVE hostname without redirects
+      ansible.builtin.uri:
+        url: "https://{{ cloudflare_legacy_pve_hostname }}"
+        method: GET
+        follow_redirects: none
+        validate_certs: true
+        status_code: [200, 301, 302, 303, 307, 308, 401, 403, 404, 502, 503, 530]
+        timeout: 12
+      register: cloudflare_old_response
+      changed_when: false
+      failed_when: false
+
+    - name: Report the observed state and strictly bounded plan
       ansible.builtin.debug:
         msg:
-          stage: PLAN_ONLY
-          cloudflare_tunnel_name: "{{ site.id }}"
-          pve_fqdn: "{{ site.id }}-pve.digitalhouses.vip"
-          ansible_fqdn: "{{ site.id }}-pve-ansible.digitalhouses.vip"
-          required_security: "Access policy must be verified before publishing routes"
-          note: "Provisioning is not implemented or authorized by this planning task"
-    - name: Refuse to claim Cloudflare deployment has happened
-      ansible.builtin.debug:
-        msg: "CLOUDFLARE_PROVISIONING=NOT_STARTED; no DNS/Access/Tunnel changes were made."
+          stage: AUDIT_AND_PLAN
+          site: "{{ site.id }}"
+          desired_tunnel: "{{ cloudflare_expected_tunnel }}"
+          desired_pve_hostname: "{{ cloudflare_pve_hostname }}"
+          desired_pve_origin: "{{ cloudflare_pve_origin }}"
+          local_origin_http: "{{ cloudflare_local_pve.status | default('unavailable') }}"
+          public_dns: "{{ 'RESOLVED' if cloudflare_dns_result.rc == 0 else 'NOT_RESOLVED' }}"
+          new_public_http: "{{ cloudflare_public_response.status | default('not_checked') }}"
+          new_public_redirect: "{{ cloudflare_public_response.location | default('none') }}"
+          legacy_hostname: "{{ cloudflare_legacy_pve_hostname }}"
+          legacy_public_http: "{{ cloudflare_old_response.status | default('unavailable') }}"
+          access_control: API_READBACK_REQUIRED
+          tunnel_connector_health: API_READBACK_REQUIRED
+          origin_tls_trust: REVIEW_REQUIRED
+          api_tunnel_ingress_dns_apply: NOT_AUTHORIZED_FROM_SEMAPHORE
+          pve_cloudflared_switch: NOT_AUTHORIZED_FROM_SEMAPHORE
+          next_step: "Deploy an approved narrowly scoped root worker; then verify Access and connector before cutover"
+          infrastructure_changes: NONE
+
+    - name: Require that the existing PVE origin is reachable before cutover
+      ansible.builtin.assert:
+        that:
+          - cloudflare_local_pve.status | default(-1) | int in [200, 301, 302, 303, 307, 308, 401, 403]
+        fail_msg: "PVE origin is unreachable; tunnel cutover must not proceed"
