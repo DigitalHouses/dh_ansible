@@ -1,0 +1,98 @@
+---
+# Operator-initiated one-shot cutover. No PVE credentials or CF API token
+# are exposed to Semaphore; the root watcher takes only a fixed nonce.
+- name: Request approved canonical Cloudflare connector cutover
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load canonical site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Require the one local site runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+
+    - name: Read runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      register: cloudflare_cutover_host
+      changed_when: false
+
+    - name: Verify runner identity
+      ansible.builtin.assert:
+        that:
+          - cloudflare_cutover_host.stdout == 'ansible-' ~ site.id
+
+    - name: Check fixed-purpose root watcher is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-cloudflare-switch.path]
+      register: cloudflare_watcher
+      changed_when: false
+
+    - name: Require approved cutover worker
+      ansible.builtin.assert:
+        that: [cloudflare_watcher.stdout == 'active']
+        fail_msg: "Cloudflare cutover worker not commissioned on this site. No infrastructure changes made."
+
+  tasks:
+    - name: Explain exactly what this operation does
+      ansible.builtin.debug:
+        msg:
+          action: SWITCH_EXISTING_CONNECTOR
+          site: "{{ site.id }}"
+          destination_tunnel: "{{ site.id }}"
+          destination_host: "dh-{{ site.id }}-pve.digitalhouses.vip"
+          effect: "Replace PVE cloudflared tunnel authorization using existing service; old routes may become unavailable"
+          api_dns_ingress_writes: NONE
+          delete_legacy_tunnel: false
+          old_service_restarts: true
+          post_auth_browser_check: MANUAL
+
+    - name: Generate a single-use request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: cloudflare_cutover_nonce
+      changed_when: false
+
+    - name: Send fixed-purpose request to root worker
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-cloudflare-switch.request
+        content: "SWITCH:{{ cloudflare_cutover_nonce.stdout }}\n"
+        mode: '0600'
+
+    - name: Await this exact cutover result
+      ansible.builtin.command:
+        argv: [cat, /run/dh-cloudflare-switch.status]
+      register: cloudflare_cutover_status
+      changed_when: false
+      failed_when: false
+      retries: 65
+      delay: 3
+      until: >-
+        cloudflare_cutover_status.stdout in [
+          cloudflare_cutover_nonce.stdout ~ '|PASS',
+          cloudflare_cutover_nonce.stdout ~ '|FAILED'
+        ]
+
+    - name: Require success from isolated host cutover
+      ansible.builtin.assert:
+        that:
+          - cloudflare_cutover_status.stdout == cloudflare_cutover_nonce.stdout ~ '|PASS'
+        fail_msg: "Cloudflare cutover failed. Check root-only commissioning/worker logs; legacy rollback may have been attempted."
+
+    - name: Report verified remote API health
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          cloudflare_tunnel: "{{ site.id }}"
+          cloudflared_service: RESTARTED_OR_ALREADY_APPLIED
+          remote_tunnel_health_api: PASS
+          old_tunnel_deleted: false
+          new_pve_hostname: "dh-{{ site.id }}-pve.digitalhouses.vip"
+          browser_post_auth_check: REQUIRED

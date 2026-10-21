@@ -12,6 +12,11 @@
       "view": "01 · Подготовка"
     },
     {
+      "title": "11-Cloudflare · Переключить туннель",
+      "playbook": "playbooks/request-cloudflare-cutover.yml",
+      "view": "01 · Подготовка"
+    },
+    {
       "title": "20-Проверка запуска Ansible",
       "playbook": "playbooks/smoke-semaphore.yml",
       "view": "04 · Приёмка"
