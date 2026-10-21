@@ -307,6 +307,14 @@ def apply():
                    + str(CONNECTOR_TOKEN) + "\n")
         require(DROPIN.read_text() == desired, "EXISTING_DROPIN_UNEXPECTED")
         require(bool(secure_read(CONNECTOR_TOKEN)), "CONNECTOR_TOKEN_MISSING")
+        if subprocess.run(["systemctl", "is-active", "--quiet", "cloudflared.service"],
+                          timeout=10, check=False).returncode != 0:
+            systemctl("start", "cloudflared.service")
+            require(wait_healthy(token, cfg), "CANONICAL_TUNNEL_RECOVERY_FAILED")
+            print("CF_CUTOVER=PASS")
+            print("TUNNEL_HEALTH=PASS")
+            print("CLOUDFLARE_APPLY=RECOVERED_SERVICE")
+            return
         require(wait_healthy(token, cfg), "CANONICAL_TUNNEL_NOT_HEALTHY")
         print("CF_CUTOVER=ALREADY_APPLIED")
         print("TUNNEL_HEALTH=PASS")
