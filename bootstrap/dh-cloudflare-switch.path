@@ -1,0 +1,9 @@
+[Unit]
+Description=DigitalHouses Cloudflare fixed-purpose cutover request watcher
+[Path]
+PathExists=/var/lib/semaphore/dh-cloudflare-switch.request
+Unit=dh-cloudflare-switch.service
+TriggerLimitIntervalSec=10min
+TriggerLimitBurst=3
+[Install]
+WantedBy=multi-user.target
