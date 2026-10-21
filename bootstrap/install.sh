@@ -183,4 +183,8 @@ python3 "$WORK/code-install.py" \
   --expected-fleet-commit "$FLEET_RELEASE" \
   --use-github-session --apply "${RESUME_ARGS[@]}"
 
+echo "=== SEMAPHORE · ДОСТУП ==="
+echo "URL: https://${NETWORK[1]%/*}:3000/"
+echo "Логин: admin"
+echo "Показать пароль на PVE: pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password"
 echo "=== DONE ==="
