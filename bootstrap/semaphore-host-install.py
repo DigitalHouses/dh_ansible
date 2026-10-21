@@ -1179,6 +1179,65 @@ def pve_staged_enrollment_verified(site: str, runner_ip: str, pve_ip: str,
     return True
 
 
+def cleanup_pve_vault_guest_scratch():
+    """Remove only the fixed tmpfs Vault inputs; verify absence after pct SIGHUP.
+
+    A transient pct exec rc=129 may mean the rm/rmdir completed before the
+    transport disconnected. Never assume either success or failure on rc=129.
+    """
+    scratch = "/dev/shm/dh-pve-identity"
+    credentials = (scratch + "/master", scratch + "/base.vault.yml")
+
+    def absent(path):
+        for kind in ("-e", "-L"):
+            status = code("pct", "exec", str(CTID), "--", "test", kind, path)
+            if status == 0:
+                return False
+            if status != 1:
+                return None
+        return True
+
+    for attempt in range(1, 4):
+        interrupted = False
+        try:
+            pct_guest("rm", "-f", *credentials)
+        except Blocked as error:
+            if str(error) != "Command failed: pct, rc=129":
+                raise
+            interrupted = True
+            print(f"PVE_VAULT_CLEANUP_INTERRUPTED=rm attempt:{attempt}/3",
+                  flush=True)
+        checks = tuple(absent(path) for path in credentials)
+        if all(value is True for value in checks):
+            print("PVE_VAULT_TEMP_FILES=REMOVED", flush=True)
+            break
+        if not interrupted and any(value is None for value in checks):
+            raise Blocked("Cannot verify PVE vault temp credential cleanup")
+        if attempt == 3:
+            raise Blocked("PVE vault temporary credentials not confirmed removed")
+        time.sleep(1)
+
+    for attempt in range(1, 4):
+        state = absent(scratch)
+        if state is True:
+            print("PVE_VAULT_TEMP_DIR=REMOVED", flush=True)
+            return
+        if state is False:
+            try:
+                pct_guest("rmdir", scratch)
+            except Blocked as error:
+                if str(error) != "Command failed: pct, rc=129":
+                    raise
+                print(f"PVE_VAULT_CLEANUP_INTERRUPTED=rmdir attempt:{attempt}/3",
+                      flush=True)
+        if absent(scratch) is True:
+            print("PVE_VAULT_TEMP_DIR=REMOVED", flush=True)
+            return
+        if attempt < 3:
+            time.sleep(1)
+    raise Blocked("PVE vault temporary directory removal not verified")
+
+
 def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                                  checkout: Path, expected_fleet_commit: str,
                                  owner_master: str, env: dict,
@@ -1217,9 +1276,9 @@ def provision_pve_identity_stage(site: str, runner_cidr: str, pve_ip: str,
                 "--vault-file", guest_temp + "/base.vault.yml", timeout=90)
         finally:
             # Secrets remain temporary regardless of operation success.
-            pct_guest("rm", "-f", guest_temp + "/master",
-                      guest_temp + "/base.vault.yml")
-            pct_guest("rmdir", guest_temp)
+            # A completed rm may still return pct rc=129 (SIGHUP), so verify
+            # absence after each bounded retry without recording secret data.
+            cleanup_pve_vault_guest_scratch()
         if "PVE_FLEET_RECOVERY=PASS" in response:
             # Existing PVE tokens remain unchanged. Only the authorized
             # restored SSH key may be reattached to the original host.
