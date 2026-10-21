@@ -636,6 +636,115 @@ def test_safe_progress_of_guest_setup_is_allowlisted():
 
 
 
+
+def test_inventory_file_existence_fails_closed_on_pct_129_and_symlink(monkeypatch):
+    m = load()
+    monkeypatch.setattr(m, "code", lambda *args, **kwargs: 129)
+    with pytest.raises(m.Blocked, match="symlink or cannot be verified"):
+        m.site_inventory_exists("/root/dh-site-upload-000")
+    monkeypatch.setattr(m, "code", lambda *args, **kwargs: 0)
+    with pytest.raises(m.Blocked, match="symlink"):
+        m.site_inventory_exists("/root/dh-site-upload-000")
+    def ordinary(*args, **kwargs):
+        return 1 if args[-2] == "-L" else 129
+    monkeypatch.setattr(m, "code", ordinary)
+    with pytest.raises(m.Blocked, match="Cannot reliably determine"):
+        m.site_inventory_exists("/root/dh-site-upload-000")
+
+
+@pytest.mark.parametrize("stage_exists", [False, True])
+def test_site_inventory_resume_recovers_verified_upload_after_sighup(
+        monkeypatch, tmp_path, stage_exists):
+    import hashlib
+    m = load()
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    source = tmp_path / "fleet-detail/inventories/demo-home/hosts.yml"
+    source.parent.mkdir(parents=True)
+    source.write_text("all:\\n  hosts:\\n    runner:\\n", encoding="utf-8")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    target = "/var/lib/ansible/site-data/demo-home/hosts.yml"
+    staged = "/root/dh-site-upload-000"
+    files = {}
+    if stage_exists:
+        files[staged] = ("root:root:600:regular file", digest)
+    installs = []
+    pushes = []
+
+    def fake_code(*args, **kwargs):
+        assert args[:5] == ("pct", "exec", "1231", "--", "test")
+        if args[-2] == "-L":
+            return 1
+        if args[-2] == "-e":
+            return 0 if args[-1] in files else 1
+        raise AssertionError(args)
+
+    def fake_guest(*args, **kwargs):
+        if args[0] == "install" and "-d" in args:
+            return ""
+        if args[0] == "install" and "-o" in args:
+            installs.append(args)
+            if len(installs) == 1:
+                raise m.Blocked("Command failed: pct, rc=129")
+            files[target] = ("root:semaphore:640:regular file", digest)
+            return ""
+        if args[0] == "stat":
+            return files[args[-1]][0]
+        if args[0] == "sha256sum":
+            return files[args[-1]][1] + "  " + args[-1]
+        if args[0] == "rm":
+            files.pop(args[-1], None)
+            return ""
+        raise AssertionError(args)
+
+    def fake_run(*args, **kwargs):
+        assert args[:3] == ("pct", "push", "1231")
+        pushes.append(args)
+        files[args[-1]] = ("root:root:600:regular file", digest)
+        return ""
+
+    monkeypatch.setattr(m, "code", fake_code)
+    monkeypatch.setattr(m, "pct_guest", fake_guest)
+    monkeypatch.setattr(m, "run", fake_run)
+    monkeypatch.setattr(m.time, "sleep", lambda seconds: None)
+    m.install_site_inventory("demo-home", ["inventories/demo-home/hosts.yml"], code_dir)
+    assert len(installs) == 2
+    assert len(pushes) == (0 if stage_exists else 1)
+    assert files[target] == ("root:semaphore:640:regular file", digest)
+    assert staged not in files
+
+
+def test_inventory_resume_refuses_staging_hash_drift(monkeypatch, tmp_path):
+    m = load()
+    code_dir = tmp_path / "code"
+    code_dir.mkdir()
+    source = tmp_path / "fleet-detail/inventories/demo-home/hosts.yml"
+    source.parent.mkdir(parents=True)
+    source.write_text("all: {}\n", encoding="utf-8")
+    monkeypatch.setattr(m, "code", lambda *args, **kwargs:
+                        1 if args[-2] == "-L" else
+                        0 if args[-1] == "/root/dh-site-upload-000" else 1)
+    def guest(*args, **kwargs):
+        if args[0] == "install" and "-d" in args:
+            return ""
+        if args[0] == "stat":
+            return "root:root:600:regular file"
+        if args[0] == "sha256sum":
+            return "0" * 64 + "  " + args[-1]
+        raise AssertionError(args)
+    monkeypatch.setattr(m, "pct_guest", guest)
+    with pytest.raises(m.Blocked, match="hash mismatch"):
+        m.install_site_inventory("demo-home", ["inventories/demo-home/hosts.yml"], code_dir)
+
+
+def test_semaphore_resume_restores_seeder_mode_and_pve_restore_can_be_requested():
+    src = SRC.read_text()
+    resume = src.split('if args.resume_semaphore:', 3)[-1]
+    assert 'pct_guest("chmod", "0644", seeder_path)' in resume
+    assert 'pct_guest("stat", "-c", "%u:%a", seeder_path)' in resume
+    assert 'or (args.resume_semaphore and args.restore_pve_access)' in src
+    assert 're.fullmatch(r"local-lvm:vm-1231-disk-[0-9]+,size=16G"' in src
+
 def test_site_inventory_failure_emits_safe_command_and_step(monkeypatch, capsys):
     m = load()
     from types import SimpleNamespace
