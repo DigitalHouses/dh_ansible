@@ -38,6 +38,7 @@ jobs:
           bash -n bootstrap/remote-commander-install-request.sh
           bash -n bootstrap/semaphore-catalog-sync-request.sh
           bash -n bootstrap/semaphore-launch.sh
+          bash -n bootstrap/netalertx-deploy-request.sh bootstrap/commission-netalertx-worker.sh
       - name: One-shot real Semaphore 2.19.16 API acceptance
         if: contains(github.event.head_commit.message, '[live-semaphore]')
         shell: bash
