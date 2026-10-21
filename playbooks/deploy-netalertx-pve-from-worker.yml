@@ -49,6 +49,7 @@
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+      changed_when: false
   roles:
     - role: netalertx_deployment_plan
     - role: netalertx_pve_lxc
@@ -78,6 +79,7 @@
         netalertx_native_timezone: "{{ netalertx.application.timezone }}"
         netalertx_native_web_port: "{{ netalertx.application.web_port }}"
         netalertx_native_api_port: "{{ netalertx.application.api_port }}"
+      changed_when: false
 
 - name: Install native NetAlertX on the independently verified new guest
   hosts: netalertx_new_guest
