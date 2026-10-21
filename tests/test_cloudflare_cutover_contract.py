@@ -123,7 +123,7 @@ def test_host_pve_cutover_rollback_restores_legacy_service(monkeypatch, tmp_path
         if args[:2] == ("show", "-P") and args[2] == "User":
             return "root"
         if args[:2] == ("show", "-P") and args[2] == "ExecStart":
-            return "run --token hidden"
+            return "cloudflared tunnel run --token hidden"
         return ""
 
     monkeypatch.setattr(module, "secure_read", lambda path: path.read_text().strip())
