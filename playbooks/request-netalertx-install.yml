@@ -1,0 +1,40 @@
+---
+# One Semaphore entry point for the native NetAlertX lifecycle.
+# First commissioning gate is deliberately READ-ONLY: the privileged worker
+# and verified IP/DHCP/API isolation have not yet been authorized.
+- name: NetAlertX native deployment - audited plan
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load canonical private site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load canonical private NetAlertX desired state
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/netalertx.yml"
+
+    - name: Verify single local Semaphore runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site is mapping
+          - site.id == site.owner_slug ~ '-' ~ site.type
+
+    - name: Read local runner identity
+      ansible.builtin.command:
+        argv: [hostname]
+      register: netalertx_runner_hostname
+      changed_when: false
+
+    - name: Reject a foreign runner
+      ansible.builtin.assert:
+        that:
+          - netalertx_runner_hostname.stdout == 'ansible-' ~ site.id
+
+  roles:
+    - role: netalertx_deployment_plan
