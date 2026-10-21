@@ -9,6 +9,9 @@ No root secrets are removed from PVE host.
 from __future__ import annotations
 
 import argparse
+from datetime import datetime, timezone
+import shlex
+import stat
 import base64
 import getpass
 import hashlib
@@ -94,12 +97,115 @@ def safe_guest_failure_lines(argv, stdout, stderr):
     allowed = re.compile(r"^(?:INSTALL=BLOCKED: Command failed: [a-zA-Z0-9_.-]+, rc=[0-9]+|INSTALL=BLOCKED: Runner hostname mismatch|SEMAPHORE_GUEST_PREFLIGHT=PASS|SEMAPHORE_GUEST_RESUME=EXISTING_ANSIBLE_ONLY|GUEST_LOCALE=PASS C\.UTF-8|OS_DEPENDENCIES=START|NETWORK_IDENTITY_MDNS=PASS fqdn=[a-z0-9.-]+ ip=[0-9.]+|ANSIBLE_RUNTIME_PERMISSIONS=PASS|ANSIBLE_RUNTIME=PASS|SEMAPHORE_PACKAGE=PASS|SEMAPHORE_TLS_SETUP=(?:START|PASS)|SEMAPHORE_DB_MIGRATION=PASS|SEMAPHORE_ADMIN_CREATE=PASS|SEMAPHORE_SYSTEMD=PASS)$")
     return [line for line in lines if len(line) < 180 and allowed.fullmatch(line)][-8:]
 
+# All subprocess calls share one root-only diagnostic file per Bootstrap run.
+# Log command structure and metadata, never credentials or unvetted output.
+_COMMAND_LOG = os.environ.get("DH_BOOTSTRAP_COMMAND_LOG", "")
+_COMMAND_SEQ = 0
+_SECRET_HINTS = ("password", "token", "vault", "master", "secret", "credential",
+                 "private", "key", "authorization", "oauth")
+_SAFE_EXEC = {"install", "stat", "sha256sum", "rm", "rmdir", "chmod",
+              "test", "hostname", "ip", "systemctl", "mkdir", "ls"}
+
+
+def safe_command_description(argv):
+    args = [str(a) for a in argv]
+    if not args:
+        return "<empty>"
+    if args[0] == "pct" and len(args) >= 5 and args[1:3] == ["exec", str(CTID)] and args[3] == "--":
+        command = args[4]
+        if Path(command).name not in _SAFE_EXEC:
+            return "pct exec 1231 -- " + shlex.quote(Path(command).name) + " [arguments hidden]"
+    elif args[0] not in {"pct", "qm", "pveam", "pvesm", "ip", "stat", "install"}:
+        return shlex.quote(Path(args[0]).name) + " [arguments hidden]"
+    shown = []
+    for value in args:
+        if len(value) > 256 or any(mark in value.lower() for mark in _SECRET_HINTS):
+            shown.append("[REDACTED]")
+        else:
+            shown.append(shlex.quote(value))
+    return " ".join(shown)
+
+
+def _trace_file():
+    if not _COMMAND_LOG:
+        return None
+    path = Path(_COMMAND_LOG)
+    expected_dir = Path("/var/log/digitalhouses/ansible")
+    if path.parent != expected_dir or not re.fullmatch(
+            r"commands-[A-Za-z0-9_.-]{8,90}\\.log", path.name):
+        raise Blocked("Untrusted command diagnostics path")
+    if path.is_symlink() or not path.is_file():
+        raise Blocked("Command diagnostics file missing or is a symlink")
+    info = path.stat()
+    directory = expected_dir.stat()
+    if (info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600
+            or directory.st_uid != 0 or stat.S_IMODE(directory.st_mode) != 0o700):
+        raise Blocked("Command diagnostics permissions are unsafe")
+    return path
+
+
+def trace_command(event, sequence, argv, *, stage, rc=None, elapsed=None,
+                  stdout=None, stderr=None, error=None):
+    path = _trace_file()
+    if path is None:
+        return
+    stamp = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+    fields = [stamp, f"STEP={sequence:05d}", event,
+              f"STAGE={stage}", "CMD=" + safe_command_description(argv)]
+    if rc is not None:
+        fields.extend((f"RC={rc}", f"SECONDS={elapsed:.3f}"))
+    if error is not None:
+        fields.append(f"ERROR={error}")
+    with path.open("a", encoding="utf-8") as log:
+        log.write(" | ".join(fields) + "\\n")
+        if event != "END" or rc in (None, 0):
+            return
+        # Only non-sensitive stderr of fixed OS utilities may be persisted.
+        # This excludes GitHub, API responses, Python, Vault and credential paths.
+        args = [str(v) for v in argv]
+        safe = (len(args) >= 5 and args[:4] ==
+                ["pct", "exec", str(CTID), "--"] and
+                Path(args[4]).name in _SAFE_EXEC and
+                not any(mark in v.lower() for v in args
+                        for mark in _SECRET_HINTS))
+        if safe:
+            for channel, value in (("STDOUT", stdout), ("STDERR", stderr)):
+                if not value:
+                    continue
+                # Control characters and multiline terminal escape sequences
+                # must not alter the diagnostics file rendering.
+                short = str(value)[:2048]
+                printable = "".join(ch if ch.isprintable() else " " for ch in short)
+                if any(mark in printable.lower() for mark in _SECRET_HINTS):
+                    log.write(f"{channel}=[REDACTED]\\n")
+                else:
+                    log.write(f"{channel}={printable}\\n")
+        else:
+            log.write("OUTPUT=[REDACTED_OR_NOT_APPLICABLE]\\n")
+
+
+def _next_command_seq():
+    global _COMMAND_SEQ
+    _COMMAND_SEQ += 1
+    return _COMMAND_SEQ
+
+
 def run(*argv, timeout=120, env=None, reveal=False):
+    sequence = _next_command_seq()
+    stage = sys._getframe(1).f_code.co_name
+    started = time.monotonic()
+    trace_command("START", sequence, argv, stage=stage)
     try:
         p = subprocess.run(argv, timeout=timeout, check=False,
                            text=True, capture_output=not reveal, env=env)
-    except (OSError, subprocess.TimeoutExpired):
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        trace_command("END", sequence, argv, stage=stage, rc=-1,
+                      elapsed=time.monotonic() - started,
+                      error=type(exc).__name__)
         raise Blocked(f"Command unavailable or timed out: {argv[0]}") from None
+    trace_command("END", sequence, argv, stage=stage, rc=p.returncode,
+                  elapsed=time.monotonic() - started,
+                  stdout=p.stdout, stderr=p.stderr)
     if p.returncode:
         # Never echo arbitrary subprocess arguments: some callers handle secrets.
         if (len(argv) >= 5 and argv[:3] == ("pct", "exec", str(CTID))
@@ -107,6 +213,8 @@ def run(*argv, timeout=120, env=None, reveal=False):
                 Path(argv[4]).name in {"install", "stat", "sha256sum", "rm", "test"}):
             print("PCT_EXEC_FAILURE=command:" + Path(argv[4]).name +
                   f" rc:{p.returncode}", flush=True)
+        print(f"COMMAND_FAILURE_STEP={sequence:05d} (see root-only command log)",
+              flush=True)
         for diagnostic in safe_guest_failure_lines(argv, p.stdout, p.stderr):
             print("GUEST_DIAGNOSTIC: " + diagnostic, flush=True)
         raise Blocked(f"Command failed: {Path(argv[0]).name}, rc={p.returncode}")
@@ -114,10 +222,20 @@ def run(*argv, timeout=120, env=None, reveal=False):
 
 
 def code(*argv, timeout=20):
+    sequence = _next_command_seq()
+    stage = sys._getframe(1).f_code.co_name
+    started = time.monotonic()
+    trace_command("START", sequence, argv, stage=stage)
     try:
-        return subprocess.run(argv, capture_output=True, timeout=timeout).returncode
-    except (OSError, subprocess.TimeoutExpired):
+        p = subprocess.run(argv, capture_output=True, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        trace_command("END", sequence, argv, stage=stage, rc=-1,
+                      elapsed=time.monotonic() - started,
+                      error=type(exc).__name__)
         raise Blocked(f"Cannot determine state: {argv[0]}") from None
+    trace_command("END", sequence, argv, stage=stage, rc=p.returncode,
+                  elapsed=time.monotonic() - started)
+    return p.returncode
 
 
 def template_sort_key(name):
