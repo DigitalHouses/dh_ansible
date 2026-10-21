@@ -129,7 +129,7 @@ appears after the first successful task 00 synchronization.
 
 ## Pending task-10 lifecycle consolidation (2026-10-21)
 
-**Accepted target name:** `10-Создание туннеля на PVE`. The prior
+**Accepted target name:** `10-Создание туннеля CF до PVE`. The prior
 `10-Cloudflare · Туннель объекта (план)` must be renamed **in place**,
 preserving Semaphore template ID and task history. An explicit catalog alias
 migration handles only that exact known managed template; it blocks collisions
