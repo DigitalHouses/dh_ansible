@@ -67,11 +67,8 @@ def test_graphql_isolation_is_loaded_before_native_app_and_requires_service():
 
 
 def test_pve_description_matches_only_canonical_record_with_optional_encoded_lf():
-    import re
     text = (ROOT / "roles/netalertx_pve_lxc/tasks/main.yml").read_text()
-    assert text.count("(%0A)?$") == 2
-    pattern = r"^description: DigitalHouses native NetAlertX site=serzhan-home(%0A)?$"
-    assert re.fullmatch(pattern, "description: DigitalHouses native NetAlertX site=serzhan-home")
-    assert re.fullmatch(pattern, "description: DigitalHouses native NetAlertX site=serzhan-home%0A")
-    assert not re.fullmatch(pattern, "description: Foreign NetAlertX site=serzhan-home%0A")
-    assert not re.fullmatch(pattern, "description: DigitalHouses native NetAlertX site=serzhan-home%0Aother")
+    assert text.count("~ '%0A'") == 2
+    assert text.count("('description: DigitalHouses native NetAlertX site=' ~ site.id)") == 2
+    assert text.count(" in netalertx_pve_existing.stdout_lines") >= 2
+    assert text.count(" in netalertx_pve_final.stdout_lines") >= 2
