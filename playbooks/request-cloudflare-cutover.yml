@@ -1,7 +1,7 @@
 ---
 # Operator-initiated one-shot cutover. No PVE credentials or CF API token
 # are exposed to Semaphore; the root watcher takes only a fixed nonce.
-- name: Request approved canonical Cloudflare connector cutover
+- name: Reconcile canonical Cloudflare connector on this PVE
   hosts: site_runner
   gather_facts: false
   become: false
@@ -44,14 +44,14 @@
     - name: Explain exactly what this operation does
       ansible.builtin.debug:
         msg:
-          action: SWITCH_EXISTING_CONNECTOR
+          action: RECONCILE_CLOUDFLARED_ON_PVE
           site: "{{ site.id }}"
           destination_tunnel: "{{ site.id }}"
           destination_host: "dh-{{ site.id }}-pve.digitalhouses.vip"
-          effect: "Replace PVE cloudflared tunnel authorization using existing service; old routes may become unavailable"
+          effect: "Install cloudflared when absent; otherwise reconcile the existing systemd service and verify tunnel health"
           api_dns_ingress_writes: NONE
           delete_legacy_tunnel: false
-          old_service_restarts: true
+          service_restart: ONLY_WHEN_CHANGED
           post_auth_browser_check: MANUAL
 
     - name: Generate a single-use request ID
@@ -91,7 +91,7 @@
         msg:
           result: PASS
           cloudflare_tunnel: "{{ site.id }}"
-          cloudflared_service: RESTARTED_OR_ALREADY_APPLIED
+          cloudflared_service: HEALTHY
           remote_tunnel_health_api: PASS
           old_tunnel_deleted: false
           new_pve_hostname: "dh-{{ site.id }}-pve.digitalhouses.vip"
