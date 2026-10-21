@@ -542,7 +542,7 @@ def archive_and_retire_cloudflare_11(api, base, legacy):
     if len(payload) > 10_000_000:
         raise Blocked("Task history archive exceeds expected size")
     HISTORY_ARCHIVE.mkdir(parents=True, exist_ok=True, mode=0o700)
-    if HISTORY_ARCHIVE.is_symlink() or HISTORY_ARCHIVE.stat().st_uid != 0:
+    if HISTORY_ARCHIVE.is_symlink() or HISTORY_ARCHIVE.stat().st_uid != os.geteuid():
         raise Blocked("History archive ownership conflict")
     HISTORY_ARCHIVE.chmod(0o700)
     target = HISTORY_ARCHIVE / ("project-" + str(legacy["project_id"])
