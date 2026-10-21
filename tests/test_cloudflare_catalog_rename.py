@@ -93,3 +93,71 @@ def test_rename_rejects_unrecognized_previous_playbook():
     with pytest.raises(m.Blocked, match="legacy template binding"):
         m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
     assert len([x for x in api.calls if x[0] in ("PUT", "POST")]) == writes
+
+
+def test_retirement_archives_finished_task_logs_before_deleting(monkeypatch, tmp_path):
+    m, api = module(), fake_api()
+    monkeypatch.setattr(m, "HISTORY_ARCHIVE", tmp_path / "root-history")
+    project_path, old = provision_legacy(m, api)
+    legacy = {**old, "name": m.OBSOLETE_CLOUDFLARE[0],
+              "playbook": m.OBSOLETE_CLOUDFLARE[1], "id": 700}
+    api.records[project_path].append(legacy)
+    base = project_path.rsplit("/", 1)[0]
+
+    native = api.request
+
+    def patched(method, path, body=None):
+        if path == base + "/tasks?count=200":
+            return [{"id": 5, "template_id": 700},
+                    {"id": 6, "template_id": 700}]
+        if path in (base + "/tasks/5", base + "/tasks/6"):
+            ident = int(path.rsplit("/", 1)[1])
+            return {"id": ident, "template_id": 700, "status": "success"}
+        if path in (base + "/tasks/5/output", base + "/tasks/6/output"):
+            return [{"output": "PASS"}]
+        if method == "DELETE" and path == base + "/templates/700":
+            api.records[project_path] = [
+                x for x in api.records[project_path] if x["id"] != 700]
+            api.calls.append((method, path, body))
+            return None
+        return native(method, path, body)
+
+    monkeypatch.setattr(api, "request", patched)
+    m.read_public_catalog = lambda: renamed_catalog(m)
+    m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    assert old["name"] == "10-Создание туннеля на PVE"
+    assert [x for x in api.records[project_path] if x["name"].startswith("11-")] == []
+    archive = m.HISTORY_ARCHIVE / "project-10-cloudflare-11.json"
+    assert archive.stat().st_mode & 0o777 == 0o600
+    payload = json.loads(archive.read_text())
+    assert [x["task"]["id"] for x in payload["tasks"]] == [5, 6]
+    assert len([x for x in api.calls if x[0] == "DELETE"]) == 1
+
+
+def test_retirement_refuses_incomplete_output_and_does_not_delete(monkeypatch, tmp_path):
+    m, api = module(), fake_api()
+    monkeypatch.setattr(m, "HISTORY_ARCHIVE", tmp_path / "root-history")
+    project_path, old = provision_legacy(m, api)
+    legacy = {**old, "name": m.OBSOLETE_CLOUDFLARE[0],
+              "playbook": m.OBSOLETE_CLOUDFLARE[1], "id": 700}
+    api.records[project_path].append(legacy)
+    base = project_path.rsplit("/", 1)[0]
+    native = api.request
+
+    def patched(method, path, body=None):
+        if path == base + "/tasks?count=200":
+            return [{"id": 5, "template_id": 700}]
+        if path == base + "/tasks/5":
+            return {"id": 5, "template_id": 700, "status": "running"}
+        if path == base + "/tasks/5/output":
+            return [{"output": "NOT FINISHED"}]
+        if method == "DELETE":
+            raise AssertionError("Do not delete an active template")
+        return native(method, path, body)
+
+    monkeypatch.setattr(api, "request", patched)
+    with pytest.raises(m.Blocked, match="incomplete or active"):
+        m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
+    assert legacy in api.records[project_path]
+    assert not list((tmp_path / "root-history").glob("*")) if (
+        tmp_path / "root-history").exists() else True
