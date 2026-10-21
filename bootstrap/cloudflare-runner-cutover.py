@@ -96,7 +96,7 @@ def main():
             "sudo", "-n", "/usr/local/sbin/dh-cloudflare-pve-cutover", "--apply",
         ]
         result = subprocess.run(command, capture_output=True, text=True,
-                                timeout=180, check=False)
+                                timeout=1000, check=False)
         require(result.returncode == 0
                 and ("CF_CUTOVER=PASS" in result.stdout
                      or "CF_CUTOVER=ALREADY_APPLIED" in result.stdout)
