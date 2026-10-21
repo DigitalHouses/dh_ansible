@@ -126,3 +126,24 @@ appears after the first successful task 00 synchronization.
 - This implementation is not yet production accepted: public CI and fresh
   destructive E2E must pass, and the immutable installer pin must be advanced.
 - Do not assume a restored older CT includes the sync worker or initial 00 task.
+
+## Pending task-10 lifecycle consolidation (2026-10-21)
+
+**Accepted target name:** `10-Создание туннеля на PVE`. The prior
+`10-Cloudflare · Туннель объекта (план)` must be renamed **in place**,
+preserving Semaphore template ID and task history. An explicit catalog alias
+migration handles only that exact known managed template; it blocks collisions
+and unexpected playbook drift.
+
+The final task executes one declarative **audit → plan → apply → verify**
+operation on the PVE host: install cloudflared if absent, reconfigure the
+existing service if present, no action when in the desired state, and
+rollback on a failed connector cutover. Only one connector service and one
+canonical site tunnel; no extra UI tasks for separate lifecycle phases.
+
+**Activation gate:** Do not publish the new display name to the live catalog
+until task 10 implements this behavior and the pinned on-runner catalog
+synchronizer is updated. The current fixed root synchronizer does not
+automatically update its own code from GitHub. The old task 11 must be
+retired through a separate controlled history-preserving migration;
+removing its manifest entry alone is not sufficient.

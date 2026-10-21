@@ -50,6 +50,14 @@ CATALOG_SOURCE = "DigitalHouses/dh_ansible"
 CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
 CATALOG_TOKEN_FORMAT = re.compile(r"[A-Za-z0-9_-]{20,254}={0,2}")
 MANAGED_DESCRIPTION = "DigitalHouses · управляется каталогом dh_ansible"
+# Explicit one-time display-name migration for the canonical Cloudflare lifecycle.
+# New title is published only with a playbook that provisions/reconciles a tunnel.
+CATALOG_RENAMES = {
+    "10-Создание туннеля на PVE": (
+        "10-Cloudflare · Туннель объекта (план)",
+        "playbooks/plan-cloudflare-tunnel.yml",
+    ),
+}
 
 API_BASE = "https://127.0.0.1:3000/api"
 
@@ -406,9 +414,11 @@ def sync_existing_template(api, path, desired, *, apply=False):
     if not isinstance(items, list):
         raise Blocked("Cannot read catalog templates")
     title = desired["name"]
-    matches = [item for item in items if item.get("name") == title]
+    legacy = CATALOG_RENAMES.get(title)
+    accepted_names = {title, legacy[0]} if legacy else {title}
+    matches = [item for item in items if item.get("name") in accepted_names]
     if len(matches) > 1:
-        raise Blocked("Duplicate catalog template name: " + title)
+        raise Blocked("Conflicting old/new catalog template names: " + title)
     if not matches:
         if any(item.get("playbook") == desired["playbook"] for item in items):
             raise Blocked("Catalog playbook already bound to another task")
@@ -420,6 +430,11 @@ def sync_existing_template(api, path, desired, *, apply=False):
         print("CATALOG_CREATED=" + title, flush=True)
         return
     current = matches[0]
+    if current.get("name") != title:
+        # Never adopt an arbitrary template simply because its name resembles
+        # the approved alias. Identity, ownership and original binding matter.
+        if not legacy or (current.get("name"), current.get("playbook")) != legacy:
+            raise Blocked("Unexpected Cloudflare legacy template binding: " + title)
     immutable = ("project_id", "app", "repository_id", "inventory_id",
                  "environment_id", "arguments", "type",
                  "autorun", "allow_override_args_in_task")
@@ -429,7 +444,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
     # a deliberately reviewed migration. On fresh installs it is managed.
     if current.get("description") != MANAGED_DESCRIPTION:
         raise Blocked("Template is not catalog-owned: " + title)
-    allowed_change = ("playbook", "view_id")
+    allowed_change = ("name", "playbook", "view_id")
     changed = [k for k in allowed_change if current.get(k) != desired.get(k)]
     if not changed:
         if apply:
