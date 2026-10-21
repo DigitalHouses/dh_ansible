@@ -181,81 +181,190 @@ def systemctl(*args):
     return proc.stdout.strip()
 
 
+def install_missing_cloudflared():
+    """Install only when absent using Cloudflare's signed Debian APT repository."""
+    executable = shutil.which("cloudflared")
+    if executable:
+        print("CLOUDFLARED_PACKAGE=PRESENT")
+        return executable
+    require(Path("/usr/bin/apt-get").exists() and Path("/usr/bin/dpkg").exists(),
+            "CLOUDFLARED_INSTALL_UNSUPPORTED_PLATFORM")
+    source = Path("/etc/apt/sources.list.d/dh-cloudflared.list")
+    key = Path("/usr/share/keyrings/dh-cloudflared.gpg")
+    desired = ("deb [signed-by=/usr/share/keyrings/dh-cloudflared.gpg] "
+               "https://pkg.cloudflare.com/cloudflared any main\n")
+    if source.exists() or source.is_symlink():
+        require(source.is_file() and not source.is_symlink()
+                and source.read_text() == desired, "CLOUDFLARED_APT_SOURCE_CONFLICT")
+    if key.exists() or key.is_symlink():
+        require(key.is_file() and not key.is_symlink() and key.stat().st_uid == 0
+                and (key.stat().st_mode & 0o022) == 0, "CLOUDFLARED_APT_KEY_CONFLICT")
+    if not key.exists():
+        req = urllib.request.Request(
+            "https://pkg.cloudflare.com/cloudflare-main.gpg",
+            headers={"User-Agent": "DigitalHouses-CloudflareInstaller/1"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as response:
+                require(response.status == 200, "CLOUDFLARED_APT_KEY_HTTP")
+                data = response.read(131073)
+        except (OSError, urllib.error.URLError):
+            raise Block("CLOUDFLARED_APT_KEY_DOWNLOAD_FAILED") from None
+        require(100 < len(data) <= 131072, "CLOUDFLARED_APT_KEY_INVALID")
+        # cloudflare-main.gpg is distributed as binary OpenPGP; gpg validates
+        # the packet structure before the key is trusted by signed-by APT.
+        proc = subprocess.run(["/usr/bin/gpg", "--show-keys", "--batch"],
+                              input=data, capture_output=True, timeout=20)
+        require(proc.returncode == 0, "CLOUDFLARED_APT_KEY_NOT_OPENPGP")
+        atomic_new(key, data, mode=0o644)
+    if not source.exists():
+        atomic_new(source, desired, mode=0o644)
+    for command in (
+        ["/usr/bin/apt-get", "update", "-o", "APT::Update::Error-Mode=any"],
+        ["/usr/bin/apt-get", "install", "-y", "--no-install-recommends", "cloudflared"],
+    ):
+        proc = subprocess.run(command, capture_output=True, text=True,
+                              timeout=240, check=False,
+                              env={**os.environ, "DEBIAN_FRONTEND": "noninteractive"})
+        require(proc.returncode == 0, "CLOUDFLARED_APT_FAILED")
+    executable = shutil.which("cloudflared")
+    require(executable is not None, "CLOUDFLARED_BINARY_STILL_MISSING")
+    print("CLOUDFLARED_PACKAGE=INSTALLED")
+    return executable
+
+
+def pve_matches_config(cfg):
+    addresses = subprocess.run(["ip", "-4", "-o", "addr", "show"],
+                               capture_output=True, text=True, timeout=10)
+    return addresses.returncode == 0 and any(
+        part.split("/")[0] == cfg["pve_host"]
+        for line in addresses.stdout.splitlines()
+        for part in line.split() if "/" in part
+    )
+
+
+def wait_healthy(token, cfg):
+    for _ in range(24):
+        state = verify_cloudflare(token, cfg, require_old_healthy=False)
+        if state == "healthy" and systemctl("is-active", "cloudflared.service") == "active":
+            return True
+        time.sleep(3)
+    return False
+
+
 def apply():
+    # Credential bootstrap is an explicit one-time owner action; it is never
+    # inferred from the unprivileged Semaphore environment.
     cfg = json.loads(secure_read(CONFIG))
     require(SITE.fullmatch(cfg.get("site_id", "")), "CONFIG_SITE_INVALID")
     require(cfg["hostname"] == "dh-" + cfg["site_id"] + "-pve." + cfg["zone"],
             "CONFIG_HOST_DRIFT")
+    require(pve_matches_config(cfg), "WRONG_PVE_LOCAL_IP")
     token = secure_read(API_TOKEN)
-    addresses = subprocess.run(["ip", "-4", "-o", "addr", "show"],
-                               capture_output=True, text=True, timeout=10)
-    require(addresses.returncode == 0 and
-            any(part.split("/")[0] == cfg["pve_host"]
-                for line in addresses.stdout.splitlines()
-                for part in line.split() if "/" in part), "WRONG_PVE_LOCAL_IP")
-    require(systemctl("is-active", "cloudflared.service") == "active",
-            "EXISTING_CONNECTOR_INACTIVE")
-    old_dropin = DROPIN.read_text() if DROPIN.is_file() and not DROPIN.is_symlink() else None
     require(not DROPIN.is_symlink(), "DROPIN_SYMLINK")
-    executable = shutil.which("cloudflared")
-    require(executable is not None and executable.startswith("/"), "CLOUDFLARED_MISSING")
-    target_unit = ("[Service]\nExecStart=\nExecStart=" + executable
+    require(not CONNECTOR_TOKEN.is_symlink(), "CONNECTOR_TOKEN_SYMLINK")
+    require(not Path("/etc/systemd/system/cloudflared.service").is_symlink(),
+            "CLOUDFLARED_UNIT_SYMLINK")
+    existing_unit = Path("/etc/systemd/system/cloudflared.service")
+    unit_exists = existing_unit.exists()
+    preexisting = subprocess.run(["systemctl", "cat", "cloudflared.service"],
+                                 capture_output=True, text=True, timeout=15)
+    service_exists = preexisting.returncode == 0
+
+    print("CLOUDFLARE_AUDIT=PASS")
+    verify_cloudflare(token, cfg, require_old_healthy=bool(
+        cfg.get("old_tunnel_id")) and not DROPIN.exists() and service_exists)
+    print("CLOUDFLARE_PLAN=" + ("VERIFY_ONLY" if DROPIN.exists()
+          else "RECONFIGURE_EXISTING" if service_exists else "INSTALL_NEW"))
+
+    # No package installation, unit edits, token fetch or restart when
+    # an already-applied connector is healthy and matches our contract.
+    if DROPIN.exists():
+        require(service_exists and DROPIN.is_file(), "CLOUDFLARED_UNIT_DRIFT")
+        executable = shutil.which("cloudflared")
+        require(executable is not None, "CLOUDFLARED_BINARY_MISSING")
+        desired = ("[Service]\nExecStart=\nExecStart=" + executable
                    + " --no-autoupdate tunnel run --token-file "
                    + str(CONNECTOR_TOKEN) + "\n")
-
-    if old_dropin is not None:
-        require(old_dropin == target_unit, "EXISTING_DROPIN_UNEXPECTED")
-        require(secure_read(CONNECTOR_TOKEN), "CONNECTOR_TOKEN_MISSING")
-        state = verify_cloudflare(token, cfg, require_old_healthy=False)
-        require(state == "healthy", "CANONICAL_TUNNEL_NOT_HEALTHY")
+        require(DROPIN.read_text() == desired, "EXISTING_DROPIN_UNEXPECTED")
+        require(bool(secure_read(CONNECTOR_TOKEN)), "CONNECTOR_TOKEN_MISSING")
+        require(wait_healthy(token, cfg), "CANONICAL_TUNNEL_NOT_HEALTHY")
         print("CF_CUTOVER=ALREADY_APPLIED")
         print("TUNNEL_HEALTH=PASS")
+        print("CLOUDFLARE_APPLY=UNCHANGED")
         return
 
-    # Preserve the current root-owned service unit unchanged; a dedicated
-    # override is removed during rollback. Original connector token remains
-    # in its existing service until a later separately authorized migration.
-    require(not CONNECTOR_TOKEN.exists() and not CONNECTOR_TOKEN.is_symlink(),
-            "CONNECTOR_TOKEN_ALREADY_STAGED")
-    require(not DROPIN.exists(), "DROPIN_ALREADY_STAGED")
-    current_exec = systemctl("show", "-P", "ExecStart", "cloudflared.service")
-    require("--token" in current_exec, "UNKNOWN_EXISTING_CONNECTOR_CONFIG")
-    verify_cloudflare(token, cfg, require_old_healthy=True)
+    # Fail before writes on unknown preexisting files or service identity.
+    require(not DROPIN.exists() and not CONNECTOR_TOKEN.exists(),
+            "CLOUDFLARED_STATE_CONFLICT")
+    if service_exists:
+        old_start = systemctl("show", "-P", "ExecStart", "cloudflared.service")
+        require("cloudflared" in old_start and "tunnel" in old_start
+                and "--token" in old_start, "UNKNOWN_EXISTING_CONNECTOR_CONFIG")
+        require(systemctl("show", "-P", "User", "cloudflared.service") in ("", "root"),
+                "SERVICE_NOT_RUNNING_AS_ROOT")
+    else:
+        require(not unit_exists, "CLOUDFLARED_LOCAL_UNIT_CONFLICT")
+
+    # Keep API preflight and generated credentials before any service changes.
     new_token = api(token, "GET", "/accounts/" + cfg["account_id"]
                     + "/cfd_tunnel/" + cfg["new_tunnel_id"] + "/token")
     require(isinstance(new_token, str) and 80 <= len(new_token) <= 4096,
             "CONNECTOR_TOKEN_UNAVAILABLE")
-    require(systemctl("show", "-P", "User", "cloudflared.service") in ("", "root"),
-            "SERVICE_NOT_RUNNING_AS_ROOT")
-
-    changed = False
+    executable = install_missing_cloudflared()
+    desired = ("[Service]\nExecStart=\nExecStart=" + executable
+               + " --no-autoupdate tunnel run --token-file "
+               + str(CONNECTOR_TOKEN) + "\n")
+    installed_unit = False
+    installed_dropin = False
+    token_staged = False
     try:
         atomic_new(CONNECTOR_TOKEN, new_token + "\n")
-        DROPIN.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
-        atomic_new(DROPIN, target_unit, mode=0o644)
-        changed = True
+        token_staged = True
+        if service_exists:
+            atomic_new(DROPIN, desired, mode=0o644)
+            installed_dropin = True
+        else:
+            # Fresh PVE has exactly one cloudflared service.
+            body = ("[Unit]\nDescription=Cloudflare Tunnel\n"
+                    "Wants=network-online.target\nAfter=network-online.target\n"
+                    "[Service]\nType=simple\nExecStart=" + executable
+                    + " --no-autoupdate tunnel run --token-file "
+                    + str(CONNECTOR_TOKEN)
+                    + "\nRestart=always\nRestartSec=5\n"
+                    "[Install]\nWantedBy=multi-user.target\n")
+            atomic_new(existing_unit, body, mode=0o644)
+            installed_unit = True
         systemctl("daemon-reload")
-        systemctl("restart", "cloudflared.service")
-        for attempt in range(24):
-            state = verify_cloudflare(token, cfg, require_old_healthy=False)
-            if state == "healthy" and systemctl("is-active", "cloudflared.service") == "active":
-                print("CF_CUTOVER=PASS")
-                print("TUNNEL_HEALTH=PASS")
-                print("OLD_TUNNEL_DELETED=NO")
-                print("BROWSER_POST_AUTH_VERIFICATION=PENDING")
-                return
-            time.sleep(3)
-        raise Block("CANONICAL_TUNNEL_HEALTH_TIMEOUT")
+        if installed_unit:
+            systemctl("enable", "--now", "cloudflared.service")
+        else:
+            systemctl("restart", "cloudflared.service")
+        require(wait_healthy(token, cfg), "CANONICAL_TUNNEL_HEALTH_TIMEOUT")
+        print("CF_CUTOVER=PASS")
+        print("TUNNEL_HEALTH=PASS")
+        print("OLD_TUNNEL_DELETED=NO")
+        print("BROWSER_POST_AUTH_VERIFICATION=PENDING")
+        print("CLOUDFLARE_APPLY=CHANGED")
+        return
     except Exception:
-        if changed:
+        if installed_dropin:
             DROPIN.unlink(missing_ok=True)
+        if installed_unit:
+            try:
+                systemctl("disable", "--now", "cloudflared.service")
+            except Exception:
+                print("CF_ROLLBACK_DISABLE=FAILED")
+            existing_unit.unlink(missing_ok=True)
+        if installed_dropin or installed_unit:
             try:
                 systemctl("daemon-reload")
-                systemctl("restart", "cloudflared.service")
+                if installed_dropin:
+                    systemctl("restart", "cloudflared.service")
                 print("CF_ROLLBACK=ATTEMPTED")
             except Exception:
                 print("CF_ROLLBACK=FAILED_MANUAL_RECOVERY_REQUIRED")
-        CONNECTOR_TOKEN.unlink(missing_ok=True)
+        if token_staged:
+            CONNECTOR_TOKEN.unlink(missing_ok=True)
         raise
 
 
