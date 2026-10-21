@@ -499,7 +499,10 @@ def fetch_site_inventory(checkout, fleet_sha, env, site):
 
 
 def site_inventory_exists(path):
-    """Do not confuse transient pct failures with absent files."""
+    """Do not confuse transient pct failures or dangling links with absence."""
+    link = code("pct", "exec", str(CTID), "--", "test", "-L", path)
+    if link != 1:
+        raise Blocked("Site inventory path is symlink or cannot be verified")
     result = code("pct", "exec", str(CTID), "--", "test", "-e", path)
     if result not in (0, 1):
         raise Blocked("Cannot reliably determine site inventory file state")
