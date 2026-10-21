@@ -316,7 +316,11 @@ def test_catalog_source_contract_and_recovery_template_restrictions():
     assert "Never rewrite bootstrap recovery task" in src
     assert "Existing Semaphore resource drift" in src
     assert "api.request(\"PUT\"" in src
-    assert 'api.request("DELETE"' not in src
+    # Exactly one reviewed exception: retire the historical Cloudflare 11
+    # only after writing/verifying a root-only archive of every task output.
+    assert src.count('api.request("DELETE"') == 1
+    assert 'CLOUDFLARE_11_HISTORY_ARCHIVED=' in src
+    assert 'CLOUDFLARE_11_REMOVED_FROM_UI=PASS' in src
 
 
 def test_self_sync_waits_for_final_worker_status():
