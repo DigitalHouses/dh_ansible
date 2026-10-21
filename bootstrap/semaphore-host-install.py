@@ -196,7 +196,7 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
                 or keys.get("memory") != "1024"
                 or keys.get("swap") != "512"
                 or keys.get("features") != "nesting=1"
-                or "local-lvm:vm-1231-disk-0,size=16G" != keys.get("rootfs")
+                or not re.fullmatch(r"local-lvm:vm-1231-disk-[0-9]+,size=16G", keys.get("rootfs", ""))
                 or not all(v in keys.get("net0", "") for v in
                            (f"ip={cidr}", f"gw={gateway}", "bridge=vmbr0", "name=eth0"))
                 or any(re.fullmatch(r"(?:mp|net|hostpci|usb|scsi|sata|ide|virtio)\d+", k)
@@ -498,6 +498,26 @@ def fetch_site_inventory(checkout, fleet_sha, env, site):
     return paths
 
 
+def site_inventory_exists(path):
+    """Do not confuse transient pct failures with absent files."""
+    result = code("pct", "exec", str(CTID), "--", "test", "-e", path)
+    if result not in (0, 1):
+        raise Blocked("Cannot reliably determine site inventory file state")
+    return result == 0
+
+
+def verify_site_file(path, expected_digest, *, owner, mode):
+    """Verify both provenance and permissions before adopting a staged file."""
+    if code("pct", "exec", str(CTID), "--", "test", "-L", path) != 1:
+        raise Blocked("Site inventory path is symlink or cannot be verified")
+    observed = pct_guest("stat", "-c", "%U:%G:%a:%F", path)
+    if observed != f"{owner}:{mode}:regular file":
+        raise Blocked("Unexpected inventory file owner, mode or type")
+    digest = pct_guest("sha256sum", path).split()[0]
+    if digest != expected_digest:
+        raise Blocked("Site inventory hash mismatch; manual reconciliation required")
+
+
 def install_site_inventory(site, paths, checkout):
     """Materialize site files root:semaphore only; never push Fleet Vault."""
     prefix = f"inventories/{site}/"
@@ -520,24 +540,40 @@ def install_site_inventory(site, paths, checkout):
             raise Blocked("Pinned site file missing or symlinked")
         target = site_root + "/" + relative
         expected_digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        if code("pct", "exec", str(CTID), "--", "test", "-e", target) == 0:
-            if code("pct", "exec", str(CTID), "--", "test", "-L", target) == 0:
-                raise Blocked("Existing site inventory file is a symlink")
-            observed = pct_guest("sha256sum", target).split()[0]
-            if observed != expected_digest:
-                raise Blocked("Existing site inventory differs; controlled refresh required")
+        staging = f"/root/dh-site-upload-{index:03d}"
+        if site_inventory_exists(target):
+            verify_site_file(target, expected_digest, owner="root:semaphore", mode="640")
+            # A prior SIGHUP may have completed the destination write but not
+            # removed the root-owned staging file. Delete only verified input.
+            if site_inventory_exists(staging):
+                verify_site_file(staging, expected_digest, owner="root:root", mode="600")
+                pct_guest("rm", "-f", staging)
+                print("SITE_INVENTORY_STALE_STAGE=CLEANED", flush=True)
         else:
-            staging = f"/root/dh-site-upload-{index:03d}"
-            if code("pct", "exec", str(CTID), "--", "test", "-e", staging) == 0:
-                raise Blocked("Untrusted interrupted inventory upload")
-            run("pct", "push", str(CTID), str(source), staging, timeout=30)
-            pct_guest("install", "-o", "root", "-g", "semaphore",
-                      "-m", "0640", staging, target)
+            if site_inventory_exists(staging):
+                # Recover only a byte-identical root-only artifact created by
+                # the previous pinned attempt, never adopt arbitrary files.
+                verify_site_file(staging, expected_digest, owner="root:root", mode="600")
+                print("SITE_INVENTORY_INTERRUPTED_UPLOAD=VERIFIED", flush=True)
+            else:
+                run("pct", "push", str(CTID), str(source), staging, timeout=30)
+                verify_site_file(staging, expected_digest, owner="root:root", mode="600")
+            for attempt in range(1, 4):
+                if site_inventory_exists(target):
+                    verify_site_file(target, expected_digest, owner="root:semaphore", mode="640")
+                    break
+                try:
+                    pct_guest("install", "-o", "root", "-g", "semaphore",
+                              "-m", "0640", staging, target)
+                except Blocked as error:
+                    if str(error) != "Command failed: pct, rc=129":
+                        raise
+                    print(f"SITE_INVENTORY_PCT_INTERRUPTED=attempt:{attempt}/3", flush=True)
+                    if attempt == 3 and not site_inventory_exists(target):
+                        raise Blocked("Site inventory stage exhausted 3 SIGHUP attempts") from None
+                    time.sleep(1)
+            verify_site_file(target, expected_digest, owner="root:semaphore", mode="640")
             pct_guest("rm", "-f", staging)
-            if pct_guest("sha256sum", target).split()[0] != expected_digest:
-                raise Blocked("Guest site file checksum mismatch")
-        if pct_guest("stat", "-c", "%a:%U:%G", target) != "640:root:semaphore":
-            raise Blocked("Guest inventory permissions mismatch")
     for forbidden in ("/var/lib/ansible/fleet-detail",
                       "/root/dh-fleet-deploy-key",
                       site_root + "/secrets/fleet.vault.yml"):
@@ -1187,6 +1223,10 @@ def apply(args, template):
             run("pct", "push", str(CTID),
                 str(checkout / "bootstrap/semaphore-project.py"),
                 "/opt/digitalhouses/bootstrap/semaphore-project.py")
+            seeder_path = "/opt/digitalhouses/bootstrap/semaphore-project.py"
+            pct_guest("chmod", "0644", seeder_path)
+            if pct_guest("stat", "-c", "%u:%a", seeder_path) != "0:644":
+                raise Blocked("Semaphore resume seeder permissions mismatch")
             probe = pct_guest("python3",
                               "/opt/digitalhouses/bootstrap/semaphore-project.py",
                               "--site", args.site, "--project-title", project_title,
