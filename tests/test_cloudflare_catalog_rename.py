@@ -98,6 +98,16 @@ def test_rename_rejects_unrecognized_previous_playbook():
 def test_retirement_archives_finished_task_logs_before_deleting(monkeypatch, tmp_path):
     m, api = module(), fake_api()
     monkeypatch.setattr(m, "HISTORY_ARCHIVE", tmp_path / "root-history")
+    # CI runs unprivileged; simulate root ownership only on the isolated
+    # temporary archive folder, preserving the production root-only guard.
+    real_stat = m.Path.stat
+    def isolated_root_stat(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path == m.HISTORY_ARCHIVE:
+            from types import SimpleNamespace
+            return SimpleNamespace(st_uid=0, st_mode=result.st_mode)
+        return result
+    monkeypatch.setattr(m.Path, "stat", isolated_root_stat)
     project_path, old = provision_legacy(m, api)
     legacy = {**old, "name": m.OBSOLETE_CLOUDFLARE[0],
               "playbook": m.OBSOLETE_CLOUDFLARE[1], "id": 700}
