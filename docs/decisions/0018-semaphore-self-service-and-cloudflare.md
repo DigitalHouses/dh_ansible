@@ -129,7 +129,7 @@ appears after the first successful task 00 synchronization.
 
 ## Pending task-10 lifecycle consolidation (2026-10-21)
 
-**Accepted target name:** `10-Создание туннеля на PVE`. The prior
+**Accepted target name:** `10-Создание туннеля CF до PVE`. The prior
 `10-Cloudflare · Туннель объекта (план)` must be renamed **in place**,
 preserving Semaphore template ID and task history. An explicit catalog alias
 migration handles only that exact known managed template; it blocks collisions
@@ -150,7 +150,7 @@ removing its manifest entry alone is not sufficient.
 
 ## Catalog task 10 activation
 
-The canonical title is `10-Создание туннеля на PVE`. Template 10 uses the
+The canonical title is `10-Создание туннеля CF до PVE`. Template 10 uses the
 fixed-purpose cutover worker. Task 11 is removed from the *desired catalog*,
 but will remain in older Semaphore databases until its execution logs are
 safely archived; removing the template through Semaphore 2.19.16 API
