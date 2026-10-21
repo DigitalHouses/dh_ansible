@@ -147,3 +147,12 @@ synchronizer is updated. The current fixed root synchronizer does not
 automatically update its own code from GitHub. The old task 11 must be
 retired through a separate controlled history-preserving migration;
 removing its manifest entry alone is not sufficient.
+
+## Catalog task 10 activation
+
+The canonical title is `10-Создание туннеля CF до PVE`. Template 10 uses the
+fixed-purpose cutover worker. Task 11 is removed from the *desired catalog*,
+but will remain in older Semaphore databases until its execution logs are
+safely archived; removing the template through Semaphore 2.19.16 API
+cascades to task records and output. Do not delete 11 without a verified
+out-of-band backup of the task history. Fresh installs expose only task 10.
