@@ -752,6 +752,91 @@ def test_semaphore_resume_restores_seeder_mode_and_pve_restore_can_be_requested(
     assert 'or (args.resume_semaphore and args.restore_pve_access)' in src
     assert 're.fullmatch(r"local-lvm:vm-1231-disk-[0-9]+,size=16G"' in src
 
+def test_diagnostics_trace_every_subprocess_without_exposing_vault(monkeypatch, tmp_path):
+    m = load()
+    path = tmp_path / "commands.log"
+    path.touch(mode=0o600)
+    monkeypatch.setattr(m, "_trace_file", lambda: path)
+    from types import SimpleNamespace
+    def failure(*args, **kwargs):
+        return SimpleNamespace(returncode=129, stdout="",
+                               stderr="lxc-attach: connection interrupted")
+    monkeypatch.setattr(m.subprocess, "run", failure)
+    with pytest.raises(m.Blocked, match="pct, rc=129"):
+        m.run("pct", "exec", "1231", "--", "install", "-d",
+              "/var/lib/ansible/site-data")
+    log = path.read_text()
+    assert "STAGE=test_diagnostics_trace_every_subprocess_without_exposing_vault" in log
+    assert "START" in log and "END" in log and "RC=129" in log
+    assert "CMD=pct exec 1231 -- install -d" in log
+    assert "STDERR=lxc-attach: connection interrupted" in log
+    with pytest.raises(m.Blocked, match="pct, rc=129"):
+        m.run("pct", "exec", "1231", "--", "rm", "-f",
+              "/dev/shm/dh-pve-identity/master")
+    content = path.read_text()
+    assert "/dev/shm/dh-pve-identity/master" not in content
+    assert "CMD=pct exec 1231 -- rm -f [REDACTED]" in content
+    assert "OUTPUT=[REDACTED_OR_NOT_APPLICABLE]" in content
+
+
+def test_command_trace_path_and_per_run_launcher_security():
+    host = SRC.read_text()
+    launcher = (SRC.parent / "install.sh").read_text()
+    assert 'DH_BOOTSTRAP_COMMAND_LOG="$COMMAND_LOG_FILE"' in launcher
+    assert 'mktemp "$LOG_DIR/commands-' in launcher
+    assert 'chmod 0600 "$COMMAND_LOG_FILE"' in launcher
+    assert 'COMMAND_LOG_FILE=$COMMAND_LOG_FILE' in launcher
+    assert 'trace_command("START", sequence, argv, stage=stage)' in host
+    assert 'trace_command("END", sequence, argv, stage=stage' in host
+    assert 'if not _COMMAND_LOG:' in host
+    assert '"OUTPUT=[REDACTED_OR_NOT_APPLICABLE]' in host
+
+
+def test_cleanup_vault_scratch_handles_rm_sighup_then_verifies_absence(monkeypatch):
+    m = load()
+    scratch = "/dev/shm/dh-pve-identity"
+    files = {scratch + "/master", scratch + "/base.vault.yml"}
+    directory_exists = True
+    calls = []
+
+    def guest(*args, **kwargs):
+        nonlocal directory_exists
+        calls.append(args)
+        if args[0] == "rm":
+            files.clear()  # rm succeeded, but pct attach lost its session
+            raise m.Blocked("Command failed: pct, rc=129")
+        if args[0] == "rmdir":
+            assert not files
+            directory_exists = False
+            return ""
+        raise AssertionError(args)
+
+    def fake_code(*args, **kwargs):
+        assert args[:4] == ("pct", "exec", "1231", "--")
+        assert args[4] == "test"
+        path = args[-1]
+        if args[-2] == "-L":
+            return 1
+        return 0 if (path in files or (path == scratch and directory_exists)) else 1
+
+    monkeypatch.setattr(m, "pct_guest", guest)
+    monkeypatch.setattr(m, "code", fake_code)
+    m.cleanup_pve_vault_guest_scratch()
+    assert not files and not directory_exists
+    assert len([x for x in calls if x[0] == "rm"]) == 1
+
+
+def test_cleanup_vault_scratch_blocks_if_deletion_not_verified(monkeypatch):
+    m = load()
+    monkeypatch.setattr(m, "pct_guest", lambda *args, **kw:
+                        (_ for _ in ()).throw(
+                            m.Blocked("Command failed: pct, rc=129")))
+    monkeypatch.setattr(m, "code", lambda *args, **kw: 0)
+    monkeypatch.setattr(m.time, "sleep", lambda *_: None)
+    with pytest.raises(m.Blocked, match="not confirmed removed"):
+        m.cleanup_pve_vault_guest_scratch()
+
+
 def test_site_inventory_failure_emits_safe_command_and_step(monkeypatch, capsys):
     m = load()
     from types import SimpleNamespace
