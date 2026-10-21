@@ -3,6 +3,8 @@
   ansible.builtin.import_tasks: preflight.yml
 - name: Install official dependencies
   ansible.builtin.import_tasks: packages.yml
+- name: Enforce GraphQL loopback-only firewall before installation
+  ansible.builtin.import_tasks: firewall.yml
 - name: Install pinned code, preserve persistent data
   ansible.builtin.import_tasks: install.yml
 - name: Prepare runtime and units
