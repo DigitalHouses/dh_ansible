@@ -1,55 +1,85 @@
-# NetAlertX · единая задача Semaphore
+# NetAlertX · нативная декларативная задача Semaphore 60
 
-## Цель и границы
+## Источник истины
 
-Задача `60-NetAlertX · Развёртывание` управляет **новым, отдельным** экземпляром
-NetAlertX. Код универсальный, значения конкретного дома живут только в
-`dh_ansible_fleet_detail/inventories/<site>/netalertx.yml`.
+- **Единственная** задача Semaphore: `60-NetAlertX · Развёртывание`.
+- Один общий публичный код: `DigitalHouses/dh_ansible`.
+- Site-данные, protected VMID, LXC/IP и три approval gate: **только**
+  `dh_ansible_fleet_detail/inventories/<site>/netalertx.yml`.
+- Existing production NetAlertX, соседние гости, HA, Docker и Cloudflare
+  остаются вне scope.
+- Базовая native-версия: NetAlertX `v26.5.4`, commit
+  `f894390dfab65c4c8fc605af6ee3fa08d95bd354`.
+- Проект у Амира использовался как прототип; legacy-роль не имела
+  принятого Ansible clean-install E2E и идемпотентности.
 
-Новый CTID, IP и список защищённых VMID определяются исключительно
-приватным inventory. Существующий NetAlertX на объекте — чужой защищённый
-ресурс: запрещено менять, удалять, останавливать, мигрировать,
-перезапускать и использовать его тома.
+## Архитектура исполнения
 
-## Принятая исходная реализация
+Semaphore не имеет PVE root key и не получает privileged inventory.
+`request-netalertx-install.yml` читает локальный Fleet desired state
+и сверяет runner/site identity. Когда любой gate = false, выводится
+`PLAN_ONLY`, запрос не создаётся, infrastructure writes отсутствуют.
 
-Legacy `DigitalHouses/ansible/roles/netalertx_native` — пример кода с
-native NetAlertX v26.5.4 (pinned Git SHA
-`f894390dfab65c4c8fc605af6ee3fa08d95bd354`).
-Проверенная у Амира установка CT301 была **ручной**, не принятым E2E роли.
-В ходе пилота CT1239 также использовались защищённые PVE-side операции.
-Не считать legacy Ansible роль безопасно принятой к копированию без
-адаптации и тестов. Не устанавливать Docker.
+После документированной независимой проверки сети и явной установки
+**всех** трёх gate `provision_approved`,
+`dhcp_exclusion_verified`, `api_lan_isolation_verified`,
+Semaphore отправляет исключительно `DEPLOY:<uuid>:<site>` в
+`/var/lib/semaphore/dh-netalertx-deploy.request`.
 
-## Текущий статус этой версии
+Root-owned systemd `dh-netalertx-deploy.path/.service` вызывает
+`/usr/local/sbin/dh-netalertx-deploy`. Исполнитель проверяет
+UUID, owner/mode запроса, локальный hostname и site-data, блокирует
+параллельные запуски и запускает ровно
+`playbooks/deploy-netalertx-pve-from-worker.yml` из public main
+с root-owned private SSH identity и строгим host key pinning.
 
-Semaphore-каталог получает **ровно одну** новую задачу 60.
-В первом коммите она делает только чтение и проверку Fleet desired state,
-публикует `PLAN_ONLY`, не объявляет установку успешно завершённой,
-не включает сеть и не вызывает произвольный PVE root от пользователя Semaphore.
+Далее тот же playbook:
 
-Следующий кодовый этап внутри *этой же* задачи (без второго шаблона):
-1. Привилегированный фиксированный исполнитель проверяет host/site identity,
-   реальный PVE CTID/IP, Debian template, RAM и DHCP scope.
-2. Отдельно проверяет исключение .239 из DHCP и локальную изоляцию
-   upstream GraphQL TCP/20212; до приёмки создавать только остановленный,
-   сетево изолированный новый CT.
-3. Создаёт отсутствующий LXC строго после `audit → plan` и
-   разрешения на **этот CTID**; чужие CT никогда не adopted автоматически.
-4. Применяет единый native role (git commit pinned, systemd, PHP/nginx,
-   ARPSCAN и SQLite persistence), без Docker и изменений исходного приложения.
-5. Проверяет UI, сканирование, SQLite, reboot/persistence и повторный
-   `changed=0`. Cloudflare и HA-integrations не входят в этот этап.
+1. Сверяет защищённые VMID, Debian 13 template SHA, identity PVE,
+   PVE ресурсный бюджет и отсутствие чужого CT/QEMU по целевому ID.
+2. Создаёт **только отсутствующий** unprivileged LXC; сначала
+   `onboot=0`, `start=0`, `protection=1`, `link_down=1`.
+   Existing foreign CT не adopted; нет destroy/recreate/update чужих.
+3. После gate включает сеть нового гостя, запускает его, доставляет
+   минимальный Python/OpenSSH через доверенную PVE console.
+4. Порождает отдельный SSH keypair гостя, читает host public key
+   через pinned PVE, фиксирует machine-id + host key root-only ledger.
+   При замене guest/host key последующая установка fail-closed.
+5. Применяет **общую** `netalertx_native` роль: pinned upstream Git,
+   Python venv, PHP8.4/nginx, systemd, SQLite, штатный ARPSCAN.
+6. До старта backend включает `nftables`: прямой TCP/20212 закрыт
+   от не-loopback клиентов. Порт 20211 обслуживается nginx, локальный
+   `/server/` proxy сохраняется. Firewall failure блокирует backend.
+7. Проверяет HTTP/UI/API, SQLite, PHP/systemd, upstream Git и внешнюю
+   недоступность TCP/20212. Отдаёт `nonce|PASS` только при завершении
+   playbook. Сведения о ходе — в root-only
+   `/var/log/dh-netalertx-deploy.log`.
 
-Доступ из Semaphore к PVE root/credentials напрямую запрещён. Текущий
-`site_runner` inventory — локальный; write-доступ хранится отдельно
-в root-owned PVE Access, как у канонической Cloudflare операции.
+## Состояние внедрения (22.10.2026)
 
-**Важно:** Коммит private Fleet не означает, что новые site-файлы
-уже синхронизированы на runner. Bootstrap фиксирует private Fleet commit,
-а задача `00` синхронизирует каталог *публичных задач*, но не гарантирует
-переустановку inventory. До запуска 60 надо проверить актуальность
-`/var/lib/ansible/site-data/<site>/netalertx.yml` и безопасно внедрить
-стандартный механизм обновления Site Data.
+Код staged в DRAFT public PR #6, а Fleet site-diff в DRAFT private PR.
+Синтаксис и статические safety-контракты проверяются в CI. В отдельном
+live audit CT не обнаружен, Debian template присутствовал; выданный
+доступ PVE SSH с pinned known_hosts работал. Первичный запуск от
+пользователя Semaphore с текущими тремя false gate завершился `changed=0`
+в режиме `PLAN_ONLY`. **Нативный LXC ещё не создан и не принят.**
 
-Этот статус намеренно отмечен как **PLAN ONLY**, не как готовая установка.
+Отдельная commissioning-операция для уже установленного runner:
+`bootstrap/commission-netalertx-worker.sh` из проверенного checkout
+устанавливает root-owned script и systemd `.path`. Она не создаёт CT.
+
+## Обязательная production-приёмка
+
+До установки: документированная проверка DHCP scope/exclusion,
+отсутствия IP conflict, свободных ресурсов, PVE identities и именно
+нового CTID. Факт «не отвечает на ping» не заменяет DHCP аудит.
+
+После установки: настоящий ARPSCAN на site subnet, список устройств,
+Web UI через браузер, API 20212 недоступен с LAN, SQLite/настройки
+сохранились после гостевого reboot, `systemd` сервисы active.
+После второго исполнения root playbook принять `changed=0`.
+PVE onboot переводить на production target только после принятия
+восстановления. Долгосрочная нагрузка и backup/restore отдельно.
+
+Нельзя считать `PLAN_ONLY`, git syntax-check, текущий public PR или
+статический unit-test завершённой работой NetAlertX.
