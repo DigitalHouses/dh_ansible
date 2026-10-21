@@ -1,8 +1,8 @@
 [Unit]
 Description=NetAlertX bare-metal
 Wants=network-online.target
-Requires=netalertx-runtime.service
-After=network-online.target nginx.service php8.4-fpm.service netalertx-runtime.service
+Requires=netalertx-runtime.service nftables.service
+After=network-online.target nginx.service php8.4-fpm.service netalertx-runtime.service nftables.service
 StartLimitIntervalSec=120
 StartLimitBurst=3
 
