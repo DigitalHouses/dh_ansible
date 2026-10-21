@@ -44,7 +44,12 @@ def sha(data):
 
 
 def legacy(rel):
-    return run("git", "-C", str(ROOT), "show", PREVIOUS + ":" + rel)
+    # Preserve exact blob bytes, including trailing newlines.
+    proc = subprocess.run(["git", "-C", str(ROOT), "show",
+                           PREVIOUS + ":" + rel],
+                          capture_output=True, timeout=45, check=False)
+    require(proc.returncode == 0, "LEGACY_GIT_OBJECT_UNAVAILABLE")
+    return proc.stdout
 
 
 def guest_sha(ctid, path, mode):
