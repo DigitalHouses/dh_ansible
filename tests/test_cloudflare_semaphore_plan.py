@@ -42,4 +42,4 @@ def test_catalog_task_10_retains_id_and_history_safe_playbook_binding():
     import json
     data = json.loads(CATALOG.read_text())
     task = next(x for x in data["tasks"] if x["title"] == "10-Создание туннеля CF до PVE")
-    assert task["playbook"] == "playbooks/plan-cloudflare-tunnel.yml"
+    assert task["playbook"] == "playbooks/request-cloudflare-cutover.yml"
