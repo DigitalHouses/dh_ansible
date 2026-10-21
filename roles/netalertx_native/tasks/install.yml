@@ -1,0 +1,118 @@
+---
+- name: Clone only on a genuinely new guest
+  ansible.builtin.git:
+    repo: "{{ netalertx_native_repository }}"
+    dest: /app
+    version: "{{ netalertx_native_release_commit }}"
+    update: false
+    force: false
+  when: not netalertx_native_repo_paths.results[0].stat.exists
+
+- name: Verify Git SHA
+  ansible.builtin.command:
+    argv: [git, -C, /app, rev-parse, HEAD]
+  register: netalertx_native_installed_head
+  changed_when: false
+
+- name: Match the pinned application version
+  ansible.builtin.assert:
+    that: netalertx_native_installed_head.stdout == netalertx_native_release_commit
+
+- name: Install requirements from the pinned upstream version
+  ansible.builtin.pip:
+    requirements: /app/install/proxmox/requirements.txt
+    virtualenv: /opt/myenv
+    virtualenv_command: /usr/bin/python3 -m venv
+
+- name: Check upstream v26.5.4 missing pydantic dependency
+  ansible.builtin.command:
+    argv: [/opt/myenv/bin/python, -m, pip, show, pydantic]
+  register: netalertx_native_pydantic
+  changed_when: false
+  failed_when: false
+
+- name: Install version-scoped pydantic workaround only if needed
+  ansible.builtin.pip:
+    name: "pydantic>=2.0,<3.0"
+    virtualenv: /opt/myenv
+  when: netalertx_native_pydantic.rc != 0
+
+- name: Ensure persistent directories have restricted permissions
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: www-data
+    group: www-data
+    mode: "0750"
+  loop:
+    - /app/config
+    - /app/db
+
+- name: Inspect persistent files before seeding
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop:
+    - /app/config/app.conf
+    - /app/db/app.db
+  register: netalertx_native_persistent
+  no_log: true
+
+- name: Initialize app.conf from upstream only once
+  ansible.builtin.copy:
+    src: /app/back/app.conf
+    dest: /app/config/app.conf
+    remote_src: true
+    force: false
+    owner: www-data
+    group: www-data
+    mode: "0600"
+  when: not netalertx_native_persistent.results[0].stat.exists
+  no_log: true
+
+- name: Initialize SQLite from upstream only once
+  ansible.builtin.copy:
+    src: /app/back/app.db
+    dest: /app/db/app.db
+    remote_src: true
+    force: false
+    owner: www-data
+    group: www-data
+    mode: "0660"
+  when: not netalertx_native_persistent.results[1].stat.exists
+  no_log: true
+
+- name: Apply installation-only scan settings without touching later Web UI edits
+  ansible.builtin.lineinfile:
+    path: /app/config/app.conf
+    regexp: "^{{ item.key }}="
+    line: "{{ item.key }}={{ item.value }}"
+  loop: "{{ (netalertx_native_initial_settings | combine({'SCAN_SUBNETS': (netalertx_native_scan_subnets | to_json), 'TIMEZONE': (netalertx_native_timezone | to_json)})) | dict2items }}"
+  when: not netalertx_native_persistent.results[0].stat.exists
+  no_log: true
+
+- name: Add missing untracked version metadata without overwriting
+  ansible.builtin.copy:
+    dest: /app/.VERSION
+    content: "26.5.4\n"
+    mode: "0644"
+    force: false
+
+- name: Check upstream build timestamp
+  ansible.builtin.stat:
+    path: /app/front/buildtimestamp.txt
+  register: netalertx_native_buildtimestamp
+
+- name: Get build time only once
+  ansible.builtin.command:
+    argv: [date, +%s]
+  register: netalertx_native_build_epoch
+  changed_when: false
+  when: not netalertx_native_buildtimestamp.stat.exists
+
+- name: Add required build timestamp only if absent
+  ansible.builtin.copy:
+    dest: /app/front/buildtimestamp.txt
+    content: "{{ netalertx_native_build_epoch.stdout }}\n"
+    force: false
+    mode: "0644"
+  when: not netalertx_native_buildtimestamp.stat.exists

@@ -1,0 +1,72 @@
+---
+- name: Verify explicit approval, target identity and version constraints
+  ansible.builtin.assert:
+    that:
+      - netalertx_native_approved | bool
+      - netalertx_native_target_ctid | int > 0
+      - (netalertx_native_target_ctid | int) not in (netalertx_native_protected_ctids | map('int') | list)
+      - netalertx_native_expected_hostname | length > 0
+      - netalertx_native_expected_machine_id is match('^[a-f0-9]{32}$')
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] == '13'
+      - ansible_facts['hostname'] == netalertx_native_expected_hostname
+      - ansible_facts['user_id'] == 'root'
+      - netalertx_native_release_tag == 'v26.5.4'
+      - netalertx_native_release_commit == 'f894390dfab65c4c8fc605af6ee3fa08d95bd354'
+      - netalertx_native_web_port | int == 20211
+      - netalertx_native_api_port | int == 20212
+      - netalertx_native_scan_subnets | length > 0
+      - netalertx_native_scan_subnets | length < 10
+    fail_msg: "Installation blocked: new guest identity, explicit approval and pinned baseline required."
+
+- name: Read guest machine-id
+  ansible.builtin.slurp:
+    src: /etc/machine-id
+  register: netalertx_native_machine
+  no_log: true
+
+- name: Match approved machine-id
+  ansible.builtin.assert:
+    that: (netalertx_native_machine.content | b64decode | trim) == netalertx_native_expected_machine_id
+    fail_msg: "Wrong machine-id; no changes allowed."
+  no_log: true
+
+- name: Inspect application directory without changing it
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - /app
+    - /app/.git
+  register: netalertx_native_repo_paths
+
+- name: Reject takeover of a non-Git application directory
+  ansible.builtin.assert:
+    that: not netalertx_native_repo_paths.results[0].stat.exists or (netalertx_native_repo_paths.results[1].stat.isdir | default(false))
+    fail_msg: "/app exists without an approved Git checkout."
+
+- name: Inspect existing commit
+  ansible.builtin.command:
+    argv: [git, -C, /app, rev-parse, HEAD]
+  register: netalertx_native_existing_head
+  changed_when: false
+  when: netalertx_native_repo_paths.results[1].stat.isdir | default(false)
+
+- name: Reject automatic upgrade and downgrade
+  ansible.builtin.assert:
+    that: netalertx_native_existing_head.stdout == netalertx_native_release_commit
+    fail_msg: "Existing Git version mismatch. No automatic upgrade/reset."
+  when: netalertx_native_repo_paths.results[1].stat.isdir | default(false)
+
+- name: Check for edited upstream files
+  ansible.builtin.command:
+    argv: [git, -C, /app, status, --porcelain, --untracked-files=no]
+  register: netalertx_native_git_dirty
+  changed_when: false
+  when: netalertx_native_repo_paths.results[1].stat.isdir | default(false)
+
+- name: Reject tracked upstream changes
+  ansible.builtin.assert:
+    that: netalertx_native_git_dirty.stdout | trim == ''
+    fail_msg: "Tracked upstream files changed; no automatic reset."
+  when: netalertx_native_repo_paths.results[1].stat.isdir | default(false)

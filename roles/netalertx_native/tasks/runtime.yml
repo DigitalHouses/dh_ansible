@@ -1,0 +1,59 @@
+---
+- name: Install volatile runtime mount preparation
+  ansible.builtin.template:
+    src: netalertx-runtime-prepare.j2
+    dest: /usr/local/sbin/netalertx-runtime-prepare
+    owner: root
+    group: root
+    mode: "0750"
+  register: netalertx_native_runtime_script
+
+- name: Install runtime systemd unit
+  ansible.builtin.template:
+    src: netalertx-runtime.service.j2
+    dest: /etc/systemd/system/netalertx-runtime.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: netalertx_native_runtime_unit
+  notify: netalertx_native systemd daemon reload
+
+- name: Install backend systemd unit
+  ansible.builtin.template:
+    src: netalertx.service.j2
+    dest: /etc/systemd/system/netalertx.service
+    owner: root
+    group: root
+    mode: "0644"
+  register: netalertx_native_backend_unit
+  notify: netalertx_native systemd daemon reload
+
+- name: Inspect ARPSCAN sudoers for unexpected existing policy
+  ansible.builtin.stat:
+    path: /etc/sudoers.d/90-netalertx-arpscan
+  register: netalertx_native_sudo_stat
+
+- name: Install narrowly scoped sudoers only when absent
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/90-netalertx-arpscan
+    owner: root
+    group: root
+    mode: "0440"
+    content: "www-data ALL=(root) NOPASSWD: /usr/sbin/arp-scan, /sbin/arp-scan\n"
+    validate: /usr/sbin/visudo -cf %s
+  when: not netalertx_native_sudo_stat.stat.exists
+
+- name: Read effective NetAlertX sudoers policy
+  ansible.builtin.command:
+    argv: [cat, /etc/sudoers.d/90-netalertx-arpscan]
+  register: netalertx_native_sudo_content
+  changed_when: false
+  no_log: true
+
+- name: Block unexpected sudo privilege expansion
+  ansible.builtin.assert:
+    that:
+      - >-
+        (netalertx_native_sudo_content.stdout | trim) ==
+        'www-data ALL=(root) NOPASSWD: /usr/sbin/arp-scan, /sbin/arp-scan'
+    fail_msg: "Unexpected sudo policy; manual inspection required."

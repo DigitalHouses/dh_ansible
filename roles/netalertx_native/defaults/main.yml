@@ -1,0 +1,28 @@
+---
+# New guest only. No installation is approved by default.
+netalertx_native_approved: false
+netalertx_native_expected_hostname: ""
+netalertx_native_expected_machine_id: ""
+netalertx_native_target_ctid: 0
+netalertx_native_protected_ctids: []
+netalertx_native_release_tag: "v26.5.4"
+netalertx_native_release_commit: "f894390dfab65c4c8fc605af6ee3fa08d95bd354"
+netalertx_native_repository: "https://github.com/netalertx/NetAlertX.git"
+netalertx_native_scan_subnets: []
+netalertx_native_timezone: "Asia/Almaty"
+netalertx_native_web_port: 20211
+netalertx_native_api_port: 20212
+netalertx_native_php_socket: "/run/php/php8.4-fpm.sock"
+netalertx_native_arp_test_approved: false
+netalertx_native_initial_settings:
+  BACKEND_API_URL: "'/server'"
+  GRAPHQL_PORT: "20212"
+  DISCOVER_PLUGINS: "True"
+  LOADED_PLUGINS: '["ARPSCAN","DBCLNP","MAINT","NEWDEV","NTFPRCS","SETPWD","WORKFLOWS","UI"]'
+  INTRNT_RUN: '"disabled"'
+  ARPSCAN_RUN: "'schedule'"
+  NSLOOKUP_RUN: '"disabled"'
+  AVAHISCAN_RUN: '"disabled"'
+  NBTSCAN_RUN: '"disabled"'
+  DIGSCAN_RUN: '"disabled"'
+  CSVBCKP_RUN: '"disabled"'

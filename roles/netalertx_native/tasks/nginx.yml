@@ -1,0 +1,133 @@
+---
+- name: Verify upstream nginx template is present
+  ansible.builtin.stat:
+    path: /app/install/proxmox/netalertx.conf
+  register: netalertx_native_nginx_upstream
+
+- name: Require the pinned upstream nginx template
+  ansible.builtin.assert:
+    that: netalertx_native_nginx_upstream.stat.isreg | default(false)
+
+- name: Inspect original working nginx config
+  ansible.builtin.stat:
+    path: /app/config/netalertx.conf
+  register: netalertx_native_nginx_conf
+
+- name: Initialize working nginx config from upstream only once
+  ansible.builtin.copy:
+    src: /app/install/proxmox/netalertx.conf
+    dest: /app/config/netalertx.conf
+    remote_src: true
+    force: false
+    owner: www-data
+    group: www-data
+    mode: "0640"
+  when: not netalertx_native_nginx_conf.stat.exists
+  notify: netalertx_native nginx reload
+
+- name: Include only the missing GraphQL proxy route
+  ansible.builtin.lineinfile:
+    path: /app/config/netalertx.conf
+    insertafter: '^\s*listen 20211;'
+    regexp: '^\s*include /etc/nginx/snippets/netalertx-api.conf;'
+    line: '    include /etc/nginx/snippets/netalertx-api.conf;'
+    firstmatch: true
+  notify: netalertx_native nginx reload
+
+- name: Replace the version-specific PHP socket in working config
+  ansible.builtin.replace:
+    path: /app/config/netalertx.conf
+    regexp: 'unix:/var/run/php/php-fpm\.sock;'
+    replace: 'unix:{{ netalertx_native_php_socket }};'
+  notify: netalertx_native nginx reload
+
+- name: Add the minimal PHP environment needed by native frontend
+  ansible.builtin.blockinfile:
+    path: /app/config/netalertx.conf
+    insertbefore: '^\s*fastcgi_index index.php;'
+    marker: '        # {mark} DIGITALHOUSES NETALERTX PHP ENV'
+    block: |2
+              fastcgi_param NETALERTX_DATA /app;
+              fastcgi_param NETALERTX_CONFIG /app/config;
+              fastcgi_param NETALERTX_DB /app/db;
+              fastcgi_param NETALERTX_LOG /app/log;
+              fastcgi_param NETALERTX_API /tmp/api;
+  notify: netalertx_native nginx reload
+
+- name: Inspect nginx server additions without exposing application secrets
+  ansible.builtin.command:
+    argv: [grep, -E, 'listen 20211|netalertx-api.conf|php8.4-fpm.sock|NETALERTX_API', /app/config/netalertx.conf]
+  register: netalertx_native_nginx_lines
+  changed_when: false
+
+- name: Reject unsupported nginx structural changes
+  ansible.builtin.assert:
+    that:
+      - "'listen 20211;' in netalertx_native_nginx_lines.stdout"
+      - "'include /etc/nginx/snippets/netalertx-api.conf;' in netalertx_native_nginx_lines.stdout"
+      - "'fastcgi_pass unix:/run/php/php8.4-fpm.sock;' in netalertx_native_nginx_lines.stdout"
+      - "'fastcgi_param NETALERTX_API /tmp/api;' in netalertx_native_nginx_lines.stdout"
+    fail_msg: "Cannot safely adapt nginx upstream template."
+
+- name: Ensure isolated nginx snippet directory exists
+  ansible.builtin.file:
+    path: /etc/nginx/snippets
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Install missing GraphQL proxy snippet
+  ansible.builtin.template:
+    src: netalertx-api.conf.j2
+    dest: /etc/nginx/snippets/netalertx-api.conf
+    owner: root
+    group: root
+    mode: "0644"
+  notify: netalertx_native nginx reload
+
+- name: Inspect Web UI and nginx site symlinks
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - /var/www/html/netalertx
+    - /etc/nginx/conf.d/netalertx.conf
+    - /etc/nginx/sites-enabled/default
+  register: netalertx_native_nginx_links
+
+- name: Refuse collisions with pre-existing unrelated nginx sites
+  ansible.builtin.assert:
+    that:
+      - not netalertx_native_nginx_links.results[0].stat.exists or ((netalertx_native_nginx_links.results[0].stat.islnk | default(false)) and (netalertx_native_nginx_links.results[0].stat.lnk_source | default('')) == '/app/front')
+      - not netalertx_native_nginx_links.results[1].stat.exists or ((netalertx_native_nginx_links.results[1].stat.islnk | default(false)) and (netalertx_native_nginx_links.results[1].stat.lnk_source | default('')) == '/app/config/netalertx.conf')
+      - not netalertx_native_nginx_links.results[2].stat.exists or ((netalertx_native_nginx_links.results[2].stat.islnk | default(false)) and (netalertx_native_nginx_links.results[2].stat.lnk_source | default('')) == '/etc/nginx/sites-available/default')
+    fail_msg: "Foreign nginx site present. No removal or overwrite."
+
+- name: Link frontend to upstream source
+  ansible.builtin.file:
+    src: /app/front
+    dest: /var/www/html/netalertx
+    state: link
+  when: not netalertx_native_nginx_links.results[0].stat.exists
+  notify: netalertx_native nginx reload
+
+- name: Link isolated nginx server config
+  ansible.builtin.file:
+    src: /app/config/netalertx.conf
+    dest: /etc/nginx/conf.d/netalertx.conf
+    state: link
+  when: not netalertx_native_nginx_links.results[1].stat.exists
+  notify: netalertx_native nginx reload
+
+- name: Disable only default nginx site on this new isolated guest
+  ansible.builtin.file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+  when: netalertx_native_nginx_links.results[2].stat.islnk | default(false)
+  notify: netalertx_native nginx reload
+
+- name: Validate nginx before any reload
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false

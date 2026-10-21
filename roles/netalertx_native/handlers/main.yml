@@ -1,0 +1,16 @@
+---
+- name: netalertx_native systemd daemon reload
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+
+- name: Validate nginx configuration prior to reload
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false
+  listen: netalertx_native nginx reload
+
+- name: netalertx_native reload nginx
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: reloaded
+  listen: netalertx_native nginx reload
