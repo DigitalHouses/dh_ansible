@@ -132,7 +132,7 @@ def _trace_file():
     path = Path(_COMMAND_LOG)
     expected_dir = Path("/var/log/digitalhouses/ansible")
     if path.parent != expected_dir or not re.fullmatch(
-            r"commands-[A-Za-z0-9_.-]{8,90}\\.log", path.name):
+            r"commands-[A-Za-z0-9_.-]{8,90}\.log", path.name):
         raise Blocked("Untrusted command diagnostics path")
     if path.is_symlink() or not path.is_file():
         raise Blocked("Command diagnostics file missing or is a symlink")
@@ -193,6 +193,8 @@ def _next_command_seq():
 def run(*argv, timeout=120, env=None, reveal=False):
     sequence = _next_command_seq()
     stage = sys._getframe(1).f_code.co_name
+    if stage == "pct_guest":
+        stage = sys._getframe(2).f_code.co_name
     started = time.monotonic()
     trace_command("START", sequence, argv, stage=stage)
     try:
@@ -224,6 +226,8 @@ def run(*argv, timeout=120, env=None, reveal=False):
 def code(*argv, timeout=20):
     sequence = _next_command_seq()
     stage = sys._getframe(1).f_code.co_name
+    if stage == "pct_guest":
+        stage = sys._getframe(2).f_code.co_name
     started = time.monotonic()
     trace_command("START", sequence, argv, stage=stage)
     try:
