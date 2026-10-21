@@ -29,15 +29,17 @@ def test_root_watcher_is_single_purpose():
     assert "ExecStart=/usr/local/sbin/dh-remote-commander-install" in unit
     assert "PathExists=/var/lib/semaphore/dh-remote-commander.request" in path
 
-def test_request_shows_pairing_url_before_waiting():
+def test_request_shows_pairing_url_and_current_code_or_worker_error():
     src=(ROOT / "playbooks/request-runner-remote-commander.yml").read_text()
     tasks=yaml.safe_load(src)[0]["tasks"]
     names=[task["name"] for task in tasks]
-    assert "Explain installation progress and device pairing" in names
-    assert names.index("Explain installation progress and device pairing") < names.index("Await managed Remote Commander service")
+    assert "Show authorization link immediately in the task output" in names
+    assert names.index("Show authorization link immediately in the task output") < names.index("Send fixed-purpose install or pairing request")
     assert "https://mcp.desktopcommander.app/device/verify" in src
-    assert "Show actual one-time pairing code and URL inside Semaphore" in names
-    assert names.index("Show actual one-time pairing code and URL inside Semaphore") > names.index("Await sanitized OAuth pairing status")
+    assert "Show actual one-time code AND clickable authorization URL" in names
+    assert names.index("Show actual one-time code AND clickable authorization URL") > names.index("Read the authorization result for THIS request only")
+    assert "Report installer failure instead of retrying silently" in names
+    assert names.index("Report installer failure instead of retrying silently") < names.index("Show actual one-time code AND clickable authorization URL")
     assert "mode: \"0600\"" in src
     assert "remote_pairing_record.stdout.startswith('PAIR|' ~ remote_request_id.stdout ~ '|')" in src
 
