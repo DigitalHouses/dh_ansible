@@ -38,3 +38,80 @@
 
   roles:
     - role: netalertx_deployment_plan
+
+  post_tasks:
+    - name: Calculate whether all independently reviewed provisioning gates are set
+      ansible.builtin.set_fact:
+        netalertx_apply_allowed: >-
+          {{
+            netalertx.security.provision_approved | bool
+            and netalertx.security.dhcp_exclusion_verified | bool
+            and netalertx.security.api_lan_isolation_verified | bool
+          }}
+
+    - name: Explain why this task remains a read-only plan
+      ansible.builtin.debug:
+        msg:
+          result: PLAN_ONLY
+          installation: NOT_PERFORMED
+          missing_approvals:
+            provision_approved: "{{ netalertx.security.provision_approved | bool }}"
+            dhcp_exclusion_verified: "{{ netalertx.security.dhcp_exclusion_verified | bool }}"
+            api_lan_isolation_verified: "{{ netalertx.security.api_lan_isolation_verified | bool }}"
+          note: "Private Fleet controls commissioning; protected existing guests stay untouched."
+      when: not netalertx_apply_allowed | bool
+
+    - name: Request fixed-purpose privileged worker only after all approvals
+      when: netalertx_apply_allowed | bool
+      block:
+        - name: Require commissioned root-owned NetAlertX watcher
+          ansible.builtin.command:
+            argv: [systemctl, is-active, dh-netalertx-deploy.path]
+          register: netalertx_root_watcher
+          changed_when: false
+
+        - name: Refuse deployment if root watcher is absent
+          ansible.builtin.assert:
+            that: netalertx_root_watcher.stdout == 'active'
+            fail_msg: "NetAlertX root worker is not commissioned. Nothing deployed."
+
+        - name: Generate unique deployment request identity
+          ansible.builtin.command:
+            argv: [cat, /proc/sys/kernel/random/uuid]
+          register: netalertx_request_id
+          changed_when: false
+
+        - name: Submit fixed-purpose native installation request
+          ansible.builtin.copy:
+            dest: /var/lib/semaphore/dh-netalertx-deploy.request
+            content: "DEPLOY:{{ netalertx_request_id.stdout }}:{{ site.id }}\n"
+            mode: "0600"
+
+        - name: Wait for this exact request's final root worker status
+          ansible.builtin.command:
+            argv: [cat, /run/dh-netalertx-deploy.status]
+          register: netalertx_worker_result
+          changed_when: false
+          failed_when: false
+          until: >-
+            netalertx_worker_result.stdout in [
+              netalertx_request_id.stdout ~ '|PASS',
+              netalertx_request_id.stdout ~ '|FAILED'
+            ]
+          retries: 360
+          delay: 10
+
+        - name: Reject failed or stale deployment status
+          ansible.builtin.assert:
+            that: netalertx_worker_result.stdout == netalertx_request_id.stdout ~ '|PASS'
+            fail_msg: "NetAlertX install failed or timed out. See root-only /var/log/dh-netalertx-deploy.log."
+
+        - name: Report only a completed native worker install
+          ansible.builtin.debug:
+            msg:
+              result: NATIVE_DEPLOYMENT_PASS
+              site: "{{ site.id }}"
+              vmid: "{{ netalertx.vmid }}"
+              hostname: "{{ netalertx.hostname }}"
+              web_url: "http://{{ netalertx.network.ipv4.split('/')[0] }}:{{ netalertx.application.web_port }}"
+              note: "Verified by the root worker: Web UI and external GraphQL isolation. Reboot and ARP acceptance require a separate test."
