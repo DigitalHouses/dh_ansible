@@ -119,7 +119,10 @@ def test_installer_has_root_only_structured_journal_before_site_prompt():
     assert 'LOG_FILE=$(mktemp "$LOG_DIR/install-' in s
     assert 'chmod 0600 "$LOG_FILE"' in s
     assert 'stat -c' in s
-    assert 'LOG_MODE=SAFE_EVENTS_ONLY' in s
+    assert 'LOG_MODE=SAFE_EVENTS_AND_COMMAND_TRACE' in s
+    assert 'COMMAND_LOG_FILE=$(mktemp "$LOG_DIR/commands-' in s
+    assert 'chmod 0600 "$COMMAND_LOG_FILE"' in s
+    assert 'export DH_BOOTSTRAP_COMMAND_LOG="$COMMAND_LOG_FILE"' in s
     assert 'trap installer_cleanup EXIT' in s
     assert s.index('LOG_FILE=$(mktemp') < s.index('confirm_site_id || exit 2')
     assert 'grep -aE --line-buffered "$LOG_PATTERN"' in s
