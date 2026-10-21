@@ -804,6 +804,12 @@ def install_guest(site, runner_ip, checkout, *, resume_ansible=False):
     for item in ("semaphore-guest-install.py", "semaphore-project.py"):
         run("pct", "push", str(CTID), str(checkout / "bootstrap" / item),
             "/opt/digitalhouses/bootstrap/" + item, timeout=30)
+    # Fresh pct push can leave the seeder root:0600, while the fixed-purpose
+    # catalog worker explicitly requires root:0644 on this public code file.
+    seeder_path = "/opt/digitalhouses/bootstrap/semaphore-project.py"
+    pct_guest("chmod", "0644", seeder_path)
+    if pct_guest("stat", "-c", "%u:%a", seeder_path) != "0:644":
+        raise Blocked("Semaphore catalog seeder staging permissions mismatch")
     run("pct", "push", str(CTID), str(checkout / "requirements/runner.txt"),
         "/opt/digitalhouses/bootstrap/runner.txt", timeout=30)
     guest_args = ["python3", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py",
