@@ -126,6 +126,7 @@ def test_host_pve_cutover_rollback_restores_legacy_service(monkeypatch, tmp_path
             return "run --token hidden"
         return ""
 
+    monkeypatch.setattr(module, "secure_read", lambda path: path.read_text().strip())
     monkeypatch.setattr(module, "systemctl", fake_systemctl)
     monkeypatch.setattr(module.subprocess, "run",
                         lambda *a, **kw: SimpleNamespace(returncode=0,
