@@ -159,6 +159,6 @@ def test_catalog_defines_separate_manual_cutover_task():
     data = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
     names = [x["title"] for x in data["tasks"]]
     assert "10-Создание туннеля CF до PVE" in names
-    assert "11-Cloudflare · Переключить туннель" in names
-    task = next(x for x in data["tasks"] if x["title"].startswith("11-Cloudflare"))
+    assert not any(name.startswith("11-Cloudflare") for name in names)
+    task = next(x for x in data["tasks"] if x["title"] == "10-Создание туннеля CF до PVE")
     assert task["playbook"] == "playbooks/request-cloudflare-cutover.yml"
