@@ -43,8 +43,8 @@ def provision_legacy(m, api):
 def renamed_catalog(m):
     return [
         m.BOOTSTRAP_TEMPLATES[0],
-        ("10-Создание туннеля на PVE",
-         "10-Создание туннеля на PVE",
+        ("10-Создание туннеля CF до PVE",
+         "10-Создание туннеля CF до PVE",
          "playbooks/plan-cloudflare-tunnel.yml", m.VIEWS[0]),
     ]
 
@@ -53,7 +53,7 @@ def test_catalog_publishes_exact_accepted_name():
     manifest = json.loads(CATALOG.read_text())
     matches = [t for t in manifest["tasks"] if t["title"].startswith("10-")]
     assert len(matches) == 1
-    assert matches[0]["title"] == "10-Создание туннеля на PVE"
+    assert matches[0]["title"] == "10-Создание туннеля CF до PVE"
 
 
 def test_rename_preserves_identity_and_history_and_is_idempotent():
@@ -67,7 +67,7 @@ def test_rename_preserves_identity_and_history_and_is_idempotent():
     m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
     assert old["id"] == identity
     assert old["task_id"] == task_id
-    assert old["name"] == "10-Создание туннеля на PVE"
+    assert old["name"] == "10-Создание туннеля CF до PVE"
     assert len([x for x in api.calls if x[0] in ("PUT", "POST")]) == writes + 1
     m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
     assert len([x for x in api.calls if x[0] in ("PUT", "POST")]) == writes + 1
@@ -76,7 +76,7 @@ def test_rename_preserves_identity_and_history_and_is_idempotent():
 def test_rename_collision_blocks_preflight_without_writes():
     m, api = module(), fake_api()
     path, old = provision_legacy(m, api)
-    api.records[path].append({**old, "name": "10-Создание туннеля на PVE", "id": 990})
+    api.records[path].append({**old, "name": "10-Создание туннеля CF до PVE", "id": 990})
     m.read_public_catalog = lambda: renamed_catalog(m)
     writes = len([x for x in api.calls if x[0] in ("PUT", "POST")])
     with pytest.raises(m.Blocked, match="Conflicting old/new"):
