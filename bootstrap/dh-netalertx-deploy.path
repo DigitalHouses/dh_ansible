@@ -1,0 +1,11 @@
+[Unit]
+Description=DigitalHouses native NetAlertX fixed-purpose deployment watcher
+
+[Path]
+PathExists=/var/lib/semaphore/dh-netalertx-deploy.request
+Unit=dh-netalertx-deploy.service
+TriggerLimitIntervalSec=10min
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target
