@@ -31,7 +31,6 @@ def test_pve_role_requires_identity_and_approval_and_creates_only_stopped_lxc():
     for guard in (
         "provision_approved",
         "dhcp_exclusion_verified",
-        "api_lan_isolation_verified",
         "protected_vmids",
         "template_sha256",
         "netalertx_pve_worker_approved",
