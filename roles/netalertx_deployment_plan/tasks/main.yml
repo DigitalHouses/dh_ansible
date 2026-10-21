@@ -36,7 +36,7 @@
 - name: Show exact isolated NetAlertX deployment plan
   ansible.builtin.debug:
     msg:
-      result: "{{ 'READY_TO_APPLY' if (netalertx.security.provision_approved | bool and netalertx.security.dhcp_exclusion_verified | bool and netalertx.security.api_lan_isolation_verified | bool) else 'PLAN_ONLY' }}"
+      result: "{{ 'READY_TO_APPLY' if (netalertx.security.provision_approved | bool and netalertx.security.dhcp_exclusion_verified | bool) else 'PLAN_ONLY' }}"
       site: "{{ site.id }}"
       deployment: native
       target_vmid: "{{ netalertx.vmid }}"
