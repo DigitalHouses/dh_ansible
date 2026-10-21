@@ -259,7 +259,8 @@ def find_existing_cloudflared_apt_source():
                 require(uris and all(uri.rstrip("/") == CLOUDFLARED_REPO for uri in uris)
                         and fields.get("types") == "deb"
                         and fields.get("suites") in ("any", "bookworm", "bullseye", "trixie")
-                        and fields.get("components") == "main",
+                        and fields.get("components") == "main"
+                        and fields.get("trusted", "no").lower() == "no",
                         "CLOUDFLARED_APT_SOURCE_UNKNOWN")
                 key = fields.get("signed-by", "")
                 validate_existing_apt_key(key)
@@ -275,7 +276,10 @@ def find_existing_cloudflared_apt_source():
                     r"deb\s+\[([^\]]+)\]\s+https://pkg\.cloudflare\.com/cloudflared/?"
                     r"\s+(any|bookworm|bullseye|trixie)\s+main", line)
                 require(found is not None, "CLOUDFLARED_APT_SOURCE_UNKNOWN")
-                bindings = [part[len("signed-by="):] for part in found.group(1).split()
+                options = found.group(1).split()
+                require(all(part.startswith(("signed-by=", "arch=")) for part in options),
+                        "CLOUDFLARED_APT_SOURCE_UNKNOWN")
+                bindings = [part[len("signed-by="):] for part in options
                             if part.startswith("signed-by=")]
                 require(len(bindings) == 1, "CLOUDFLARED_APT_SIGNED_BY_INVALID")
                 validate_existing_apt_key(bindings[0])
