@@ -15,7 +15,10 @@ import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-PREVIOUS = "67a983e9915138cfde750fe7c4a42e03e54b2525"
+PREVIOUS = (
+    "67a983e9915138cfde750fe7c4a42e03e54b2525",
+    "b3c96a449c7250d046df8118f1608d4f3b66e304",
+)
 FILES = (
     ("bootstrap/cloudflare-pve-cutover.py",
      "/usr/local/sbin/dh-cloudflare-pve-cutover", "host", 0o700),
@@ -43,13 +46,16 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def legacy(rel):
-    # Preserve exact blob bytes, including trailing newlines.
-    proc = subprocess.run(["git", "-C", str(ROOT), "show",
-                           PREVIOUS + ":" + rel],
-                          capture_output=True, timeout=45, check=False)
-    require(proc.returncode == 0, "LEGACY_GIT_OBJECT_UNAVAILABLE")
-    return proc.stdout
+def legacy_hashes(rel):
+    # Only release-pinned, explicitly accepted root executors may be upgraded.
+    hashes = set()
+    for revision in PREVIOUS:
+        proc = subprocess.run(["git", "-C", str(ROOT), "show",
+                               revision + ":" + rel],
+                              capture_output=True, timeout=45, check=False)
+        require(proc.returncode == 0, "LEGACY_GIT_OBJECT_UNAVAILABLE")
+        hashes.add(sha(proc.stdout))
+    return hashes
 
 
 def guest_sha(ctid, path, mode):
@@ -78,7 +84,8 @@ def main():
             == ("ansible-" + args.site).encode(), "RUNNER_IDENTITY_DRIFT")
     require(run("git", "-C", str(ROOT), "status", "--porcelain") == b"",
             "SOURCE_CHECKOUT_DIRTY")
-    require(run("git", "-C", str(ROOT), "rev-parse", "HEAD") != PREVIOUS.encode(),
+    require(run("git", "-C", str(ROOT), "rev-parse", "HEAD")
+            not in {ref.encode() for ref in PREVIOUS},
             "NEW_PINNED_RELEASE_REQUIRED")
     operations = []
     for rel, destination, target, mode in FILES:
@@ -86,7 +93,7 @@ def main():
         require(path.is_file() and not path.is_symlink()
                 and path.stat().st_uid == 0, "SOURCE_UNTRUSTED")
         new = path.read_bytes()
-        prior = legacy(rel)
+        prior_hashes = legacy_hashes(rel)
         if target == "host":
             dest = Path(destination)
             require(dest.is_file() and not dest.is_symlink()
@@ -98,7 +105,7 @@ def main():
             val = guest_sha(args.ctid, destination, mode)
             require(val.startswith("SAFE:"), "RUNNER_TARGET_DRIFT")
             actual = val[5:]
-        require(actual in (sha(prior), sha(new)),
+        require(actual in prior_hashes | {sha(new)},
                 "UNKNOWN_INSTALLED_CODE_RELEASE_" + path.name)
         operations.append((path, destination, target, mode, actual, sha(new)))
     print("UPGRADE_PREFLIGHT=PASS")
