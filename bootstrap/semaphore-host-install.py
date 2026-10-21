@@ -157,7 +157,7 @@ def trace_command(event, sequence, argv, *, stage, rc=None, elapsed=None,
     if error is not None:
         fields.append(f"ERROR={error}")
     with path.open("a", encoding="utf-8") as log:
-        log.write(" | ".join(fields) + "\\n")
+        log.write(" | ".join(fields) + "\n")
         if event != "END" or rc in (None, 0):
             return
         # Only non-sensitive stderr of fixed OS utilities may be persisted.
@@ -177,11 +177,11 @@ def trace_command(event, sequence, argv, *, stage, rc=None, elapsed=None,
                 short = str(value)[:2048]
                 printable = "".join(ch if ch.isprintable() else " " for ch in short)
                 if any(mark in printable.lower() for mark in _SECRET_HINTS):
-                    log.write(f"{channel}=[REDACTED]\\n")
+                    log.write(f"{channel}=[REDACTED]\n")
                 else:
-                    log.write(f"{channel}={printable}\\n")
+                    log.write(f"{channel}={printable}\n")
         else:
-            log.write("OUTPUT=[REDACTED_OR_NOT_APPLICABLE]\\n")
+            log.write("OUTPUT=[REDACTED_OR_NOT_APPLICABLE]\n")
 
 
 def _next_command_seq():
