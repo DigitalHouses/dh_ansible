@@ -127,7 +127,7 @@ def test_retirement_archives_finished_task_logs_before_deleting(monkeypatch, tmp
     m.synchronize_catalog(api, "demo-office", "Demo", apply=True)
     assert old["name"] == "10-Создание туннеля CF до PVE"
     assert [x for x in api.records[project_path] if x["name"].startswith("11-")] == []
-    archive = m.HISTORY_ARCHIVE / "project-" + str(legacy["project_id"]) + "-cloudflare-11.json"
+    archive = m.HISTORY_ARCHIVE / ("project-" + str(legacy["project_id"]) + "-cloudflare-11.json")
     assert archive.stat().st_mode & 0o777 == 0o600
     payload = json.loads(archive.read_text())
     assert [x["task"]["id"] for x in payload["tasks"]] == [5, 6]
