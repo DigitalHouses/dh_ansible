@@ -72,7 +72,7 @@
       register: cloudflare_cutover_status
       changed_when: false
       failed_when: false
-      retries: 65
+      retries: 340
       delay: 3
       until: >-
         cloudflare_cutover_status.stdout in [
