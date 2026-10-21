@@ -737,6 +737,13 @@ def test_inventory_resume_refuses_staging_hash_drift(monkeypatch, tmp_path):
         m.install_site_inventory("demo-home", ["inventories/demo-home/hosts.yml"], code_dir)
 
 
+def test_public_launcher_accepts_controlled_pve_credential_restore_mode():
+    launcher = (SRC.parent / "install.sh").read_text()
+    assert '"$1" == "--resume-semaphore" && "$2" == "--restore-pve-access"' in launcher
+    assert 'RESUME_ARGS=("$1" "$2")' in launcher
+    assert "--restore-pve-access requires --resume-semaphore" in launcher
+
+
 def test_semaphore_resume_restores_seeder_mode_and_pve_restore_can_be_requested():
     src = SRC.read_text()
     resume = src.split('if args.resume_semaphore:', 3)[-1]
