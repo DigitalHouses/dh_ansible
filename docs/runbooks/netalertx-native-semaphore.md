@@ -20,10 +20,8 @@ Semaphore не имеет PVE root key и не получает privileged inven
 и сверяет runner/site identity. Когда любой gate = false, выводится
 `PLAN_ONLY`, запрос не создаётся, infrastructure writes отсутствуют.
 
-После документированной независимой проверки сети и явной установки
-**всех** трёх gate `provision_approved`,
-`dhcp_exclusion_verified`, `api_lan_isolation_verified`,
-Semaphore отправляет исключительно `DEPLOY:<uuid>:<site>` в
+После явной установки **двух** подтверждённых Fleet gate
+`provision_approved` и `dhcp_exclusion_verified`, Semaphore отправляет исключительно `DEPLOY:<uuid>:<site>` в
 `/var/lib/semaphore/dh-netalertx-deploy.request`.
 
 Root-owned systemd `dh-netalertx-deploy.path/.service` вызывает
@@ -45,12 +43,13 @@ UUID, owner/mode запроса, локальный hostname и site-data, бл�
 4. Порождает отдельный SSH keypair гостя, читает host public key
    через pinned PVE, фиксирует machine-id + host key root-only ledger.
    При замене guest/host key последующая установка fail-closed.
-5. Применяет **общую** `netalertx_native` роль: pinned upstream Git,
+5. Проверяет работоспособность `nftables` внутри нового LXC до запуска backend. Если правила не удаётся применить, прекращает установку (fail-closed).
+6. Применяет **общую** `netalertx_native` роль: pinned upstream Git,
    Python venv, PHP8.4/nginx, systemd, SQLite, штатный ARPSCAN.
-6. До старта backend включает `nftables`: прямой TCP/20212 закрыт
+7. До старта backend включает `nftables`: прямой TCP/20212 закрыт
    от не-loopback клиентов. Порт 20211 обслуживается nginx, локальный
    `/server/` proxy сохраняется. Firewall failure блокирует backend.
-7. Проверяет HTTP/UI/API, SQLite, PHP/systemd, upstream Git и внешнюю
+8. Проверяет HTTP/UI/API, SQLite, PHP/systemd, upstream Git и внешнюю
    недоступность TCP/20212. Отдаёт `nonce|PASS` только при завершении
    playbook. Сведения о ходе — в root-only
    `/var/log/dh-netalertx-deploy.log`.
@@ -83,3 +82,13 @@ PVE onboot переводить на production target только после �
 
 Нельзя считать `PLAN_ONLY`, git syntax-check, текущий public PR или
 статический unit-test завершённой работой NetAlertX.
+
+## Отдельная семантика API gate
+
+`api_lan_isolation_verified=false` в Fleet — статус пока не принятой проверки,
+а не ручное обещание, что firewall уже работает. После DHCP/provision approval
+задача 60 может создавать **только новый** CT, но роль NetAlertX сначала
+устанавливает и проверяет nftables, затем запускает backend и независимо
+проверяет, что TCP/20212 с runner недоступен. Если unprivileged LXC
+не поддерживает nftables, запуск NetAlertX запрещён: API gate остаётся false.
+Обновлять `api_lan_isolation_verified=true` допускается только после E2E.
