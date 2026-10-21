@@ -41,5 +41,5 @@ def test_cloudflare_plan_is_local_readonly_and_has_explicit_new_names():
 def test_catalog_task_10_retains_id_and_history_safe_playbook_binding():
     import json
     data = json.loads(CATALOG.read_text())
-    task = next(x for x in data["tasks"] if x["title"] == "10-Создание туннеля CF до PVE")
+    task = next(x for x in data["tasks"] if x["title"] == "10-Создание туннеля на PVE")
     assert task["playbook"] == "playbooks/request-cloudflare-cutover.yml"
