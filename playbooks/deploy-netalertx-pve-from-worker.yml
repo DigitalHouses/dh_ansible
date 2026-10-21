@@ -52,3 +52,68 @@
   roles:
     - role: netalertx_deployment_plan
     - role: netalertx_pve_lxc
+    - role: netalertx_guest_bootstrap
+
+  post_tasks:
+    - name: Add ONLY the trusted PVE-commissioned guest to in-memory inventory
+      ansible.builtin.add_host:
+        name: dh_netalertx_new_guest
+        groups: netalertx_new_guest
+        ansible_host: "{{ netalertx.network.ipv4.split('/')[0] }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: "{{ netalertx_guest_key_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ netalertx_guest_known_hosts }}
+        netalertx_native_approved: true
+        netalertx_native_target_ctid: "{{ netalertx.vmid }}"
+        netalertx_native_expected_hostname: "{{ netalertx.hostname }}"
+        netalertx_native_expected_machine_id: "{{ netalertx_guest_machine_id.stdout }}"
+        netalertx_native_protected_ctids: "{{ netalertx.security.protected_vmids }}"
+        netalertx_native_release_tag: "{{ netalertx.application.release }}"
+        netalertx_native_release_commit: "{{ netalertx.application.source_commit }}"
+        netalertx_native_scan_subnets: "{{ netalertx.application.scan_subnets }}"
+        netalertx_native_timezone: "{{ netalertx.application.timezone }}"
+        netalertx_native_web_port: "{{ netalertx.application.web_port }}"
+        netalertx_native_api_port: "{{ netalertx.application.api_port }}"
+
+- name: Install native NetAlertX on the independently verified new guest
+  hosts: netalertx_new_guest
+  gather_facts: true
+  become: true
+  roles:
+    - role: netalertx_native
+  post_tasks:
+    - name: Verify new NetAlertX HTTP UI from outside its container
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ netalertx_native_web_port }}/devices.php"
+        status_code: 200
+        follow_redirects: none
+        use_proxy: false
+        return_content: false
+      delegate_to: runner
+      become: false
+      changed_when: false
+
+    - name: Verify GraphQL TCP port is inaccessible from LAN
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ netalertx_native_api_port }}"
+        state: stopped
+        timeout: 12
+      delegate_to: runner
+      become: false
+      changed_when: false
+
+    - name: Report tested native endpoint separation
+      ansible.builtin.debug:
+        msg:
+          result: NATIVE_HTTP_AND_ISOLATION_PASS
+          native_guest: "{{ ansible_host }}"
+          web_port: "{{ netalertx_native_web_port }}"
+          graphql_local_only: true
+          docker: false
+          reboot_persistence: NOT_YET_TESTED
+          network_arp_detection: NOT_YET_TESTED
