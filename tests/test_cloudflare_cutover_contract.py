@@ -147,7 +147,8 @@ def test_no_automatic_cutover_on_commission():
     code = COMMISSION.read_text()
     assert "CF_CONNECTOR=UNCHANGED" in code
     assert "CF_API_TOKEN=NOT_REQUESTED" in code
-    assert "cloudflared.service" in code
+    assert "EXISTING_CLOUDFLARED_INACTIVE" not in code
+    assert "Cloudflared may be completely absent" in code
     assert 'checked("pct", "exec"' in code
     assert "dh-cloudflare-switch.path" in code
     service = (ROOT / "bootstrap/dh-cloudflare-switch.service").read_text()
