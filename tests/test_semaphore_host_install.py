@@ -190,6 +190,14 @@ def test_etc_permissions_repair_rejects_unknown_state_and_no_unnecessary_writes(
         m.ensure_debian_etc_traversable()
 
 
+def test_fresh_installer_stages_catalog_seeder_with_worker_required_permissions():
+    src = SRC.read_text()
+    body = src.split("def install_guest(site, runner_ip, checkout, *, resume_ansible=False):", 1)[1].split("\ndef stage_semaphore_catalog_sync(", 1)[0]
+    assert 'pct_guest("chmod", "0644", seeder_path)' in body
+    assert 'pct_guest("stat", "-c", "%u:%a", seeder_path) != "0:644"' in body
+    assert body.index('pct_guest("chmod", "0644", seeder_path)') < body.index('guest_args =')
+
+
 def test_etc_permissions_are_checked_before_apt():
     s=SRC.read_text()
     body=s.split("def install_guest(site, runner_ip, checkout, *, resume_ansible=False):",1)[1]
