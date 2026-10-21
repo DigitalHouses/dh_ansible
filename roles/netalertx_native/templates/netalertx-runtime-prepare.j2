@@ -1,0 +1,18 @@
+#!/bin/sh
+# Restore volatile files needed by native NetAlertX at each container boot.
+mkdir -p /app/log /tmp/api || exit 1
+if ! mountpoint -q /app/log; then
+    mount -t tmpfs -o size=64m,mode=0770,uid=33,gid=33,nosuid,nodev,noexec tmpfs /app/log || exit 1
+fi
+if ! mountpoint -q /tmp/api; then
+    mount -t tmpfs -o size=16m,mode=0770,uid=33,gid=33,nosuid,nodev,noexec tmpfs /tmp/api || exit 1
+fi
+[ "$(findmnt -n -T /app/log -o FSTYPE)" = "tmpfs" ] || exit 1
+[ "$(findmnt -n -T /tmp/api -o FSTYPE)" = "tmpfs" ] || exit 1
+mkdir -p /app/log/plugins || exit 1
+for name in app.log execution_queue.log app_front.log app.php_errors.log stderr.log stdout.log db_is_locked.log; do
+    touch "/app/log/$name" || exit 1
+done
+touch /tmp/api/user_notifications.json || exit 1
+chown -R www-data:www-data /app/log /tmp/api || exit 1
+chmod -R ug+rwX,o-rwx /app/log /tmp/api || exit 1

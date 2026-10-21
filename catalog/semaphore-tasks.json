@@ -30,6 +30,11 @@
       "title": "50-Проверка доступов PVE",
       "playbook": "playbooks/request-pve-access-audit.yml",
       "view": "04 · Приёмка"
+    },
+    {
+      "title": "60-NetAlertX · Развёртывание",
+      "playbook": "playbooks/request-netalertx-install.yml",
+      "view": "02 · Развёртывание"
     }
   ]
 }

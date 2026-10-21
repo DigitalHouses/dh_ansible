@@ -1,0 +1,119 @@
+---
+# This is the privileged worker entry point, NOT a Semaphore catalog task.
+# Executor must be root inside the site runner; keys are root-only.
+- name: Provision guarded NetAlertX LXC using canonical PVE SSH
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Verify privileged executor UID
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: netalertx_worker_uid
+      changed_when: false
+
+    - name: Require root-owned fixed-purpose worker
+      ansible.builtin.assert:
+        that:
+          - netalertx_worker_uid.stdout == '0'
+          - netalertx_pve_worker_approved | default(false) | bool
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+        fail_msg: "This playbook is for an approved root-owned worker, never Semaphore directly."
+
+    - name: Read site identity and target state from private local Fleet
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop:
+        - "{{ inventory_dir }}/group_vars/all.yml"
+        - "{{ inventory_dir }}/pve.yml"
+        - "{{ inventory_dir }}/pve_access.yml"
+        - "{{ inventory_dir }}/netalertx.yml"
+
+    - name: Validate runner and exact canonical PVE access
+      ansible.builtin.assert:
+        that:
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_access.host.user == 'ansible-linux'
+          - pve_access.host.identity_file | length > 0
+          - pve_access.host.known_hosts_file | length > 0
+
+    - name: Enroll only the configured canonical PVE SSH host, with pinned host key
+      ansible.builtin.add_host:
+        name: dh_netalertx_pve
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+  roles:
+    - role: netalertx_deployment_plan
+    - role: netalertx_pve_lxc
+    - role: netalertx_guest_bootstrap
+
+  post_tasks:
+    - name: Add ONLY the trusted PVE-commissioned guest to in-memory inventory
+      ansible.builtin.add_host:
+        name: dh_netalertx_new_guest
+        groups: netalertx_new_guest
+        ansible_host: "{{ netalertx.network.ipv4.split('/')[0] }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: "{{ netalertx_guest_key_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ netalertx_guest_known_hosts }}
+        netalertx_native_approved: true
+        netalertx_native_target_ctid: "{{ netalertx.vmid }}"
+        netalertx_native_expected_hostname: "{{ netalertx.hostname }}"
+        netalertx_native_expected_machine_id: "{{ netalertx_guest_machine_id.stdout }}"
+        netalertx_native_protected_ctids: "{{ netalertx.security.protected_vmids }}"
+        netalertx_native_release_tag: "{{ netalertx.application.release }}"
+        netalertx_native_release_commit: "{{ netalertx.application.source_commit }}"
+        netalertx_native_scan_subnets: "{{ netalertx.application.scan_subnets }}"
+        netalertx_native_timezone: "{{ netalertx.application.timezone }}"
+        netalertx_native_web_port: "{{ netalertx.application.web_port }}"
+        netalertx_native_api_port: "{{ netalertx.application.api_port }}"
+
+- name: Install native NetAlertX on the independently verified new guest
+  hosts: netalertx_new_guest
+  gather_facts: true
+  become: true
+  roles:
+    - role: netalertx_native
+  post_tasks:
+    - name: Verify new NetAlertX HTTP UI from outside its container
+      ansible.builtin.uri:
+        url: "http://{{ ansible_host }}:{{ netalertx_native_web_port }}/devices.php"
+        status_code: 200
+        follow_redirects: none
+        use_proxy: false
+        return_content: false
+      delegate_to: runner
+      become: false
+      changed_when: false
+
+    - name: Verify GraphQL TCP port is inaccessible from LAN
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host }}"
+        port: "{{ netalertx_native_api_port }}"
+        state: stopped
+        timeout: 12
+      delegate_to: runner
+      become: false
+      changed_when: false
+
+    - name: Report tested native endpoint separation
+      ansible.builtin.debug:
+        msg:
+          result: NATIVE_HTTP_AND_ISOLATION_PASS
+          native_guest: "{{ ansible_host }}"
+          web_port: "{{ netalertx_native_web_port }}"
+          graphql_local_only: true
+          docker: false
+          reboot_persistence: NOT_YET_TESTED
+          network_arp_detection: NOT_YET_TESTED

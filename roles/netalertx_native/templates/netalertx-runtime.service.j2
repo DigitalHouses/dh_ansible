@@ -1,0 +1,12 @@
+[Unit]
+Description=NetAlertX volatile runtime directories
+After=local-fs.target
+Before=netalertx.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/netalertx-runtime-prepare
+
+[Install]
+WantedBy=multi-user.target

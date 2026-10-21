@@ -1,0 +1,14 @@
+[Unit]
+Description=DigitalHouses native NetAlertX protected root worker
+ConditionPathExists=/var/lib/semaphore/dh-netalertx-deploy.request
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/dh-netalertx-deploy
+TimeoutStartSec=3600
+NoNewPrivileges=true
+PrivateTmp=true

@@ -1,0 +1,20 @@
+---
+# Not listed in Semaphore catalog: worker/guest transport is not commissioned.
+# Before using, inventory must contain exactly one independently identity-verified
+# new Linux guest with pinned SSH host key and approved role variables.
+- name: Native NetAlertX on an already commissioned isolated Linux guest
+  hosts: netalertx_new_guest
+  gather_facts: true
+  become: true
+
+  pre_tasks:
+    - name: Require exactly one explicit guest target
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - (ansible_connection | default('ssh')) == 'ssh'
+          - netalertx_native_approved | default(false) | bool
+        fail_msg: "Native installation requires an explicitly approved SSH guest. Nothing changed."
+
+  roles:
+    - role: netalertx_native

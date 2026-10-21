@@ -1,0 +1,97 @@
+---
+- name: Start PHP-FPM before any nginx reload
+  ansible.builtin.systemd_service:
+    name: php8.4-fpm
+    state: started
+    enabled: true
+
+- name: Start nginx before any nginx reload
+  ansible.builtin.systemd_service:
+    name: nginx
+    state: started
+    enabled: true
+
+- name: Apply changed unit files and nginx configuration
+  ansible.builtin.meta: flush_handlers
+
+- name: Start runtime and rerun preparation only if the unit/script changed
+  ansible.builtin.systemd_service:
+    name: netalertx-runtime
+    state: "{{ 'restarted' if (netalertx_native_runtime_script.changed or netalertx_native_runtime_unit.changed) else 'started' }}"
+    enabled: true
+
+- name: Start backend or restart it only after a changed unit
+  ansible.builtin.systemd_service:
+    name: netalertx
+    state: "{{ 'restarted' if netalertx_native_backend_unit.changed else 'started' }}"
+    enabled: true
+
+- name: Verify runtime targets mounted as tmpfs
+  ansible.builtin.command:
+    argv: [findmnt, -n, -T, "{{ item }}", -o, FSTYPE]
+  loop:
+    - /app/log
+    - /tmp/api
+  register: netalertx_native_mount_results
+  changed_when: false
+
+- name: Require the tested runtime mount type
+  ansible.builtin.assert:
+    that: netalertx_native_mount_results.results | map(attribute='stdout') | list == ['tmpfs', 'tmpfs']
+
+- name: Verify Web UI availability
+  ansible.builtin.uri:
+    url: http://127.0.0.1:20211/devices.php
+    status_code: 200
+    return_content: false
+    follow_redirects: none
+    use_proxy: false
+  register: netalertx_native_web
+  until: netalertx_native_web.status | default(0) == 200
+  retries: 10
+  delay: 2
+
+- name: Verify GraphQL route has the correct response, not UI HTML
+  ansible.builtin.uri:
+    url: http://127.0.0.1:20211/server/graphql
+    status_code: 200
+    return_content: true
+    follow_redirects: none
+    use_proxy: false
+  register: netalertx_native_api
+  until: netalertx_native_api.status | default(0) == 200 and ('NetAlertX GraphQL server running.' in (netalertx_native_api.content | default('')))
+  retries: 10
+  delay: 2
+
+- name: Read SQLite integrity without resetting DB
+  ansible.builtin.command:
+    argv: [sqlite3, -readonly, /app/db/app.db, 'PRAGMA quick_check; SELECT COUNT(*) FROM Devices;']
+  register: netalertx_native_db_check
+  changed_when: false
+
+- name: Validate SQLite integrity
+  ansible.builtin.assert:
+    that: netalertx_native_db_check.stdout_lines[0] == 'ok'
+
+- name: Test ARPSCAN sudo permission without network scan
+  ansible.builtin.command:
+    argv: [sudo, -u, www-data, sudo, -n, -l, /usr/sbin/arp-scan]
+  changed_when: false
+
+- name: Check upstream tracked code remains untouched
+  ansible.builtin.command:
+    argv: [git, -C, /app, status, --porcelain, --untracked-files=no]
+  register: netalertx_native_final_git
+  changed_when: false
+
+- name: Verify clean upstream checkout
+  ansible.builtin.assert:
+    that: netalertx_native_final_git.stdout | trim == ''
+
+- name: Show non-secret acceptance
+  ansible.builtin.debug:
+    msg:
+      - "Version {{ netalertx_native_release_tag }} verified; upstream Git clean."
+      - "HTTP Web/API and SQLite quick_check verified."
+      - "No change to PVE onboot, network, firewall, other containers or guests."
+      - "New guest reboot, backup/restore and 24-hour load tests remain required."

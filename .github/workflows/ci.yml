@@ -38,6 +38,7 @@ jobs:
           bash -n bootstrap/remote-commander-install-request.sh
           bash -n bootstrap/semaphore-catalog-sync-request.sh
           bash -n bootstrap/semaphore-launch.sh
+          bash -n bootstrap/netalertx-deploy-request.sh bootstrap/commission-netalertx-worker.sh
       - name: One-shot real Semaphore 2.19.16 API acceptance
         if: contains(github.event.head_commit.message, '[live-semaphore]')
         shell: bash
@@ -79,6 +80,9 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-cloudflare-tunnel.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-netalertx-install.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-netalertx-native.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/deploy-netalertx-pve-from-worker.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-pve-nut-baseline.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-truenas-provision.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-truenas-base.yml

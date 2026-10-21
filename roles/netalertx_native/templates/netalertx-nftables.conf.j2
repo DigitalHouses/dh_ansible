@@ -1,0 +1,8 @@
+# DigitalHouses NetAlertX native GraphQL LAN isolation.
+# Backend may listen on 0.0.0.0; only the local nginx proxy may reach TCP/20212.
+table inet dh_netalertx {
+    chain input {
+        type filter hook input priority -100; policy accept;
+        iifname != "lo" tcp dport {{ netalertx_native_api_port }} drop
+    }
+}

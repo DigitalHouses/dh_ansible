@@ -1,0 +1,28 @@
+[Unit]
+Description=NetAlertX bare-metal
+Wants=network-online.target
+Requires=netalertx-runtime.service nftables.service
+After=network-online.target nginx.service php8.4-fpm.service netalertx-runtime.service nftables.service
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/app
+Environment=NETALERTX_DATA=/app
+Environment=NETALERTX_CONFIG=/app/config
+Environment=NETALERTX_DB=/app/db
+Environment=NETALERTX_LOG=/app/log
+Environment=NETALERTX_API=/tmp/api
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PYTHONPATH=/app:/app/server
+Environment=PATH=/opt/myenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/opt/myenv/bin/python /app/server/
+Restart=on-failure
+RestartSec=5
+UMask=0007
+
+[Install]
+WantedBy=multi-user.target
