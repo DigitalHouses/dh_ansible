@@ -1,0 +1,54 @@
+---
+# This is the privileged worker entry point, NOT a Semaphore catalog task.
+# Executor must be root inside the site runner; keys are root-only.
+- name: Provision guarded NetAlertX LXC using canonical PVE SSH
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Verify privileged executor UID
+      ansible.builtin.command:
+        argv: [id, -u]
+      register: netalertx_worker_uid
+      changed_when: false
+
+    - name: Require root-owned fixed-purpose worker
+      ansible.builtin.assert:
+        that:
+          - netalertx_worker_uid.stdout == '0'
+          - netalertx_pve_worker_approved | default(false) | bool
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+        fail_msg: "This playbook is for an approved root-owned worker, never Semaphore directly."
+
+    - name: Read site identity and target state from private local Fleet
+      ansible.builtin.include_vars:
+        file: "{{ item }}"
+      loop:
+        - "{{ inventory_dir }}/group_vars/all.yml"
+        - "{{ inventory_dir }}/pve.yml"
+        - "{{ inventory_dir }}/pve_access.yml"
+        - "{{ inventory_dir }}/netalertx.yml"
+
+    - name: Validate runner and exact canonical PVE access
+      ansible.builtin.assert:
+        that:
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_access.host.user == 'ansible-linux'
+          - pve_access.host.identity_file | length > 0
+          - pve_access.host.known_hosts_file | length > 0
+
+    - name: Enroll only the configured canonical PVE SSH host, with pinned host key
+      ansible.builtin.add_host:
+        name: dh_netalertx_pve
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+  roles:
+    - role: netalertx_deployment_plan
+    - role: netalertx_pve_lxc
