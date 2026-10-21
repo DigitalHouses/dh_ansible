@@ -107,7 +107,7 @@
           local_origin_http: "{{ cloudflare_local_pve.status | default('unavailable') }}"
           public_dns: "{{ 'RESOLVED' if cloudflare_dns_result.rc == 0 else 'NOT_RESOLVED' }}"
           new_public_http: "{{ cloudflare_public_response.status | default('not_checked') }}"
-          new_public_redirect: "{{ cloudflare_public_response.location | default('none') }}"
+          access_login_redirect_detected: "{{ '/cdn-cgi/access/login' in (cloudflare_public_response.location | default('')) }}"
           legacy_hostname: "{{ cloudflare_legacy_pve_hostname }}"
           legacy_public_http: "{{ cloudflare_old_response.status | default('unavailable') }}"
           access_control: API_READBACK_REQUIRED
