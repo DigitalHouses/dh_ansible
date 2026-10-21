@@ -51,6 +51,9 @@ def stage_host(source, target, mode):
     valid_source(source)
     require(not target.is_symlink(), "HOST_TARGET_SYMLINK")
     if target.is_file():
+        info = target.stat()
+        require(info.st_uid == 0 and stat.S_IMODE(info.st_mode) == mode,
+                "HOST_TARGET_PERMISSIONS_DRIFT")
         require(target.read_bytes() == source.read_bytes(), "HOST_TARGET_CONFLICT")
         print("HOST_STAGE=UNCHANGED " + target.name)
         return
@@ -73,13 +76,14 @@ def stage_guest(ctid, source, target, mode):
         ["pct", "exec", str(ctid), "--", "python3", "-c",
          "import hashlib,pathlib,sys;"
          "p=pathlib.Path(sys.argv[1]);"
-         "print(hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() and not p.is_symlink() else 'ABSENT')",
-         target], capture_output=True, text=True, timeout=25
+         "s=p.stat() if p.is_file() and not p.is_symlink() else None;"
+         "print(('SAFE:' if s.st_uid==0 and (s.st_mode&0o777)==int(sys.argv[2],8) else 'UNSAFE:')+hashlib.sha256(p.read_bytes()).hexdigest() if s else ('UNSAFE' if p.exists() or p.is_symlink() else 'ABSENT'))",
+         target, f"{mode:04o}"], capture_output=True, text=True, timeout=25
     )
     require(existing.returncode == 0, "GUEST_TARGET_AUDIT_FAILED")
     value = existing.stdout.strip()
     expected = hashlib.sha256(source.read_bytes()).hexdigest()
-    if value == expected:
+    if value == "SAFE:" + expected:
         print("GUEST_STAGE=UNCHANGED " + Path(target).name)
         return
     require(value == "ABSENT", "GUEST_TARGET_CONFLICT")
