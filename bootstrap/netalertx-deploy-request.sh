@@ -25,6 +25,7 @@ report() {
 finish() {
     local rc=$?
     set +e
+    if [[ $rc -ne 0 ]]; then RESULT='FAILED'; fi
     if [[ -n "$NONCE" ]]; then report; fi
     if [[ -n "$WORK" ]]; then rm -rf -- "$WORK"; fi
     rm -f -- "$REQ"
