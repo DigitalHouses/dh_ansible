@@ -45,7 +45,7 @@ def renamed_catalog(m):
         m.BOOTSTRAP_TEMPLATES[0],
         ("10-Создание туннеля CF до PVE",
          "10-Создание туннеля CF до PVE",
-         "playbooks/plan-cloudflare-tunnel.yml", m.VIEWS[0]),
+         "playbooks/request-cloudflare-cutover.yml", m.VIEWS[0]),
     ]
 
 
