@@ -8,6 +8,6 @@ Type=oneshot
 User=root
 Group=root
 ExecStart=/usr/local/sbin/dh-cloudflare-runner-cutover
-TimeoutStartSec=240
+TimeoutStartSec=1080
 NoNewPrivileges=true
 PrivateTmp=true
