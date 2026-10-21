@@ -50,6 +50,14 @@ CATALOG_SOURCE = "DigitalHouses/dh_ansible"
 CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
 CATALOG_TOKEN_FORMAT = re.compile(r"[A-Za-z0-9_-]{20,254}={0,2}")
 MANAGED_DESCRIPTION = "DigitalHouses · управляется каталогом dh_ansible"
+# Explicit one-time display-name migration for the canonical Cloudflare lifecycle.
+# New title is published only with a playbook that provisions/reconciles a tunnel.
+CATALOG_RENAMES = {
+    "10-Создание туннеля CF до PVE": (
+        "10-Cloudflare · Туннель объекта (план)",
+        "playbooks/plan-cloudflare-tunnel.yml",
+    ),
+}
 
 API_BASE = "https://127.0.0.1:3000/api"
 
@@ -406,9 +414,11 @@ def sync_existing_template(api, path, desired, *, apply=False):
     if not isinstance(items, list):
         raise Blocked("Cannot read catalog templates")
     title = desired["name"]
-    matches = [item for item in items if item.get("name") == title]
+    legacy = CATALOG_RENAMES.get(title)
+    accepted_names = {title, legacy[0]} if legacy else {title}
+    matches = [item for item in items if item.get("name") in accepted_names]
     if len(matches) > 1:
-        raise Blocked("Duplicate catalog template name: " + title)
+        raise Blocked("Conflicting old/new catalog template names: " + title)
     if not matches:
         if any(item.get("playbook") == desired["playbook"] for item in items):
             raise Blocked("Catalog playbook already bound to another task")
@@ -420,6 +430,11 @@ def sync_existing_template(api, path, desired, *, apply=False):
         print("CATALOG_CREATED=" + title, flush=True)
         return
     current = matches[0]
+    if current.get("name") != title:
+        # Never adopt an arbitrary template simply because its name resembles
+        # the approved alias. Identity, ownership and original binding matter.
+        if not legacy or (current.get("name"), current.get("playbook")) != legacy:
+            raise Blocked("Unexpected Cloudflare legacy template binding: " + title)
     immutable = ("project_id", "app", "repository_id", "inventory_id",
                  "environment_id", "arguments", "type",
                  "autorun", "allow_override_args_in_task")
@@ -429,7 +444,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
     # a deliberately reviewed migration. On fresh installs it is managed.
     if current.get("description") != MANAGED_DESCRIPTION:
         raise Blocked("Template is not catalog-owned: " + title)
-    allowed_change = ("playbook", "view_id")
+    allowed_change = ("name", "playbook", "view_id")
     changed = [k for k in allowed_change if current.get(k) != desired.get(k)]
     if not changed:
         if apply:
@@ -458,6 +473,100 @@ def sync_existing_template(api, path, desired, *, apply=False):
     print("CATALOG_UPDATED=" + title, flush=True)
 
 
+# The former manually-triggered connector task was a temporary split of the
+# single Cloudflare lifecycle. Preserve its task logs before removing that
+# duplicate template from the live Semaphore UI.
+OBSOLETE_CLOUDFLARE = ("11-Cloudflare · Переключить туннель",
+                       "playbooks/request-cloudflare-cutover.yml")
+HISTORY_ARCHIVE = Path("/root/dh-semaphore-template-history")
+
+
+def obsolete_cloudflare_template(api, path, project_id, *, active_catalog):
+    items = api.request("GET", path)
+    if not isinstance(items, list):
+        raise Blocked("Template catalog unavailable during Cloudflare migration")
+    matches = [x for x in items if x.get("name") == OBSOLETE_CLOUDFLARE[0]]
+    if len(matches) > 1:
+        raise Blocked("Duplicate legacy task 11; unsafe to migrate")
+    if not matches:
+        return None
+    item = matches[0]
+    # We only retire task 11 once no catalog task still requests it.
+    if active_catalog:
+        return None
+    expected = {
+        "name": OBSOLETE_CLOUDFLARE[0],
+        "description": MANAGED_DESCRIPTION,
+        "project_id": project_id,
+        "playbook": OBSOLETE_CLOUDFLARE[1],
+        "autorun": False,
+        "allow_override_args_in_task": False,
+    }
+    for key, val in expected.items():
+        if not template_equal(key, item.get(key), val):
+            raise Blocked("Task 11 cannot be retired: unsafe ownership/field drift")
+    if type(item.get("id")) is not int:
+        raise Blocked("Legacy Cloudflare task 11 ID invalid")
+    return item
+
+
+def archive_and_retire_cloudflare_11(api, base, legacy):
+    """One guarded exception to no-delete: export task logs before old UI retire."""
+    tid = legacy["id"]
+    details = api.request("GET", base + "/templates/" + str(tid))
+    if not isinstance(details, dict) or any(
+            details.get(x) != legacy.get(x)
+            for x in ("id", "name", "playbook", "description", "project_id")):
+        raise Blocked("Task 11 details changed since preflight")
+    all_tasks = api.request("GET", base + "/tasks?count=200")
+    if not isinstance(all_tasks, list) or len(all_tasks) >= 200:
+        raise Blocked("Task history cannot be exhaustively enumerated")
+    affected = [task for task in all_tasks if task.get("template_id") == tid]
+    if any(type(t.get("id")) is not int for t in affected):
+        raise Blocked("Legacy task ID invalid")
+    records = []
+    for task in affected:
+        ident = str(task["id"])
+        item = api.request("GET", base + "/tasks/" + ident)
+        output = api.request("GET", base + "/tasks/" + ident + "/output")
+        if (not isinstance(item, dict) or item.get("id") != task["id"]
+                or item.get("template_id") != tid
+                or not isinstance(output, list)
+                or item.get("status") not in ("success", "error", "stopped", "failed")):
+            raise Blocked("Task 11 history is incomplete or active")
+        records.append({"task": item, "output": output})
+    payload = json.dumps({
+        "project_id": legacy["project_id"], "template": details,
+        "tasks": records,
+    }, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    if len(payload) > 10_000_000:
+        raise Blocked("Task history archive exceeds expected size")
+    HISTORY_ARCHIVE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if HISTORY_ARCHIVE.is_symlink() or HISTORY_ARCHIVE.stat().st_uid != os.geteuid():
+        raise Blocked("History archive ownership conflict")
+    HISTORY_ARCHIVE.chmod(0o700)
+    target = HISTORY_ARCHIVE / ("project-" + str(legacy["project_id"])
+                                + "-cloudflare-11.json")
+    if target.exists() or target.is_symlink():
+        if not target.is_file() or target.is_symlink() or target.read_bytes() != payload:
+            raise Blocked("Legacy history archive conflict; no template deleted")
+    else:
+        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    if target.read_bytes() != payload or (target.stat().st_mode & 0o777) != 0o600:
+        raise Blocked("Legacy history archive verification failed")
+    print("CLOUDFLARE_11_HISTORY_ARCHIVED=" + str(len(records)), flush=True)
+    # This is the only catalog-owned template that may be retired.
+    api.request("DELETE", base + "/templates/" + str(tid))
+    remaining = api.request("GET", base + "/templates?sort=name&order=asc")
+    if not isinstance(remaining, list) or any(x.get("id") == tid for x in remaining):
+        raise Blocked("Legacy template retirement not verified")
+    print("CLOUDFLARE_11_REMOVED_FROM_UI=PASS", flush=True)
+
+
 def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
     """Synchronize templates of an existing, exactly identified site project."""
     tasks = read_public_catalog()
@@ -480,6 +589,9 @@ def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
     if len(view_ids) != len(VIEWS) or not all((repo, inv, env)):
         raise Blocked("Site project prerequisite is missing")
     path = prefix + "/templates?sort=name&order=asc"
+    legacy_11 = obsolete_cloudflare_template(
+        api, path, named["id"],
+        active_catalog=any(t[0] == OBSOLETE_CLOUDFLARE[0] for t in tasks))
     # Check the complete catalog first (fail closed before any writes).
     for title, _, playbook, view in tasks:
         desired = {"name": title, "project_id": named["id"], "app": "ansible",
@@ -498,6 +610,8 @@ def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
                        "environment_id": env["id"], "view_id": view_ids[view],
                        "allow_override_args_in_task": False, "autorun": False}
             sync_existing_template(api, path, desired, apply=True)
+        if legacy_11 is not None:
+            archive_and_retire_cloudflare_11(api, prefix, legacy_11)
     return {"state": "APPLIED" if apply else "PLAN_ONLY", "project_id": named["id"]}
 
 

@@ -29,7 +29,7 @@ jobs:
         run: python -m pytest -q -m "not private_fleet" tests/
       - name: Validate Cloudflare root worker Python syntax
         run: |
-          python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py
+          python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
       - name: Validate runner wrapper syntax
         run: bash -n bin/ansimble-run
       - name: Validate PVE installer and release launcher shell syntax

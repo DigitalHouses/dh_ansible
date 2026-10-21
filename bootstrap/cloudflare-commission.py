@@ -2,7 +2,7 @@
 """One-time owner-initiated installer of fixed Cloudflare cutover executors.
 
 Run on the site's PVE as root FROM AN APPROVED, PINNED dh_ansible checkout.
-Does not create/repoint any tunnel, change DNS, install a new connector,
+Does not create/repoint any tunnel, change DNS, or start a connector,
 or obtain/store Cloudflare tokens.
 """
 from __future__ import annotations
@@ -106,8 +106,8 @@ def main():
             "RUNNER_NOT_RUNNING")
     require(checked("pct", "exec", str(args.ctid), "--", "hostname")
             == "ansible-" + args.site, "RUNNER_IDENTITY_DRIFT")
-    require(checked("systemctl", "is-active", "cloudflared.service")
-            == "active", "EXISTING_CLOUDFLARED_INACTIVE")
+    # Cloudflared may be completely absent on a newly commissioned PVE.
+    # Installing the fixed worker does not install/start the tunnel itself.
     for source in (HOST_SOURCE, RUNNER_SOURCE, PATH_SOURCE, SERVICE_SOURCE):
         valid_source(source)
     host_target = Path("/usr/local/sbin/dh-cloudflare-pve-cutover")

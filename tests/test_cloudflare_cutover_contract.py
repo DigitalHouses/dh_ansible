@@ -123,7 +123,7 @@ def test_host_pve_cutover_rollback_restores_legacy_service(monkeypatch, tmp_path
         if args[:2] == ("show", "-P") and args[2] == "User":
             return "root"
         if args[:2] == ("show", "-P") and args[2] == "ExecStart":
-            return "run --token hidden"
+            return "cloudflared tunnel run --token hidden"
         return ""
 
     monkeypatch.setattr(module, "secure_read", lambda path: path.read_text().strip())
@@ -147,7 +147,8 @@ def test_no_automatic_cutover_on_commission():
     code = COMMISSION.read_text()
     assert "CF_CONNECTOR=UNCHANGED" in code
     assert "CF_API_TOKEN=NOT_REQUESTED" in code
-    assert "cloudflared.service" in code
+    assert "EXISTING_CLOUDFLARED_INACTIVE" not in code
+    assert "Cloudflared may be completely absent" in code
     assert 'checked("pct", "exec"' in code
     assert "dh-cloudflare-switch.path" in code
     service = (ROOT / "bootstrap/dh-cloudflare-switch.service").read_text()
@@ -158,7 +159,7 @@ def test_no_automatic_cutover_on_commission():
 def test_catalog_defines_separate_manual_cutover_task():
     data = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
     names = [x["title"] for x in data["tasks"]]
-    assert "10-Cloudflare · Туннель объекта (план)" in names
-    assert "11-Cloudflare · Переключить туннель" in names
-    task = next(x for x in data["tasks"] if x["title"].startswith("11-Cloudflare"))
+    assert "10-Создание туннеля CF до PVE" in names
+    assert not any(name.startswith("11-Cloudflare") for name in names)
+    task = next(x for x in data["tasks"] if x["title"] == "10-Создание туннеля CF до PVE")
     assert task["playbook"] == "playbooks/request-cloudflare-cutover.yml"

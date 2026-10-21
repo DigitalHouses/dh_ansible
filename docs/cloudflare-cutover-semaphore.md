@@ -1,74 +1,54 @@
-# Cloudflare connector cutover via Semaphore
+# 10-Создание туннеля CF до PVE
 
-## Contract
+Одна пользовательская задача Semaphore для site-local PVE. Режимы
+**audit → plan → apply → verify** выполняются внутри одного запуска.
+Действующая задача `11-Cloudflare · Переключить туннель` не входит в новый
+каталог и выводится из эксплуатации только после защищённого архивирования
+её истории запусков.
 
-**One site, one remotely managed Tunnel, one existing PVE cloudflared
-connector process.** Do not create a second systemd cloudflared service.
-Do not delete the old tunnel or automatically migrate its other routes.
+## Порядок действий
 
-Private Fleet \`inventories/<site>/cloudflare.yml\` is the recorded source for
-the observed old routes and ports. The public root-worker scripts derive
-site-specific IDs from protected local one-time enrollment only.
+- Semaphore выполняет фиксированный непривилегированный playbook на
+  `site_runner` и подаёт одноразовый запрос защищённому root-worker.
+- Worker подключается к PVE по существующему host-key-pinned SSH
+  `ansible-linux`, вызывает только фиксированный локальный исполнитель.
+- Если `cloudflared` отсутствует на PVE, исполнитель устанавливает официальный
+  пакет через подписанный APT-репозиторий Cloudflare и создаёт единственную
+  службу `cloudflared.service`.
+- Если служба установлена и привязана к другой конфигурации, исполнитель
+  применяет специальный systemd drop-in с `--token-file`, не создавая
+  вторую службу.
+- Если конфигурация уже соответствует целевой и Tunnel `healthy`,
+  повторный запуск только проверяет состояние без перезапуска службы.
+- При ошибке применения выполняется попытка отката к предыдущей службе.
+  Проверка фактического входа через Cloudflare Access остаётся браузерной.
 
-- Task 10: nonprivileged, read-only local PVE, public DNS and Access challenge.
-- Task 11: operator-initiated fixed-purpose request on local Semaphore;
-  new root-owned runner worker invokes one pinned PVE host script over
-  existing host-key-verified \`ansible-linux\` SSH with \`sudo -n\`.
-- API management token is enrolled once as root on PVE, mode 0600.
-- The connector token is retrieved through Cloudflare API on PVE (GET),
-  stored on PVE as root-only mode 0600, and referenced with
-  \`cloudflared tunnel run --token-file\` on the **same service**.
-- New DNS, ingress and wildcard Access **must already exist** and be
-  independently verified. This implementation NEVER creates/edits them.
-- A readback of healthy Tunnel API status and active service is required
-  before Task 11 reports success.
-- If restart or API health fails, attempt removal of only the dedicated
-  systemd drop-in and restart the pre-existing service.
-- Post-authenticated PVE browser check remains manual; an anonymous 302
-  does not demonstrate that a service is reachable behind Access.
-- Default prior \`noTLSVerify\` configuration is not changed by this cutover.
-  Site owners should separately plan proper origin TLS trust.
+## Защита и ограничения
 
-## One-time commissioning
+В этом релизе **Cloudflare Tunnel, первая конфигурация ingress, DNS и
+приложение Access должны существовать до применения**. Их создание через
+Cloudflare API не выполняется этой задачей. Исполнитель строго проверяет
+соответствие конкретному site и политике Access и не меняет старые ingress
+и DNS записи. Наличие работающего HTTP-редиректа Access не означает
+успешную аутентификацию и доступ к PVE origin.
 
-**Do not** add the private Fleet repository as a Semaphore Git repository.
-Do not give Semaphore the Cloudflare management token, SSH private key or
-PVE sudo access.
+Однократное `--enroll` выполняет владелец из консоли PVE; Cloudflare
+management API token хранится только в root-only файле PVE, не в GitHub,
+не в Semaphore и не передаётся через Cloudflare Access. Для новых объектов
+доступные параметры должны поступать из приватного Fleet inventory.
+Изменение root-owned worker и актуализация синхронизатора задачи `00`
+выполняются отдельной проверенной процедурой по pinned release.
 
-On the site's PVE console (root), obtain a **pinned**, CI-accepted public
-\`dh_ansible\` checkout. Run:
+## Миграция действующего Semaphore
 
-\`\`\`bash
-python3 bootstrap/cloudflare-commission.py --site <site-id>
-\`\`\`
+Переименовать существующую задачу `10` **на месте** с сохранением template
+ID и её истории, одновременно сменив playbook на полную операцию.
+Шаблон `11` удалить только после получения и проверки всех завершённых
+задач и их выводов через API с сохранением архивного JSON
+`/root/dh-semaphore-template-history/project-<id>-cloudflare-11.json`
+(режим 0600) на runner. Удаление шаблона через API Semaphore 2.19.16
+удаляет историю дочерних задач из рабочей базы; архив не заменяет UI-историю.
+На свежем runner в каталоге сразу только одна Cloudflare-задача.
 
-This installs only the fixed host executor and CT1231 root watcher; it does
-**not** switch tunnels. All new root-controlled files require source/target
-identity checks and must not overwrite unknown local files.
-
-Then, on the same PVE host, enroll the site's Cloudflare metadata and API
-token once via the hidden prompt (all parameter values from private Fleet;
-old name is the literal observed Cloudflare name):
-
-\`\`\`bash
-/usr/local/sbin/dh-cloudflare-pve-cutover --enroll \
-  --site-id <site-id> --pve-host <site-pve-ip> \
-  --account-id <cf-account-id> --zone-id <cf-zone-id> \
-  --old-tunnel-id <old-uuid> --old-tunnel-name '<old-name>' \
-  --new-tunnel-id <new-uuid> \
-  --access-app-id <wildcard-access-id> \
-  --access-policy-id <reusable-policy-id>
-\`\`\`
-
-No command-line parameters include token or password. The script checks
-the existing old and new Tunnel, canonical single route, exact DNS CNAME,
-wildcard Access and attached administrator policy. Enrollment does not
-modify either tunnel or the connector.
-
-In Semaphore run task 00 to obtain template 11; run task 50 to accept
-the existing PVE SSH/sudo identity; manually run template 11.
-After PASS, verify browser login to the new canonical PVE hostname.
-
-The accepted immutable bootstrap release is unchanged by installing this
-on-demand component; fleet-wide first-install integration is a future,
-independently accepted milestone.
+Правило проекта: **одна служба — одна задача Semaphore, а дом
+отличается данными, а не кодом**.
