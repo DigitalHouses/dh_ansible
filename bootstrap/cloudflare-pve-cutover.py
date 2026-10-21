@@ -55,6 +55,19 @@ def atomic_new(path, data, mode=0o600):
     os.chmod(path, mode)
 
 
+def atomic_binary(path, content, mode=0o644):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+    require(not path.exists() and not path.is_symlink(),
+            "TARGET_ALREADY_EXISTS_" + path.name)
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                 | getattr(os, "O_NOFOLLOW", 0), mode)
+    with os.fdopen(fd, "wb") as out:
+        out.write(content)
+        out.flush()
+        os.fsync(out.fileno())
+    os.chmod(path, mode)
+
+
 def api(token, method, path):
     req = urllib.request.Request(
         BASE + path,
@@ -78,13 +91,15 @@ def verify_cloudflare(token, cfg, *, require_old_healthy):
     require(isinstance(auth, dict) and auth.get("status") == "active", "API_TOKEN_INACTIVE")
 
     prefix = "/accounts/" + cfg["account_id"]
-    old = api(token, "GET", prefix + "/cfd_tunnel/" + cfg["old_tunnel_id"])
+    old = (api(token, "GET", prefix + "/cfd_tunnel/" + cfg["old_tunnel_id"])
+           if cfg.get("old_tunnel_id") else None)
     new = api(token, "GET", prefix + "/cfd_tunnel/" + cfg["new_tunnel_id"])
-    require(isinstance(old, dict) and old.get("name") == cfg["old_tunnel_name"]
-            and old.get("config_src") == "cloudflare", "LEGACY_TUNNEL_DRIFT")
+    if old is not None:
+        require(isinstance(old, dict) and old.get("name") == cfg["old_tunnel_name"]
+                and old.get("config_src") == "cloudflare", "LEGACY_TUNNEL_DRIFT")
     require(isinstance(new, dict) and new.get("name") == cfg["site_id"]
             and new.get("config_src") == "cloudflare", "CANONICAL_TUNNEL_DRIFT")
-    if require_old_healthy:
+    if require_old_healthy and old is not None:
         require(old.get("status") == "healthy", "LEGACY_TUNNEL_NOT_HEALTHY")
 
     zone = api(token, "GET", "/zones/" + cfg["zone_id"])
@@ -126,13 +141,18 @@ def verify_identity():
 
 def config_from_args(args):
     require(SITE.fullmatch(args.site_id), "INVALID_SITE_ID")
-    for key in ("old_tunnel_id", "new_tunnel_id", "account_id", "zone_id",
+    for key in ("new_tunnel_id", "account_id", "zone_id",
                 "access_app_id", "access_policy_id"):
         value = getattr(args, key)
         require(bool(UUID.fullmatch(value)) if "tunnel_id" in key or "app_id" in key
                 or "policy_id" in key else bool(re.fullmatch("[0-9a-f]{32}", value)),
                 "INVALID_" + key)
-    require(args.old_tunnel_id != args.new_tunnel_id, "TUNNEL_IDS_COLLIDE")
+    if args.old_tunnel_id:
+        require(bool(UUID.fullmatch(args.old_tunnel_id)) and args.old_tunnel_name,
+                "LEGACY_ID_OR_NAME_INVALID")
+        require(args.old_tunnel_id != args.new_tunnel_id, "TUNNEL_IDS_COLLIDE")
+    else:
+        require(not args.old_tunnel_name, "OLD_NAME_WITHOUT_TUNNEL")
     require(args.zone == "digitalhouses.vip", "UNSUPPORTED_ZONE")
     host = args.pve_host
     require(re.fullmatch(r"192\.168\.\d{1,3}\.\d{1,3}", host), "UNEXPECTED_PVE_IP")
@@ -154,7 +174,7 @@ def enroll(args):
         require(json.loads(secure_read(CONFIG)) == cfg, "SITE_CONFIG_DRIFT")
     token = getpass.getpass("Cloudflare API token (hidden): ").strip()
     require(20 <= len(token) <= 512, "API_TOKEN_INVALID")
-    verify_cloudflare(token, cfg, require_old_healthy=True)
+    verify_cloudflare(token, cfg, require_old_healthy=bool(cfg["old_tunnel_id"]))
     new_token = api(token, "GET", "/accounts/" + cfg["account_id"]
                     + "/cfd_tunnel/" + cfg["new_tunnel_id"] + "/token")
     require(isinstance(new_token, str) and 80 <= len(new_token) <= 4096,
@@ -215,7 +235,7 @@ def install_missing_cloudflared():
         proc = subprocess.run(["/usr/bin/gpg", "--show-keys", "--batch"],
                               input=data, capture_output=True, timeout=20)
         require(proc.returncode == 0, "CLOUDFLARED_APT_KEY_NOT_OPENPGP")
-        atomic_new(key, data, mode=0o644)
+        atomic_binary(key, data, mode=0o644)
     if not source.exists():
         atomic_new(source, desired, mode=0o644)
     for command in (
@@ -386,8 +406,8 @@ def main():
     args = parser.parse_args()
     verify_identity()
     if args.enroll:
-        for key in ("site_id", "account_id", "zone_id", "old_tunnel_id",
-                    "new_tunnel_id", "access_app_id", "access_policy_id", "pve_host", "old_tunnel_name"):
+        for key in ("site_id", "account_id", "zone_id",
+                    "new_tunnel_id", "access_app_id", "access_policy_id", "pve_host"):
             require(getattr(args, key), "ENROLLMENT_ARG_REQUIRED_" + key)
         enroll(args)
     else:
