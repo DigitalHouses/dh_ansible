@@ -1,74 +1,86 @@
-# Cloudflare connector cutover via Semaphore
+# Semaphore task 10 — Создание туннеля на PVE
 
-## Contract
+## User-facing contract
 
-**One site, one remotely managed Tunnel, one existing PVE cloudflared
-connector process.** Do not create a second systemd cloudflared service.
-Do not delete the old tunnel or automatically migrate its other routes.
+The Semaphore task catalog contains **one** Cloudflare lifecycle entry:
+\`10-Создание туннеля на PVE\`.
 
-Private Fleet \`inventories/<site>/cloudflare.yml\` is the recorded source for
-the observed old routes and ports. The public root-worker scripts derive
-site-specific IDs from protected local one-time enrollment only.
+- \`audit\`: verify local site and PVE identities and Cloudflare API token
+  kept root-only **on PVE**; verify remotely-managed tunnel, ingress, DNS,
+  wildcard Access application and attached administrator policy.
+- \`plan\`: determine \`INSTALL_NEW\`, \`RECONFIGURE_EXISTING\` or
+  \`VERIFY_ONLY\` from the actual PVE systemd and connector state.
+- \`apply\`: if missing, install \`cloudflared\` from Cloudflare's signed
+  Debian APT repository and create exactly one systemd service. If present,
+  reuse the same service, apply a scoped drop-in and a root-only token file.
+  No new process/service if an existing \`cloudflared\` is running.
+- \`verify\`: require Cloudflare API tunnel \`healthy\` and local service
+  active. Repeated execution must report \`CF_CUTOVER=ALREADY_APPLIED\`
+  and \`CLOUDFLARE_APPLY=UNCHANGED\`.
+- On failure, remove only the newly staged unit/drop-in/token and attempt
+  to restore the prior systemd state. An APT-installed package may remain.
+- Browser Access post-authenticated check is **manual**; Semaphore must not
+  be granted an Access bypass or browser account.
 
-- Task 10: nonprivileged, read-only local PVE, public DNS and Access challenge.
-- Task 11: operator-initiated fixed-purpose request on local Semaphore;
-  new root-owned runner worker invokes one pinned PVE host script over
-  existing host-key-verified \`ansible-linux\` SSH with \`sudo -n\`.
-- API management token is enrolled once as root on PVE, mode 0600.
-- The connector token is retrieved through Cloudflare API on PVE (GET),
-  stored on PVE as root-only mode 0600, and referenced with
-  \`cloudflared tunnel run --token-file\` on the **same service**.
-- New DNS, ingress and wildcard Access **must already exist** and be
-  independently verified. This implementation NEVER creates/edits them.
-- A readback of healthy Tunnel API status and active service is required
-  before Task 11 reports success.
-- If restart or API health fails, attempt removal of only the dedicated
-  systemd drop-in and restart the pre-existing service.
-- Post-authenticated PVE browser check remains manual; an anonymous 302
-  does not demonstrate that a service is reachable behind Access.
-- Default prior \`noTLSVerify\` configuration is not changed by this cutover.
-  Site owners should separately plan proper origin TLS trust.
+### Configuration prerequisites
 
-## One-time commissioning
+Cloudflare account/zone identity, site PVE origin, remotely managed Tunnel
+ID, DNS and ingress route, and administrator Access policy must be provisioned
+or reconciled by authorized infrastructure onboarding before this task.
+One-time \`--enroll\` securely stores the narrowly scoped API token and
+validated site metadata on PVE; it accepts a site without a legacy tunnel.
 
-**Do not** add the private Fleet repository as a Semaphore Git repository.
-Do not give Semaphore the Cloudflare management token, SSH private key or
-PVE sudo access.
+This stage does **not** create the Cloudflare account, new remote Tunnel
+object, DNS record or Access policy. It configures the connector process on
+PVE after those server-side prerequisites pass. Absent prerequisites must
+fail closed, never publish an unprotected public route.
 
-On the site's PVE console (root), obtain a **pinned**, CI-accepted public
-\`dh_ansible\` checkout. Run:
+Site-specific observed routes and ports are in the PRIVATE
+\`dh_ansible_fleet_detail\` inventory and are not copied into public code.
 
-\`\`\`bash
-python3 bootstrap/cloudflare-commission.py --site <site-id>
-\`\`\`
+### Existing home-site upgrade
 
-This installs only the fixed host executor and CT1231 root watcher; it does
-**not** switch tunnels. All new root-controlled files require source/target
-identity checks and must not overwrite unknown local files.
+The accepted host and runner previously used manual task 11. Upgrading to
+the one-task lifecycle requires a pinned, root-authorized replacement of:
 
-Then, on the same PVE host, enroll the site's Cloudflare metadata and API
-token once via the hidden prompt (all parameter values from private Fleet;
-old name is the literal observed Cloudflare name):
+1. PVE fixed-purpose host worker \`dh-cloudflare-pve-cutover\`.
+2. Runner pinned \`semaphore-project.py\` (task 00 catalog sync code).
+3. Runner fixed-purpose worker if its timed installation contract is changed.
+4. Systemd runner unit timeout.
 
-\`\`\`bash
-/usr/local/sbin/dh-cloudflare-pve-cutover --enroll \
-  --site-id <site-id> --pve-host <site-pve-ip> \
-  --account-id <cf-account-id> --zone-id <cf-zone-id> \
-  --old-tunnel-id <old-uuid> --old-tunnel-name '<old-name>' \
-  --new-tunnel-id <new-uuid> \
-  --access-app-id <wildcard-access-id> \
-  --access-policy-id <reusable-policy-id>
-\`\`\`
+\`bootstrap/cloudflare-task10-upgrade.py\` checks exact historical trusted
+source bytes against the previous accepted commit before replacing the
+two privileged Python files. It **does not** change the active connector,
+rotate tokens, or edit the Semaphore DB.
 
-No command-line parameters include token or password. The script checks
-the existing old and new Tunnel, canonical single route, exact DNS CNAME,
-wildcard Access and attached administrator policy. Enrollment does not
-modify either tunnel or the connector.
+The fixed-purpose runner worker and associated timeout should be upgraded
+separately before fresh-install acceptance. The existing home site has an
+active and accepted Tunnel and does not require a fresh install.
 
-In Semaphore run task 00 to obtain template 11; run task 50 to accept
-the existing PVE SSH/sudo identity; manually run template 11.
-After PASS, verify browser login to the new canonical PVE hostname.
+### Task 11 retirement and history
 
-The accepted immutable bootstrap release is unchanged by installing this
-on-demand component; fleet-wide first-install integration is a future,
-independently accepted milestone.
+After updating the pinned Semaphore synchronizer, task \`00\`:
+
+1. Confirms the exact legacy title, managed ownership and bound playbook.
+2. Updates task \`10\` **in place** from its old name/playbook to the canonical
+   one, preserving the template ID and its old task history.
+3. Enumerates all current project tasks (up to 199, otherwise fail closed)
+   and exports the old task-11 metadata and raw output API records to
+   root-only \`/root/dh-semaphore-template-history/\`.
+4. Verifies the archive and only then removes the redundant task-11
+   **template** through the supported Semaphore REST API.
+5. Verifies only one canonical Cloudflare template remains. Prior task logs
+   are preserved in the root archive; whether Semaphore retains the linked
+   UI history after template deletion is not assumed.
+
+No direct SQLite changes or unconditional template deletes.
+
+### Limitations
+
+- Cloudflare SaaS provisioning and publishing all other service routes from
+  Fleet inventory are separate future enhancements **inside the same task
+  10 lifecycle**, not new numbered tasks.
+- This initial clean-PVE install path is covered by unit/CI checks but still
+  requires a destructive fresh-PVE E2E test before calling it accepted.
+- Root-only API token and explicit onboarding remain necessary. No system
+  can provision a Cloudflare account without authorized credentials.
