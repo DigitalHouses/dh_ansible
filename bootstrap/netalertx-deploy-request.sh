@@ -31,9 +31,9 @@ finish() {
     rm -f -- "$REQ"
     return "$rc"
 }
-trap finish EXIT
 exec 9>"$LOCK"
 flock -n 9 || { echo 'Another NetAlertX deployment is running' >&2; exit 1; }
+trap finish EXIT
 [[ -f "$REQ" ]] || exit 0
 [[ "$(stat -c %U "$REQ")" == semaphore ]] || exit 2
 [[ "$(stat -c %a "$REQ")" == 600 ]] || exit 2
