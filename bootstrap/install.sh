@@ -16,8 +16,15 @@ if (( $# == 1 )); then
     --resume|--resume-fresh|--resume-ansible|--resume-semaphore) RESUME_ARGS=("$1") ;;
     *) echo "BLOCKED: unknown argument. Site ID is entered interactively." >&2; exit 2 ;;
   esac
+elif (( $# == 2 )); then
+  if [[ "$1" == "--resume-semaphore" && "$2" == "--restore-pve-access" ]]; then
+    RESUME_ARGS=("$1" "$2")
+  else
+    echo "BLOCKED: --restore-pve-access requires --resume-semaphore" >&2
+    exit 2
+  fi
 elif (( $# != 0 )); then
-  echo "BLOCKED: usage: install.sh [--resume|--resume-fresh|--resume-ansible|--resume-semaphore]" >&2
+  echo "BLOCKED: usage: install.sh [--resume|--resume-fresh|--resume-ansible|--resume-semaphore [--restore-pve-access]]" >&2
   exit 2
 fi
 if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
