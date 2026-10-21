@@ -36,7 +36,7 @@
 - name: Show exact isolated NetAlertX deployment plan
   ansible.builtin.debug:
     msg:
-      result: PLAN_ONLY
+      result: "{{ 'READY_TO_APPLY' if (netalertx.security.provision_approved | bool and netalertx.security.dhcp_exclusion_verified | bool and netalertx.security.api_lan_isolation_verified | bool) else 'PLAN_ONLY' }}"
       site: "{{ site.id }}"
       deployment: native
       target_vmid: "{{ netalertx.vmid }}"
@@ -56,4 +56,4 @@
       privileged_deployment_worker: NOT_YET_COMMISSIONED
       changes: NONE
       installation: NOT_PERFORMED
-      note: "Нативная установка заблокирована до отдельной PVE-preflight и commissioning защищённого исполнителя."
+      note: "Статус отражает готовность Fleet gates, но не результат root-worker. Установка подтверждается только отдельной E2E verify."
