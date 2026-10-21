@@ -83,7 +83,7 @@
     argv: [pct, start, "{{ netalertx.vmid }}"]
   delegate_to: dh_netalertx_pve
   become: true
-  when: netalertx_guest_power.stdout == 'status: stopped'
+  when: "netalertx_guest_power.stdout == 'status: stopped'"
 
 - name: Verify new guest Debian version through trusted PVE console
   ansible.builtin.command:
