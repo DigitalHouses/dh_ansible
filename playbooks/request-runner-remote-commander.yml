@@ -39,7 +39,7 @@
         that:
           - remote_request_watcher.stdout == 'active'
   tasks:
-    - name: Check installed Remote Commander
+    - name: Check existing Remote Commander service
       ansible.builtin.command:
         argv: [systemctl, is-active, digitalhouses-remote-commander.service]
       register: remote_request_existing
@@ -47,13 +47,18 @@
       changed_when: false
       check_mode: false
 
-    - name: Explain installation progress and device pairing
+    - name: Show authorization link immediately in the task output
       ansible.builtin.debug:
         msg:
-          - "The local root-owned watcher installs Remote Commander; Node.js/npm may take several minutes."
-          - "Semaphore will show the live confirmation URL and one-time code below."
-          - "Only a sanitized short-lived code is readable by Semaphore; no journal or secrets are shared."
-          - "Authorization requires opening the URL in your own browser."
+          component: Remote Desktop Commander
+          authorization_url: "https://mcp.desktopcommander.app/device/verify"
+          instruction: "Откройте ссылку. Если нужен код, он появится ниже после запуска агента."
+          note: "Если агент уже авторизован, повторный код не требуется."
+
+    - name: Capture previous worker status timestamp to reject stale success
+      ansible.builtin.stat:
+        path: /run/dh-remote-commander-install.status
+      register: remote_request_previous_status
 
     - name: Generate unique Remote Commander request ID
       ansible.builtin.command:
@@ -68,51 +73,105 @@
         content: "{{ 'PAIR' if remote_request_existing.stdout == 'active' else 'INSTALL' }}:{{ remote_request_id.stdout }}\n"
         mode: "0600"
 
-    - name: Await managed Remote Commander service
+    - name: Wait for a NEW worker status (not the previous task result)
+      ansible.builtin.stat:
+        path: /run/dh-remote-commander-install.status
+      register: remote_request_new_status
+      changed_when: false
+      until: >-
+        remote_request_new_status.stat.exists | default(false)
+        and
+        (
+          not (remote_request_previous_status.stat.exists | default(false))
+          or
+          (remote_request_new_status.stat.mtime | float) >
+          (remote_request_previous_status.stat.mtime | float)
+        )
+      retries: 30
+      delay: 2
+
+    - name: Await root worker result, including explicit failure
+      ansible.builtin.command:
+        argv: [cat, /run/dh-remote-commander-install.status]
+      register: remote_request_result
+      changed_when: false
+      failed_when: false
+      until: remote_request_result.stdout in ['PASS', 'FAILED']
+      retries: 120
+      delay: 5
+
+    - name: Read managed service status for actionable diagnostics
       ansible.builtin.command:
         argv: [systemctl, is-active, digitalhouses-remote-commander.service]
       register: remote_request_active
       changed_when: false
       failed_when: false
-      until: remote_request_active.stdout == 'active'
-      retries: 90
-      delay: 10
       check_mode: false
 
-    - name: Await sanitized OAuth pairing status
+    - name: Report installer failure instead of retrying silently
+      ansible.builtin.fail:
+        msg: >-
+          Remote Desktop Commander не запущен:
+          worker={{ remote_request_result.stdout | default('UNKNOWN') }},
+          service={{ remote_request_active.stdout | default('UNKNOWN') }}.
+          Ссылка авторизации: https://mcp.desktopcommander.app/device/verify .
+          Одноразовый код НЕ выдавался или недоступен;
+          для диагностики нужен root-only журнал
+          /var/log/dh-remote-commander-install.log внутри runner CT.
+      when: >-
+        remote_request_result.stdout != 'PASS'
+        or remote_request_active.stdout != 'active'
+
+    - name: Read the authorization result for THIS request only
       ansible.builtin.command:
         argv: [cat, /run/dh-remote-commander-pairing.status]
       register: remote_pairing_record
       changed_when: false
       failed_when: false
-      until: remote_pairing_record.stdout.startswith('PAIR|' ~ remote_request_id.stdout ~ '|')
-      retries: 60
+      until: >-
+        remote_pairing_record.stdout.startswith('PAIR|' ~ remote_request_id.stdout ~ '|')
+      retries: 5
       delay: 2
-      check_mode: false
 
-    - name: Show actual one-time pairing code and URL inside Semaphore
+    - name: Show actual one-time code AND clickable authorization URL
       ansible.builtin.debug:
         msg:
-          pairing_code: "{{ remote_pairing_record.stdout.split('|')[3] }}"
-          verification_url: "{{ remote_pairing_record.stdout.split('|')[4] }}"
-          action: "Open verification_url in your browser, sign in, and confirm pairing_code."
-          expires: "Provider code expires 15 minutes after issuance. Re-run this task if the device issues a new code."
-      when: remote_pairing_record.stdout.split('|')[2] == 'CODE'
+          authorization_url: "{{ remote_pairing_record.stdout.split('|')[4] }}"
+          one_time_code: "{{ remote_pairing_record.stdout.split('|')[3] }}"
+          instruction: "Откройте authorization_url и подтвердите one_time_code."
+          expires: "Код действителен ограниченное время; при истечении запустите задачу 40 повторно."
+      when:
+        - remote_pairing_record.stdout.split('|') | length == 5
+        - remote_pairing_record.stdout.split('|')[2] == 'CODE'
 
-    - name: Explain connected or pending authorization
+    - name: Show already-authorized agent status
       ansible.builtin.debug:
         msg:
-          authorization_state: "{{ remote_pairing_record.stdout.split('|')[2] }}"
-          verification_url: "https://mcp.desktopcommander.app/device/verify"
-          note: "If WAITING, the code has not appeared yet or is expired; inspect the agent on PVE. CONNECTED means the agent reported authorization."
-      when: remote_pairing_record.stdout.split('|')[2] != 'CODE'
+          authorization_url: "https://mcp.desktopcommander.app/device/verify"
+          state: ALREADY_AUTHORIZED
+          one_time_code: NOT_REQUIRED
+      when:
+        - remote_pairing_record.stdout.split('|') | length >= 3
+        - remote_pairing_record.stdout.split('|')[2] == 'CONNECTED'
 
-    - name: Report installed service and independent connection check
+    - name: Refuse false success when no active code was issued
+      ansible.builtin.fail:
+        msg: >-
+          Агент запущен, но одноразовый код не получен.
+          Статус={{ remote_pairing_record.stdout.split('|')[2] | default('UNKNOWN') }}.
+          Ссылка: https://mcp.desktopcommander.app/device/verify .
+          Проверьте root-only journalctl -u digitalhouses-remote-commander.service
+          на runner и повторите задачу 40 после устранения причины.
+      when: >-
+        remote_pairing_record.stdout.split('|') | length < 3
+        or remote_pairing_record.stdout.split('|')[2] not in ['CODE', 'CONNECTED']
+
+    - name: Report service availability separately from remote authorization
       ansible.builtin.debug:
         msg:
-          result: PASS
+          result: SERVICE_ACTIVE
           site: "{{ site.id }}"
           component: remote_desktop_commander
-          service_status: ACTIVE
           pairing_state: "{{ remote_pairing_record.stdout.split('|')[2] }}"
-          note: "Service ACTIVE alone does not prove the device is Online in Remote MCP."
+          authorization_url: "https://mcp.desktopcommander.app/device/verify"
+          note: "Подтвердите код в браузере, затем проверьте статус Online через Desktop Commander. ACTIVE не означает Online."
