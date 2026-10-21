@@ -7,7 +7,7 @@
       "view": "01 · Подготовка"
     },
     {
-      "title": "10-Создание туннеля на PVE",
+      "title": "10-Создание туннеля CF до PVE",
       "playbook": "playbooks/request-cloudflare-cutover.yml",
       "view": "01 · Подготовка"
     },
