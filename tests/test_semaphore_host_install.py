@@ -105,7 +105,7 @@ def test_resume_requires_explicit_option_and_separate_confirmation():
     assert 'create_runner(args.site, args.runner_cidr, args.gateway, template)' in s
     assert 'resume=args.resume' in s
     assert 'CT1231=VERIFIED_EXISTING_EMPTY_RUNNER' in s
-    assert '"local-lvm:vm-1231-disk-0,size=16G"' in s
+    assert 're.fullmatch(r"local-lvm:vm-1231-disk-[0-9]+,size=16G"' in s
     assert 'pct_guest("test", "-f", "/opt/digitalhouses/bootstrap/semaphore-guest-install.py")' in s
 
 
