@@ -11,5 +11,7 @@
   ansible.builtin.import_tasks: runtime.yml
 - name: Configure minimal nginx integration
   ansible.builtin.import_tasks: nginx.yml
+- name: Reconcile approved upstream hostname resolvers
+  ansible.builtin.import_tasks: name_resolution.yml
 - name: Start and verify services
   ansible.builtin.import_tasks: verify.yml
