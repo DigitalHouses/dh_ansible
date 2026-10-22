@@ -6,7 +6,7 @@
     that:
       - netalertx_native_name_resolution is mapping
       - netalertx_native_name_resolution.keys() | difference(['NSLOOKUP', 'AVAHISCAN', 'NBTSCAN', 'DIGSCAN']) | length == 0
-      - netalertx_native_name_resolution.values() | difference(['before_name_updates']) | length == 0
+      - netalertx_native_name_resolution.values() | difference(['before_name_updates', 'on_new_device', 'disabled']) | length == 0
     fail_msg: "Only four stock NetAlertX name-resolution plugins in before_name_updates mode are supported."
 
 - name: Read current user-editable NetAlertX configuration without modifying it
