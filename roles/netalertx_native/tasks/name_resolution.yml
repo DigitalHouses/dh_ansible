@@ -41,7 +41,7 @@
       - netalertx_native_existing_plugins is sequence
       - netalertx_native_existing_plugins is not string
       - netalertx_native_existing_plugins | length > 0
-      - netalertx_native_existing_plugins | difference(['ARPSCAN','DBCLNP','MAINT','NEWDEV','NTFPRCS','SETPWD','WORKFLOWS','UI','NSLOOKUP','AVAHISCAN','NBTSCAN','DIGSCAN','CSVBCKP','DHCPLSS','NMAP','IPNEIGH','VNDRPDT','INTRNT','ICMP','WOL','SNMPDSC','NMAPDEV','UNFIMP','MQTT','PIHOLE','PIHOLEAPI','RSTIMPRT']) | length >= 0
+      - netalertx_native_existing_plugins | select('string') | list | length == netalertx_native_existing_plugins | length
     fail_msg: "Existing plugin list must be an array; no destructive rewrite."
   when: netalertx_native_name_resolution | length > 0
 
