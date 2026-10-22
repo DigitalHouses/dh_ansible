@@ -14,6 +14,7 @@ netalertx_native_web_port: 20211
 netalertx_native_api_port: 20212
 netalertx_native_php_socket: "/run/php/php8.4-fpm.sock"
 netalertx_native_arp_test_approved: false
+netalertx_native_name_resolution: {}
 netalertx_native_initial_settings:
   BACKEND_API_URL: "'/server'"
   GRAPHQL_PORT: "20212"
