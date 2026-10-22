@@ -1,0 +1,78 @@
+---
+# Built-in upstream name plugins only. Never patch NetAlertX code or database.
+# The caller supplies per-site desired plugin modes from private Fleet.
+- name: Validate explicitly selected upstream name-resolution plugins
+  ansible.builtin.assert:
+    that:
+      - netalertx_native_name_resolution is mapping
+      - netalertx_native_name_resolution.keys() | difference(['NSLOOKUP', 'AVAHISCAN', 'NBTSCAN', 'DIGSCAN']) | length == 0
+      - netalertx_native_name_resolution.values() | difference(['before_name_updates']) | length == 0
+    fail_msg: "Only four stock NetAlertX name-resolution plugins in before_name_updates mode are supported."
+
+- name: Read current user-editable NetAlertX configuration without modifying it
+  ansible.builtin.slurp:
+    src: /app/config/app.conf
+  register: netalertx_native_name_conf
+  no_log: true
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Locate exactly one existing loaded-plugin setting
+  ansible.builtin.set_fact:
+    netalertx_native_loaded_plugin_lines: >-
+      {{ (netalertx_native_name_conf.content | b64decode)
+         | regex_findall('(?m)^LOADED_PLUGINS=([^\\r\\n]*)$') }}
+  no_log: true
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Refuse ambiguous NetAlertX plugin configuration
+  ansible.builtin.assert:
+    that: netalertx_native_loaded_plugin_lines | length == 1
+    fail_msg: "LOADED_PLUGINS is missing or ambiguous. Existing configuration left unchanged."
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Decode installed plugins and preserve unrelated Web UI choices
+  ansible.builtin.set_fact:
+    netalertx_native_existing_plugins: "{{ netalertx_native_loaded_plugin_lines[0] | from_json }}"
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Validate installed plugin list before selective merge
+  ansible.builtin.assert:
+    that:
+      - netalertx_native_existing_plugins is sequence
+      - netalertx_native_existing_plugins is not string
+      - netalertx_native_existing_plugins | length > 0
+      - netalertx_native_existing_plugins | difference(['ARPSCAN','DBCLNP','MAINT','NEWDEV','NTFPRCS','SETPWD','WORKFLOWS','UI','NSLOOKUP','AVAHISCAN','NBTSCAN','DIGSCAN','CSVBCKP','DHCPLSS','NMAP','IPNEIGH','VNDRPDT','INTRNT','ICMP','WOL','SNMPDSC','NMAPDEV','UNFIMP','MQTT','PIHOLE','PIHOLEAPI','RSTIMPRT']) | length >= 0
+    fail_msg: "Existing plugin list must be an array; no destructive rewrite."
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Enroll native resolvers without removing other plugins
+  ansible.builtin.lineinfile:
+    path: /app/config/app.conf
+    regexp: '^LOADED_PLUGINS='
+    line: "LOADED_PLUGINS={{ (netalertx_native_existing_plugins + (netalertx_native_name_resolution.keys() | list)) | unique | list | to_json }}"
+    owner: www-data
+    group: www-data
+    mode: "0600"
+    backup: false
+  register: netalertx_native_name_loaded
+  when: netalertx_native_name_resolution | length > 0
+
+- name: Enable approved upstream name resolvers at each name-update pass
+  ansible.builtin.lineinfile:
+    path: /app/config/app.conf
+    regexp: "^{{ item.key }}_RUN="
+    line: '{{ item.key }}_RUN="{{ item.value }}"'
+    owner: www-data
+    group: www-data
+    mode: "0600"
+    backup: false
+  loop: "{{ netalertx_native_name_resolution | dict2items }}"
+  register: netalertx_native_name_modes
+
+- name: Record whether managed name-resolution settings changed
+  ansible.builtin.set_fact:
+    netalertx_native_name_config_changed: >-
+      {{
+        (netalertx_native_name_loaded.changed | default(false))
+        or (netalertx_native_name_modes.changed | default(false))
+      }}
