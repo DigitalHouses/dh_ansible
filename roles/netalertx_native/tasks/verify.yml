@@ -23,7 +23,7 @@
 - name: Start backend or restart it only after a changed unit
   ansible.builtin.systemd_service:
     name: netalertx
-    state: "{{ 'restarted' if netalertx_native_backend_unit.changed else 'started' }}"
+    state: "{{ 'restarted' if (netalertx_native_backend_unit.changed or netalertx_native_name_config_changed | default(false) | bool) else 'started' }}"
     enabled: true
 
 - name: Verify runtime targets mounted as tmpfs
