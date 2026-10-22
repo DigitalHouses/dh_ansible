@@ -37,7 +37,7 @@ def test_loaded_plugin_parser_captures_exactly_one_line():
     import re
     text = (ROOT / "roles/netalertx_native/tasks/name_resolution.yml").read_text()
     assert "regex_findall('(?m)^LOADED_PLUGINS=(.*)$')" in text
-    sample = 'LOADED_PLUGINS=["ARPSCAN","UI"]\\nNSLOOKUP_RUN="disabled"\\nDIGSCAN_RUN="disabled"\\n'
+    sample = 'LOADED_PLUGINS=["ARPSCAN","UI"]\nNSLOOKUP_RUN="disabled"\nDIGSCAN_RUN="disabled"\n'
     values = re.findall(r"(?m)^LOADED_PLUGINS=(.*)$", sample)
     assert len(values) == 1
     assert json.loads(values[0]) == ["ARPSCAN", "UI"]
