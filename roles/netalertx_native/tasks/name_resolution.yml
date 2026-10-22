@@ -20,7 +20,7 @@
   ansible.builtin.set_fact:
     netalertx_native_loaded_plugin_lines: >-
       {{ (netalertx_native_name_conf.content | b64decode)
-         | regex_findall('(?m)^LOADED_PLUGINS=([^\\r\\n]*)$') }}
+         | regex_findall('(?m)^LOADED_PLUGINS=(.*)$') }}
   no_log: true
   when: netalertx_native_name_resolution | length > 0
 
