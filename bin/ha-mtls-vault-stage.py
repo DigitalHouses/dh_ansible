@@ -44,10 +44,44 @@ class Block(Exception):
 def require_runner(site: str):
     if not SITE_RE.fullmatch(site):
         raise Block("SITE_ID_INVALID")
-    if (pwd.getpwuid(os.geteuid()).pw_name != "ansimble"
-            or os.geteuid() == 0
-            or os.uname().nodename != "ansimble-" + site):
-        raise Block("REQUIRES_UNPRIVILEGED_SITE_RUNNER")
+    if os.geteuid() == 0:
+        raise Block("UNPRIVILEGED_OPERATOR_REQUIRED")
+    # Existing Amir pilot runner remains supported. New fleet policy keeps
+    # the private repository and master password OFF site runners. A trusted
+    # Linux/WSL operator may explicitly select offline, encrypted-only staging.
+    legacy = (pwd.getpwuid(os.geteuid()).pw_name == "ansimble"
+              and os.uname().nodename == "ansimble-" + site)
+    offline = os.environ.get("DH_MTLS_OFFLINE_OPERATOR") == "1"
+    if not (legacy or offline):
+        raise Block("EXPLICIT_TRUSTED_OFFLINE_OPERATOR_REQUIRED")
+
+
+def canonical_intent(site: str):
+    """New sites derive identity from the canonical private Fleet inventory."""
+    base = FLEET_ROOT / "inventories" / site
+    haos_file = base / "haos.yml"
+    if not haos_file.is_file():
+        # Legacy Amir inventory is read-only compatible and left untouched.
+        return plan_module().intent(site)
+    site_file = base / "group_vars/all.yml"
+    if not site_file.is_file() or haos_file.is_symlink() or site_file.is_symlink():
+        raise Block("CANONICAL_SITE_INVENTORY_INCOMPLETE")
+    primary = yaml.safe_load(site_file.read_text())
+    desired = yaml.safe_load(haos_file.read_text())
+    info = primary.get("site") if isinstance(primary, dict) else None
+    ha = desired.get("haos") if isinstance(desired, dict) else None
+    cf = ha.get("cloudflare") if isinstance(ha, dict) else None
+    if (not isinstance(info, dict) or not isinstance(cf, dict)
+            or info.get("id") != site
+            or info.get("owner_slug") + "-" + info.get("type") != site
+            or cf.get("hostname") != site + "-pve-ha-mtls.digitalhouses.vip"
+            or cf.get("tunnel") != site
+            or cf.get("approved_for_publish") is not False
+            or cf.get("mtls_required") is not True
+            or cf.get("mtls_method") != "cloudflare_client_cert_waf"
+            or cf.get("certificate_policy") != "one-per-home-shared-with-residents"):
+        raise Block("CANONICAL_HAOS_MTLS_POLICY_DRIFT")
+    return {"hostname": cf["hostname"], "site_id": site, "cert_validity_days": 365}
 
 
 def plan_module():
@@ -223,7 +257,7 @@ def stage_files(directory: Path, encrypted: bytes, manifest: dict):
 def run(site: str):
     require_runner(site)
     plan = plan_module()
-    state = plan.intent(site)
+    state = canonical_intent(site)
     head = repo_guard()
     existing = vault_guard()
     stage = encrypted_stage_directory(site)
