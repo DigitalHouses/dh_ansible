@@ -210,6 +210,9 @@ def certificate(token, cf, ha):
                 "CERT_ISSUANCE_NOT_ACTIVE")
         changed = True
     require(CERT_ID.fullmatch(str(remote.get("id", ""))), "CERT_ID_INVALID")
+    ca = remote.get("certificate_authority") or {}
+    require(isinstance(ca, dict) and "Cloudflare Managed CA" in str(ca.get("name", "")),
+            "CERTIFICATE_ISSUER_NOT_CLOUDFLARE_MANAGED_CA")
     pem = remote["certificate"]
     require(pubkey_of_cert(pem) == pubkey_of_key(key), "CERTIFICATE_KEY_MISMATCH")
     subject = run("/usr/bin/openssl", "x509", "-noout", "-subject",
