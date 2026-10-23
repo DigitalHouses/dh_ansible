@@ -101,6 +101,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True)
     parser.add_argument("--ctid", type=int, default=1231)
+    parser.add_argument("--haos-only", action="store_true",
+                        help="Commission only HAOS mTLS workers; preserve task 10 executors")
     args = parser.parse_args()
     require(os.geteuid() == 0 and Path("/etc/pve/user.cfg").is_file(),
             "ROOT_ON_PVE_REQUIRED")
@@ -111,28 +113,40 @@ def main():
             "RUNNER_NOT_RUNNING")
     require(checked("pct", "exec", str(args.ctid), "--", "hostname")
             == "ansible-" + args.site, "RUNNER_IDENTITY_DRIFT")
-    # Cloudflared may be completely absent on a newly commissioned PVE.
-    # Installing the fixed worker does not install/start the tunnel itself.
-    for source in (HOST_SOURCE, RUNNER_SOURCE, PATH_SOURCE, SERVICE_SOURCE,
-                   HAOS_HOST_SOURCE, HAOS_RUNNER_SOURCE, HAOS_PATH_SOURCE,
-                   HAOS_SERVICE_SOURCE, HAOS_SUDOERS_SOURCE):
+    # Never arm the path watcher with an unconsumed request in place.
+    pending = subprocess.run(
+        ["pct", "exec", str(args.ctid), "--", "test", "-e",
+         "/var/lib/semaphore/dh-haos-mtls.request"],
+        capture_output=True, timeout=15, check=False)
+    require(pending.returncode == 1, "PENDING_HAOS_MTLS_REQUEST_OR_CHECK_FAILED")
+
+    haos_sources = (HAOS_HOST_SOURCE, HAOS_RUNNER_SOURCE,
+                    HAOS_PATH_SOURCE, HAOS_SERVICE_SOURCE, HAOS_SUDOERS_SOURCE)
+    for source in haos_sources:
         valid_source(source)
-    host_target = Path("/usr/local/sbin/dh-cloudflare-pve-cutover")
-    stage_host(HOST_SOURCE, host_target, 0o700)
-    # Commission fixed-purpose HAOS mTLS executors; never publish a route here.
-    # The separate, root-only site authorization file remains a prerequisite.
-    stage_host(HAOS_HOST_SOURCE, Path("/usr/local/sbin/dh-cloudflare-pve-haos-mtls"), 0o700)
-    # Validate source before touching sudoers; preserve an existing unknown rule.
+
+    # Cloudflared may be completely absent on an uncommissioned site.
+    # Existing sites have a pinned, working task-10 cutover worker that may
+    # predate this installer. --haos-only never compares/replaces that worker.
+    if not args.haos_only:
+        for source in (HOST_SOURCE, RUNNER_SOURCE, PATH_SOURCE, SERVICE_SOURCE):
+            valid_source(source)
+        stage_host(HOST_SOURCE, Path("/usr/local/sbin/dh-cloudflare-pve-cutover"),
+                   0o700)
+        stage_guest(args.ctid, RUNNER_SOURCE,
+                    "/usr/local/sbin/dh-cloudflare-runner-cutover", 0o700)
+        stage_guest(args.ctid, PATH_SOURCE,
+                    "/etc/systemd/system/dh-cloudflare-switch.path", 0o644)
+        stage_guest(args.ctid, SERVICE_SOURCE,
+                    "/etc/systemd/system/dh-cloudflare-switch.service", 0o644)
+
+    # Stage HAOS executors: no cert issue, Cloudflare API call or DNS/ingress write.
+    stage_host(HAOS_HOST_SOURCE,
+               Path("/usr/local/sbin/dh-cloudflare-pve-haos-mtls"), 0o700)
     checked("visudo", "-cf", str(HAOS_SUDOERS_SOURCE))
     stage_host(HAOS_SUDOERS_SOURCE,
                Path("/etc/sudoers.d/dh-cloudflare-pve-haos-mtls"), 0o440)
     checked("visudo", "-cf", "/etc/sudoers.d/dh-cloudflare-pve-haos-mtls")
-    stage_guest(args.ctid, RUNNER_SOURCE,
-                "/usr/local/sbin/dh-cloudflare-runner-cutover", 0o700)
-    stage_guest(args.ctid, PATH_SOURCE,
-                "/etc/systemd/system/dh-cloudflare-switch.path", 0o644)
-    stage_guest(args.ctid, SERVICE_SOURCE,
-                "/etc/systemd/system/dh-cloudflare-switch.service", 0o644)
     stage_guest(args.ctid, HAOS_RUNNER_SOURCE,
                 "/usr/local/sbin/dh-haos-mtls-runner", 0o700)
     stage_guest(args.ctid, HAOS_PATH_SOURCE,
@@ -140,11 +154,13 @@ def main():
     stage_guest(args.ctid, HAOS_SERVICE_SOURCE,
                 "/etc/systemd/system/dh-haos-mtls.service", 0o644)
     checked("pct", "exec", str(args.ctid), "--", "systemctl", "daemon-reload")
-    checked("pct", "exec", str(args.ctid), "--", "systemctl", "enable",
-            "--now", "dh-cloudflare-switch.path")
-    require(checked("pct", "exec", str(args.ctid), "--", "systemctl",
-                    "is-active", "dh-cloudflare-switch.path") == "active",
-            "RUNNER_WATCHER_NOT_READY")
+
+    if not args.haos_only:
+        checked("pct", "exec", str(args.ctid), "--", "systemctl", "enable",
+                "--now", "dh-cloudflare-switch.path")
+        require(checked("pct", "exec", str(args.ctid), "--", "systemctl",
+                        "is-active", "dh-cloudflare-switch.path") == "active",
+                "RUNNER_WATCHER_NOT_READY")
     checked("pct", "exec", str(args.ctid), "--", "systemctl", "enable",
             "--now", "dh-haos-mtls.path")
     require(checked("pct", "exec", str(args.ctid), "--", "systemctl",
@@ -153,8 +169,11 @@ def main():
     print("HAOS_MTLS_RUNNER_WATCHER=ACTIVE")
     print("HAOS_MTLS_PVE_WORKER=STAGED")
     print("HAOS_MTLS_CLOUDFLARE_WRITES=NONE")
-    print("CF_RUNNER_WATCHER=ACTIVE")
-    print("CF_PVE_HOST_EXECUTOR=STAGED")
+    if not args.haos_only:
+        print("CF_RUNNER_WATCHER=ACTIVE")
+        print("CF_PVE_HOST_EXECUTOR=STAGED")
+    else:
+        print("TASK10_EXECUTORS=UNCHANGED")
     print("CF_CONNECTOR=UNCHANGED")
     print("CF_API_TOKEN=NOT_REQUESTED")
     print("CF_COMMISSION=PASS")

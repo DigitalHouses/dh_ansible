@@ -67,7 +67,10 @@ Cloudflare WAF expression and policy readback before publishing any route.
   `ansible-linux` sudoers rule, and the runner's systemd watcher alongside the
   established Cloudflare cutover worker. Commissioning does **not** create a
   client certificate, WAF rule, Access app, DNS entry, ingress route, or HAOS
-  origin configuration. The PVE `haos-mtls.json` and approved DR Vault
+  origin configuration. On an already-commissioned site, use the same
+  installer with `--haos-only` to preserve task-10 executors byte-for-byte.
+  It refuses to enable the watcher while a pending request exists.
+  The PVE `haos-mtls.json` and approved DR Vault
   recovery remain separate controlled prerequisites.
 
 ## Recovery and certificate delivery
