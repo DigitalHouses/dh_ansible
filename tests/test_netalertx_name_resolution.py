@@ -38,8 +38,8 @@ def test_loaded_plugin_parser_captures_exactly_one_line():
     text = (ROOT / "roles/netalertx_native/tasks/name_resolution.yml").read_text()
     assert "regex_findall('(?m)^LOADED_PLUGINS=(.*)$')" in text
     for sample in (
-        'LOADED_PLUGINS=["ARPSCAN","UI"]\\nNSLOOKUP_RUN="disabled"\\n',
-        "LOADED_PLUGINS=['ARPSCAN', 'UI']\\nNSLOOKUP_RUN='disabled'\\n",
+        'LOADED_PLUGINS=["ARPSCAN","UI"]\nNSLOOKUP_RUN="disabled"\n',
+        "LOADED_PLUGINS=['ARPSCAN', 'UI']\nNSLOOKUP_RUN='disabled'\n",
     ):
         values = re.findall(r"(?m)^LOADED_PLUGINS=(.*)$", sample)
         assert len(values) == 1
