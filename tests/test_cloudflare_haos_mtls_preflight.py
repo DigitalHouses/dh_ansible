@@ -23,7 +23,7 @@ def test_preflight_strict_hostname_single_site_certificate_and_safe_apply():
     plays = yaml.safe_load(text)
     assert len(plays) == 1 and plays[0]["hosts"] == "site_runner"
     assert plays[0]["become"] is False
-    assert "site.id ~ '-ha-mtls.digitalhouses.vip'" in text
+    assert "site.id ~ '-pve-ha-mtls.digitalhouses.vip'" in text
     assert "one-per-home-shared-with-residents" in text
     assert "haos.cloudflare.approved_for_publish | bool" in text
     assert "haos.cloudflare.mtls_required" in text
