@@ -140,7 +140,7 @@ def validate_config():
     require(ip.version == 4 and ip.is_private
             and str(ip).startswith("192.168.")
             and ha.get("port") == 80, "HAOS_ORIGIN_UNEXPECTED")
-    require(ha.get("hostname") == cf["site_id"] + "-ha-mtls." + cf["zone"],
+    require(ha.get("hostname") == cf["site_id"] + "-pve-ha-mtls." + cf["zone"],
             "HAOS_HOSTNAME_DRIFT")
     return cf, ha
 
