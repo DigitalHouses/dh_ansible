@@ -69,10 +69,29 @@
   loop: "{{ netalertx_native_name_resolution | dict2items }}"
   register: netalertx_native_name_modes
 
+- name: Validate optional native full-device FQDN refresh setting
+  ansible.builtin.assert:
+    that:
+      - netalertx_native_refresh_fqdn is none or netalertx_native_refresh_fqdn is boolean
+    fail_msg: "REFRESH_FQDN must be a YAML boolean when explicitly managed."
+
+- name: Allow native resolvers to recheck all devices on each name-update cycle
+  ansible.builtin.lineinfile:
+    path: /app/config/app.conf
+    regexp: '^REFRESH_FQDN='
+    line: "REFRESH_FQDN={{ 'True' if netalertx_native_refresh_fqdn else 'False' }}"
+    owner: www-data
+    group: www-data
+    mode: "0600"
+    backup: false
+  register: netalertx_native_refresh_fqdn_result
+  when: netalertx_native_refresh_fqdn is not none
+
 - name: Record whether managed name-resolution settings changed
   ansible.builtin.set_fact:
     netalertx_native_name_config_changed: >-
       {{
         (netalertx_native_name_loaded.changed | default(false))
         or (netalertx_native_name_modes.changed | default(false))
+        or (netalertx_native_refresh_fqdn_result.changed | default(false))
       }}
