@@ -162,10 +162,9 @@ def pve(args):
     desired = (json.dumps(config, sort_keys=True, indent=2) + "\n").encode()
     write_new(HA_CFG, desired)
     install_file(HERE / "dh-cloudflare-pve-haos-mtls.py", PVE_BIN, 0o700)
-    permission = (
-        "ansible-linux ALL=(root) NOPASSWD: " + str(PVE_BIN) + " --apply\n"
-    ).encode()
-    write_new(SUDOERS, permission, mode=0o440)
+    # Reuse the exact already-reviewed sudoers source (including its comment).
+    # An existing production allowance must match byte-for-byte; no duplicates.
+    install_file(HERE / "dh-cloudflare-pve-haos-mtls.sudoers", SUDOERS, 0o440)
     run("visudo", "-cf", str(SUDOERS))
     print("TASK70_PVE_COMMISSION=PASS")
     print("HAOS_MTLS_PUBLICATION_APPROVED=FALSE")
