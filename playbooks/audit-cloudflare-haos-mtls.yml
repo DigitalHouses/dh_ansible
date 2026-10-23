@@ -156,7 +156,7 @@
       ansible.builtin.command:
         argv: [cat, /run/dh-haos-mtls.status]
       register: haos_mtls_status
-      changed_when: false
+      changed_when: haos_mtls_status.stdout == haos_mtls_nonce.stdout ~ '|CHANGED'
       failed_when: false
       retries: 120
       delay: 3
