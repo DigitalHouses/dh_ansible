@@ -57,6 +57,12 @@ CATALOG_RENAMES = {
         "10-Cloudflare · Туннель объекта (план)",
         "playbooks/plan-cloudflare-tunnel.yml",
     ),
+    # Preserve template ID and task history when the audit-only HAOS mTLS
+    # template becomes a unified audit-and-guarded-apply task 70.
+    "70-Cloudflare · HAOS · mTLS · Настроить": (
+        "70-Cloudflare · HAOS · mTLS · Предпроверка",
+        "playbooks/audit-cloudflare-haos-mtls.yml",
+    ),
 }
 
 API_BASE = "https://127.0.0.1:3000/api"
