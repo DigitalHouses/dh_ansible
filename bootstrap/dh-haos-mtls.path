@@ -1,0 +1,9 @@
+[Unit]
+Description=DigitalHouses HAOS mTLS Semaphore request watcher
+
+[Path]
+PathExists=/var/lib/semaphore/dh-haos-mtls.request
+Unit=dh-haos-mtls.service
+
+[Install]
+WantedBy=multi-user.target
