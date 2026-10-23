@@ -28,6 +28,11 @@
 4. Verify/establish a global **block** WAF rule for `*-ha-mtls.digitalhouses.vip` (the `-pve-ha-mtls` suffix is included).
    Require `cert_verified`, **not** `cert_revoked`, and subject
    `CN=<requested http.host>`; reject skip rules preceding the guard.
+   Adopt the existing Cloudflare production expression (verified GET 2026-10-23):
+   `http.host wildcard "*-ha-mtls.digitalhouses.vip"` with
+   `cert_subject_dn_rfc2253` prefix `CN=` and exact
+   `substring(..., 3) ne lower(http.host)` rejection. Do not replace the
+   active Amir rule with a syntactically different expression.
 5. Verify/create only an **exact-host** Access application with `Bypass /
    Everyone`. Existing wildcard administrator Access stays untouched.
 6. Only after steps 1–5: append one HAOS ingress rule before the existing

@@ -53,7 +53,7 @@ def test_workers_fixed_purpose_no_user_commands_or_insecure_cert_flags():
                  "PVE_IDENTITY_OR_RESULT_INVALID"):
         assert term in runner
     assert "shell=True" not in runner
-    for term in ('cert_revoked', 'cert_subject_dn ne concat("CN=", http.host)',
+    for term in ('cert_revoked', 'cert_subject_dn_rfc2253',
                  "ONE_PER_SITE", "ANONYMOUS_NOT_BLOCKED",
                  "VALID_CERT_NOT_REACHING_HA", "ACCESS_EXACT_BYPASS_NOT_VERIFIED",
                  "WAF_SKIP_PRECEDES_MTLS_GUARD",

@@ -30,10 +30,15 @@ HAOS_CONFIG = Path("/etc/digitalhouses/cloudflare/haos-mtls.json")
 TOKEN_PATH = Path("/root/.config/digitalhouses/cloudflare/api-token.secret")
 MATERIAL = Path("/etc/digitalhouses/cloudflare/haos-mtls")
 RULE_NAME = "DigitalHouses | HA Companion mTLS | fleet CN guard"
-EXPRESSION = ('(ends_with(http.host, "-ha-mtls.digitalhouses.vip") and '
+# Adopt the LIVE fleet guard, confirmed by Cloudflare GET on 2026-10-23.
+# The RFC2253 DN must consist of exactly CN=<requested hostname>.
+# Never rewrite the existing Amir Office WAF rule as part of site onboarding.
+EXPRESSION = ('(http.host wildcard "*-ha-mtls.digitalhouses.vip" and '
               '(not cf.tls_client_auth.cert_verified or '
               'cf.tls_client_auth.cert_revoked or '
-              'cf.tls_client_auth.cert_subject_dn ne concat("CN=", http.host)))')
+              'not starts_with(cf.tls_client_auth.cert_subject_dn_rfc2253, "CN=") or '
+              'substring(cf.tls_client_auth.cert_subject_dn_rfc2253, 3) '
+              'ne lower(http.host)))')
 HEX32 = re.compile(r"[a-f0-9]{32}\Z")
 SITE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\Z")
 CERT_ID = re.compile(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\Z")
