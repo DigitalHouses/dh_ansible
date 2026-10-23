@@ -23,7 +23,10 @@
 
 1. Verify site ID, local runner, PVE identity, HAOS VM and private origin.
 2. Confirm or issue **one** 365-day Cloudflare Managed CA certificate
-   (RSA-2048 CSR generated locally). Do not overwrite/revoke previous keys.
+   using an RSA-2048 private key and CSR **already recovered from the
+   merged encrypted Fleet Vault**. Task 70 must never generate a new
+   private key, CSR or PKCS#12 password on PVE. Do not overwrite/revoke
+   previous keys.
 3. Preserve existing Managed CA hostname associations, adding just this host.
 4. Verify/establish a global **block** WAF rule for `*-ha-mtls.digitalhouses.vip` (the `-pve-ha-mtls` suffix is included).
    Require `cert_verified`, **not** `cert_revoked`, and subject
@@ -80,12 +83,23 @@ Cloudflare WAF expression and policy readback before publishing any route.
 
 ## Recovery and certificate delivery
 
-The root-only PVE material directory is the **active** store for the new
-automation, not an acceptable substitute for the encrypted Fleet Vault's
-authoritative disaster-recovery copy. Before production enablement, implement
-and verify the one-way encrypted custody/backup process into
-`dh_ansible_fleet_detail`/Fleet Vault (with no plaintext secrets in Git).
-Until then **leave** `approved_for_publish: false`.
+The root-only PVE material directory is **runtime state**, not a backup.
+Before production enablement, generate the household key, CSR and PKCS#12
+password into an encrypted candidate of the existing Fleet Vault (no plaintext
+Git commits), merge the ciphertext to private Git, and independently verify
+recovery from a fresh Git clone using the operator-held master password.
+Only then may a trusted one-time commissioning operation stage those exact
+restored bytes on PVE as `client.key`, `client.csr` and `p12-password`
+(mode 0600), along with a root-only `vault-escrow.json` receipt containing
+site, canonical hostname, pinned Fleet Git commit, ciphertext SHA-256 and
+SHA-256 digests for all three restored files. Its `recovery_verified: true`
+is an operator attestation of the fresh-clone check; it is **not a
+cryptographic proof by itself**. The task-70 root worker validates file
+hashes, CSR signature/CN and RSA-2048 key matching the CSR before any
+Cloudflare mutation; it never issues without the prepared material. On
+rotation, use a distinct approved generation, never silently replace files.
+Until this human-held master-password and private Git step has been accepted,
+**leave** `approved_for_publish: false`.
 
 The modern PKCS#12 and optional Apple-compatible PKCS#12 represent **the same**
 one household certificate. Transfer the selected bundle and its password
