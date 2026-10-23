@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,8 +34,10 @@ def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostnam
     worker = _worker()
     pve_ip = ".".join(map(str, (192, 168, 0, 30)))
     ha_ip = ".".join(map(str, (192, 168, 0, 33)))
-    private_dir = tmp_path / "material"
-    private_dir.mkdir(mode=0o700)
+    private_dir = SimpleNamespace(
+        is_dir=lambda: True, is_symlink=lambda: False,
+        stat=lambda: SimpleNamespace(st_uid=0, st_mode=0o40700),
+    )
     cf_path = tmp_path / "site.json"
     ha_path = tmp_path / "haos-mtls.json"
     cf_path.write_text(json.dumps({
