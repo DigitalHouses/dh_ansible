@@ -105,8 +105,11 @@ def main():
         require(result.returncode == 0, "PVE_HAOS_MTLS_FAILED")
         lines = result.stdout.splitlines()
         require("HAOS_MTLS=PASS" in lines and
+                ("HAOS_MTLS_HOSTNAME=" + cf["hostname"]) in lines and
+                ("HAOS_MTLS_ORIGIN=http://" + haos["network"]["ipv4"] + ":"
+                 + str(haos["network"]["port"])) in lines and
                 len([line for line in lines if line.startswith("HAOS_MTLS_RESULT=")]) == 1,
-                "PVE_RESULT_INVALID")
+                "PVE_IDENTITY_OR_RESULT_INVALID")
         outcome = next(line.partition("=")[2] for line in lines
                        if line.startswith("HAOS_MTLS_RESULT="))
         require(outcome in ("CHANGED", "UNCHANGED"), "PVE_RESULT_INVALID")
