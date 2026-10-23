@@ -18,7 +18,7 @@ CF = {"site_id": "serzhan-home", "zone_id": "z" * 32,
       "account_id": "a" * 32,
       "new_tunnel_id": "00000000-0000-0000-0000-000000000001"}
 HA = {"hostname": "serzhan-home-ha-mtls.digitalhouses.vip",
-      "ipv4": "192.168.11.33", "port": 80}
+      "ipv4": "192.0.2.33", "port": 80}
 
 
 def test_one_cert_per_site_refuses_duplicate_active_identities():
@@ -96,7 +96,7 @@ def test_ca_preserves_all_existing_associations():
 def test_tunnel_preserves_pve_route_and_404_catchall_idempotently():
     existing = {"ingress": [
         {"hostname": "dh-serzhan-home-pve.digitalhouses.vip",
-         "service": "https://192.168.11.30:8006", "originRequest": {"noTLSVerify": True}},
+         "service": "https://192.0.2.30:8006", "originRequest": {"noTLSVerify": True}},
         {"service": "http_status:404"},
     ]}
     calls = []
@@ -125,7 +125,7 @@ def test_tunnel_preserves_pve_route_and_404_catchall_idempotently():
 
 def test_existing_dns_collision_refused():
     with patch.object(pve, "api", return_value=[
-        {"type": "A", "content": "192.168.11.33", "proxied": False}
+        {"type": "A", "content": "192.0.2.33", "proxied": False}
     ]):
         try:
             pve.dns("unused", CF, HA)
