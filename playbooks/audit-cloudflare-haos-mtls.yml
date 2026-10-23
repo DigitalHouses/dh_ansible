@@ -24,7 +24,98 @@
           - (ansible_connection | default('')) == 'local'
           - site.id == site.owner_slug ~ '-' ~ site.type
           - haos.vmid | int >= 100
-          - haos.network.ipv4 is match('^192\\.168\\.[0-9]{1,3}\\.[0-9]{1,3}$')
+          - haos.network.ipv4 is match('^192[.]168[.][0-9]{1,3}[.][0-9]{1,3}
+          - haos.network.port | int >= 1
+          - haos.network.port | int <= 65535
+          - haos.cloudflare.tunnel == site.id
+          - haos.cloudflare.hostname == 'dh-' ~ site.id ~ '-haos.digitalhouses.vip'
+          - haos.cloudflare.mtls_required | bool
+          - haos.cloudflare.mtls_method == 'cloudflare_client_cert_waf'
+        fail_msg: "HAOS identity, tunnel or mTLS policy drift. No changes permitted."
+
+    - name: Read runner identity
+      ansible.builtin.command:
+        argv: [hostname]
+      register: haos_mtls_runner
+      changed_when: false
+
+    - name: Verify this is the expected site runner
+      ansible.builtin.assert:
+        that:
+          - haos_mtls_runner.stdout == 'ansible-' ~ site.id
+
+  tasks:
+    - name: Check HAOS local origin without using Cloudflare
+      ansible.builtin.uri:
+        url: "http://{{ haos.network.ipv4 }}:{{ haos.network.port }}/api/"
+        method: GET
+        follow_redirects: none
+        use_proxy: false
+        return_content: false
+        status_code: [200, 401, 403]
+        timeout: 8
+      register: haos_mtls_origin
+      changed_when: false
+      failed_when: false
+
+    - name: Confirm HAOS local API is reachable but not anonymously authorized
+      ansible.builtin.assert:
+        that:
+          - haos_mtls_origin.status | default(-1) | int == 401
+        fail_msg: "HAOS origin /api/ did not return expected HTTP 401. Stop before any Cloudflare work."
+
+    - name: Inspect existing public hostname resolution without changing DNS
+      ansible.builtin.command:
+        argv: [getent, ahostsv4, "{{ haos.cloudflare.hostname }}"]
+      register: haos_mtls_dns
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect public response only if DNS already exists
+      ansible.builtin.uri:
+        url: "https://{{ haos.cloudflare.hostname }}/api/"
+        method: GET
+        follow_redirects: none
+        use_proxy: false
+        return_content: false
+        validate_certs: true
+        status_code: [200, 301, 302, 303, 307, 308, 401, 403, 404, 502, 503, 530]
+        timeout: 10
+      register: haos_mtls_public
+      changed_when: false
+      failed_when: false
+      when: haos_mtls_dns.rc == 0
+
+    - name: Stop if a pre-existing public route appears anonymously accessible
+      ansible.builtin.assert:
+        that:
+          - (haos_mtls_public.status | default(-1) | int) != 200
+        fail_msg: "A public HAOS API returned 200 without client certificate: investigate exposure."
+
+    - name: Report the guarded mTLS deployment plan
+      ansible.builtin.debug:
+        msg:
+          result: LOCAL_HAOS_PREFLIGHT_PASS
+          site: "{{ site.id }}"
+          haos_vmid: "{{ haos.vmid }}"
+          local_origin: "http://{{ haos.network.ipv4 }}:{{ haos.network.port }}"
+          origin_api_status: "{{ haos_mtls_origin.status }}"
+          tunnel_to_reuse: "{{ haos.cloudflare.tunnel }}"
+          proposed_hostname: "{{ haos.cloudflare.hostname }}"
+          mtls_mechanism: "{{ haos.cloudflare.mtls_method }}"
+          public_dns: "{{ 'EXISTS' if haos_mtls_dns.rc == 0 else 'ABSENT' }}"
+          public_response: "{{ haos_mtls_public.status | default('not_published') }}"
+          certificate_provisioning: REQUIRED_BEFORE_APPLY
+          waf_block_rule_readback: REQUIRED_BEFORE_APPLY
+          no_certificate_request_must_be_blocked: REQUIRED_BEFORE_APPLY
+          existing_wildcard_access_compatibility: REQUIRED_BEFORE_APPLY
+          haos_companion_app_certificate_test: REQUIRED_BEFORE_APPLY
+          tunnel_and_dns_changes: NONE
+          cloudflare_access_changes: NONE
+          haos_changes: NONE
+          old_pve_tunnel_changes: NONE
+          stage: AUDIT_ONLY_NOT_DEPLOYED
+)
           - haos.network.port | int >= 1
           - haos.network.port | int <= 65535
           - haos.cloudflare.tunnel == site.id
