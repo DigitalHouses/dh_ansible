@@ -1,8 +1,9 @@
 ---
-# Read-only stage. Never publish an unprotected Cloudflare hostname.
+# One Semaphore task: audited preview by default, guarded apply only on explicit site approval.
+# No unprotected Cloudflare hostname may ever be published.
 # mTLS means client certificate validation at Cloudflare's edge;
 # it is not a tunnel transport mode or an origin TLS setting.
-- name: Audit Cloudflare mTLS readiness for the canonical HAOS site
+- name: Audit and guarded reconciliation of HAOS mTLS for one canonical site
   hosts: site_runner
   gather_facts: false
   become: false
@@ -28,7 +29,8 @@
           - haos.network.port | int >= 1
           - haos.network.port | int <= 65535
           - haos.cloudflare.tunnel == site.id
-          - haos.cloudflare.hostname == 'dh-' ~ site.id ~ '-haos.digitalhouses.vip'
+          - haos.cloudflare.hostname == site.id ~ '-ha-mtls.digitalhouses.vip'
+          - haos.cloudflare.certificate_policy == 'one-per-home-shared-with-residents'
           - haos.cloudflare.mtls_required | bool
           - haos.cloudflare.mtls_method == 'cloudflare_client_cert_waf'
         fail_msg: "HAOS identity, tunnel or mTLS policy drift. No changes permitted."
@@ -73,7 +75,7 @@
 
     - name: Inspect public response only if DNS already exists
       ansible.builtin.uri:
-        url: "https://{{ haos.cloudflare.hostname }}/api/"
+        url: "https://{{ haos.cloudflare.hostname }}/"
         method: GET
         follow_redirects: none
         use_proxy: false
@@ -89,8 +91,8 @@
     - name: Stop if a pre-existing public route appears anonymously accessible
       ansible.builtin.assert:
         that:
-          - (haos_mtls_public.status | default(-1) | int) != 200
-        fail_msg: "A public HAOS API returned 200 without client certificate: investigate exposure."
+          - haos_mtls_dns.rc != 0 or (haos_mtls_public.status | default(-1) | int) == 403
+        fail_msg: "Public HAOS hostname does not return HTTP 403 without a client certificate. Stop."
 
     - name: Report the guarded mTLS deployment plan
       ansible.builtin.debug:
@@ -105,7 +107,8 @@
           mtls_mechanism: "{{ haos.cloudflare.mtls_method }}"
           public_dns: "{{ 'EXISTS' if haos_mtls_dns.rc == 0 else 'ABSENT' }}"
           public_response: "{{ haos_mtls_public.status | default('not_published') }}"
-          certificate_provisioning: REQUIRED_BEFORE_APPLY
+          certificate_policy: ONE_SHARED_CERTIFICATE_PER_SITE
+          certificate_provisioning: FIXED_ROOT_WORKER_REQUIRED
           waf_block_rule_readback: REQUIRED_BEFORE_APPLY
           no_certificate_request_must_be_blocked: REQUIRED_BEFORE_APPLY
           existing_wildcard_access_compatibility: REQUIRED_BEFORE_APPLY
@@ -114,4 +117,74 @@
           cloudflare_access_changes: NONE
           haos_changes: NONE
           old_pve_tunnel_changes: NONE
-          stage: AUDIT_ONLY_NOT_DEPLOYED
+          stage: "{{ 'APPLY_REQUESTED' if haos.cloudflare.approved_for_publish | bool else 'AUDIT_ONLY_NOT_DEPLOYED' }}"
+
+    # Apply remains IN THIS SAME SEMAPHORE TASK. Root privileges and Cloudflare
+    # API credentials belong exclusively to a fixed-purpose commissioned worker.
+    # Site inventory is the explicit authorization gate; CLI extra-vars cannot
+    # turn an unapproved site into a published site.
+    - name: Verify the dedicated privileged mTLS worker is commissioned
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-haos-mtls.path]
+      register: haos_mtls_worker
+      changed_when: false
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Require the worker to be running
+      ansible.builtin.assert:
+        that:
+          - haos_mtls_worker.stdout == 'active'
+        fail_msg: "HAOS mTLS worker not commissioned. No route was published."
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Create a single-use mTLS apply request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: haos_mtls_nonce
+      changed_when: false
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Request guarded certificate, WAF, Access and tunnel reconciliation
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-haos-mtls.request
+        content: "HAOS_MTLS:{{ haos_mtls_nonce.stdout }}\n"
+        mode: '0600'
+      changed_when: false
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Await the exact request ID from the privileged worker
+      ansible.builtin.command:
+        argv: [cat, /run/dh-haos-mtls.status]
+      register: haos_mtls_status
+      changed_when: false
+      failed_when: false
+      retries: 120
+      delay: 3
+      until: >-
+        haos_mtls_status.stdout in [
+          haos_mtls_nonce.stdout ~ '|UNCHANGED',
+          haos_mtls_nonce.stdout ~ '|CHANGED',
+          haos_mtls_nonce.stdout ~ '|FAILED'
+        ]
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Assert protected HAOS route was reconciled
+      ansible.builtin.assert:
+        that:
+          - haos_mtls_status.stdout in [
+              haos_mtls_nonce.stdout ~ '|UNCHANGED',
+              haos_mtls_nonce.stdout ~ '|CHANGED'
+            ]
+        fail_msg: "mTLS apply FAILED. No approval to bypass WAF or publish directly."
+      when: haos.cloudflare.approved_for_publish | bool
+
+    - name: Report changed status from the root-only worker
+      ansible.builtin.debug:
+        msg:
+          result: HAOS_MTLS_RECONCILED
+          site: "{{ site.id }}"
+          hostname: "{{ haos.cloudflare.hostname }}"
+          changes: "{{ 'CHANGED' if haos_mtls_status.stdout.endswith('|CHANGED') else 'UNCHANGED' }}"
+          raw_secrets: NEVER_EXPOSED
+          certificate_distribution: OWNER_ACTION_REQUIRED
+      when: haos.cloudflare.approved_for_publish | bool
