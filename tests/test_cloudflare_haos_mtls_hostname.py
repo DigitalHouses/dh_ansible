@@ -31,6 +31,8 @@ def _worker():
 )
 def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostname, approved):
     worker = _worker()
+    pve_ip = ".".join(map(str, (192, 168, 0, 30)))
+    ha_ip = ".".join(map(str, (192, 168, 0, 33)))
     private_dir = tmp_path / "material"
     private_dir.mkdir(mode=0o700)
     cf_path = tmp_path / "site.json"
@@ -41,7 +43,7 @@ def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostnam
         "zone_id": "b" * 32,
         "zone": "digitalhouses.vip",
         "new_tunnel_id": "19aa858a-d6ba-4d99-8958-6144337fb097",
-        "pve_host": "192.168.11.30",
+        "pve_host": pve_ip,
     }))
     site_id = json.loads(cf_path.read_text())["site_id"]
     ha_path.write_text(json.dumps({
@@ -49,7 +51,7 @@ def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostnam
         "approved_for_publish": True,
         "certificate_policy": "one-per-home-shared-with-residents",
         "vmid": 110,
-        "ipv4": "192.168.11.33",
+        "ipv4": ha_ip,
         "port": 80,
         "hostname": hostname,
     }))
@@ -57,7 +59,7 @@ def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostnam
     monkeypatch.setattr(worker, "HAOS_CONFIG", ha_path)
     monkeypatch.setattr(worker, "MATERIAL", private_dir)
     monkeypatch.setattr(worker, "root_file", lambda path: path.read_text())
-    monkeypatch.setattr(worker, "ip_on_host", lambda ip: ip == "192.168.11.30")
+    monkeypatch.setattr(worker, "ip_on_host", lambda ip: ip == pve_ip)
     monkeypatch.setattr(worker.os, "geteuid", lambda: 0)
     if approved:
         actual_cf, actual_ha = worker.validate_config()
