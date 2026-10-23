@@ -106,7 +106,7 @@ def main():
             "ROOT_ON_PVE_REQUIRED")
     require(bool(re.fullmatch(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+", args.site)),
             "SITE_ID_INVALID")
-    require(args.ctid == 1231, "RUNNER_CTID_DRIFT")
+    require(1000 <= args.ctid <= 9999, "RUNNER_CTID_INVALID")
     require(checked("pct", "status", str(args.ctid)) == "status: running",
             "RUNNER_NOT_RUNNING")
     require(checked("pct", "exec", str(args.ctid), "--", "hostname")
