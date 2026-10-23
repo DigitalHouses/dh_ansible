@@ -151,6 +151,10 @@ def test_no_automatic_cutover_on_commission():
     assert "Cloudflared may be completely absent" in code
     assert 'checked("pct", "exec"' in code
     assert "dh-cloudflare-switch.path" in code
+    assert "dh-haos-mtls.path" in code
+    assert "dh-cloudflare-pve-haos-mtls.sudoers" in code
+    assert "HAOS_MTLS_CLOUDFLARE_WRITES=NONE" in code
+    assert "RUNNER_CTID_INVALID" in code
     service = (ROOT / "bootstrap/dh-cloudflare-switch.service").read_text()
     assert "User=root" in service
     assert "NoNewPrivileges=true" in service
