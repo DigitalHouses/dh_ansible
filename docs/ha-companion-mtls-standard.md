@@ -62,6 +62,13 @@ Cloudflare WAF expression and policy readback before publishing any route.
   exact script and `--apply` argument. No arbitrary CLI script arguments.
 - The two new programs and watcher are checked into public `dh_ansible`,
   but **no real secret** is included.
+- The existing `bootstrap/cloudflare-commission.py --site <site> --ctid <runner_ctid>`
+  now installs the root-only HAOS mTLS PVE executor, the narrowly scoped
+  `ansible-linux` sudoers rule, and the runner's systemd watcher alongside the
+  established Cloudflare cutover worker. Commissioning does **not** create a
+  client certificate, WAF rule, Access app, DNS entry, ingress route, or HAOS
+  origin configuration. The PVE `haos-mtls.json` and approved DR Vault
+  recovery remain separate controlled prerequisites.
 
 ## Recovery and certificate delivery
 
