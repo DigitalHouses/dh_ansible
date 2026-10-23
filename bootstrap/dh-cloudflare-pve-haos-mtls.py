@@ -14,7 +14,6 @@ import json
 import os
 from pathlib import Path
 import re
-import secrets
 import socket
 import ssl
 import stat
@@ -172,6 +171,52 @@ def pubkey_of_key(path):
                "-pubout").strip()
 
 
+def verify_vault_escrow(ha):
+    """Fail closed unless a verified Git-backed identity was restored beforehand.
+
+    vault-escrow.json is a local root-only *receipt*, NOT the backup itself.
+    The commissioning operator must first independently recover key, CSR and
+    PKCS12 password from a merged, encrypted Fleet Vault and pin their hashes.
+    This prevents task 70 from minting an unbacked private key on the PVE host.
+    """
+    receipt = json.loads(root_file(MATERIAL / "vault-escrow.json"))
+    require(isinstance(receipt, dict) and receipt.get("schema_version") == 1
+            and receipt.get("site_id") == ha["site_id"]
+            and receipt.get("hostname") == ha["hostname"]
+            and re.fullmatch(r"[0-9a-f]{40}", str(receipt.get("fleet_git_commit", "")))
+            and re.fullmatch(r"[0-9a-f]{64}", str(receipt.get("fleet_vault_sha256", "")))
+            and receipt.get("recovery_verified") is True,
+            "FLEET_VAULT_ESCROW_RECEIPT_INVALID")
+    for name, field in (("client.key", "private_key_sha256"),
+                        ("client.csr", "csr_sha256"),
+                        ("p12-password", "p12_password_sha256")):
+        expected = receipt.get(field)
+        require(isinstance(expected, str)
+                and re.fullmatch(r"[0-9a-f]{64}", expected),
+                "FLEET_VAULT_ESCROW_HASH_MISSING")
+        actual = hashlib.sha256(guarded_binary(MATERIAL / name)).hexdigest()
+        require(actual == expected, "FLEET_VAULT_ESCROW_MATERIAL_DRIFT")
+    password = root_file(MATERIAL / "p12-password").strip()
+    require(len(password) >= 32 and "\n" not in password and "\r" not in password,
+            "FLEET_VAULT_P12_PASSWORD_INVALID")
+    csr = MATERIAL / "client.csr"
+    private = MATERIAL / "client.key"
+    subject = run("/usr/bin/openssl", "req", "-in", str(csr),
+                  "-noout", "-subject", "-nameopt", "RFC2253").decode().strip()
+    require(subject == "subject=CN=" + ha["hostname"],
+            "FLEET_VAULT_CSR_CN_MISMATCH")
+    run("/usr/bin/openssl", "req", "-in", str(csr), "-noout", "-verify")
+    csr_public = run("/usr/bin/openssl", "req", "-in", str(csr),
+                     "-pubkey", "-noout").strip()
+    require(csr_public == pubkey_of_key(private),
+            "FLEET_VAULT_PRIVATE_KEY_CSR_MISMATCH")
+    size = run("/usr/bin/openssl", "pkey", "-in", str(private),
+               "-noout", "-text_pub").decode()
+    require(size.startswith("Public-Key: (2048 bit)"),
+            "FLEET_VAULT_KEY_NOT_RSA2048")
+    return receipt
+
+
 def certificate(token, cf, ha):
     """Issue once only. Retain one household identity; never mint a duplicate."""
     global changed
@@ -184,19 +229,9 @@ def certificate(token, cf, ha):
     matching = [x for x in all_certs
                 if x.get("status") == "active" and x.get("common_name") == host]
     require(len(matching) <= 1, "MULTIPLE_ACTIVE_HOUSEHOLD_CERTIFICATES")
-    if not key.exists():
-        require(not csr.exists() and not crt.exists() and not certificate_id.exists()
-                and not matching, "UNRECOVERABLE_EXISTING_CERTIFICATE")
-        generated_key = run("/usr/bin/openssl", "genpkey", "-algorithm", "RSA",
-                            "-pkeyopt", "rsa_keygen_bits:2048")
-        new_file(key, generated_key)
-        csr_data = run("/usr/bin/openssl", "req", "-new",
-                       "-key", str(key), "-subj", "/CN=" + host)
-        new_file(csr, csr_data)
-        changed = True
-    require(key.exists() and csr.exists(), "CSR_OR_KEY_MISSING")
-    root_file(key)
-    root_file(csr)
+    # The only private key allowed here is one independently recovered from
+    # the encrypted fleet Vault, not a new key generated on this PVE.
+    verify_vault_escrow(ha)
     if matching:
         remote = matching[0]
         require(CERT_ID.fullmatch(str(remote.get("id", ""))), "CERT_ID_INVALID")
@@ -236,10 +271,7 @@ def certificate(token, cf, ha):
     password_file = MATERIAL / "p12-password"
     modern = MATERIAL / "ha-companion.p12"
     apple = MATERIAL / "ha-companion-ipados.p12"
-    if not password_file.exists():
-        require(not modern.exists() and not apple.exists(), "P12_PASSWORD_MISSING")
-        new_file(password_file, secrets.token_urlsafe(36) + "\n")
-        changed = True
+    # Password is part of the same recoverable Vault identity.
     root_file(password_file)
     if not modern.exists():
         result = run("/usr/bin/openssl", "pkcs12", "-export",
@@ -471,6 +503,8 @@ def main():
     except urllib.error.HTTPError as exc:
         status = exc.code
     require(status == 401, "LOCAL_HAOS_NOT_READY")
+    # DR gate before the first Cloudflare write, including certificate POST.
+    verify_vault_escrow(ha)
     certificate(token, cf, ha)
     ca_association(token, cf, ha)
     guard(token, cf, ha)

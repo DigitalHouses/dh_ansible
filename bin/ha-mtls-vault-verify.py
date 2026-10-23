@@ -27,7 +27,7 @@ from cryptography.x509.oid import NameOID
 from datetime import datetime, timezone, timedelta
 import yaml
 
-REPO_URL = "git@github.com:DigitalHouses/dh_ansimble_fleet_detail.git"
+REPO_URL = "git@github.com:DigitalHouses/dh_ansible_fleet_detail.git"
 BASE = Path("/dev/shm")
 HEADER = b"$ANSIBLE_VAULT;1.1;AES256\n"
 EXPECTED_HOST_DOMAIN = ".digitalhouses.vip"
@@ -43,9 +43,13 @@ class Block(Exception):
 def safe_runner(site: str):
     if not SITE.fullmatch(site):
         raise Block("INVALID_SITE_ID")
-    if (os.geteuid() == 0 or pwd.getpwuid(os.geteuid()).pw_name != "ansimble"
-            or os.uname().nodename != "ansimble-" + site):
-        raise Block("REQUIRES_UNPRIVILEGED_SITE_RUNNER")
+    if os.geteuid() == 0:
+        raise Block("UNPRIVILEGED_OPERATOR_REQUIRED")
+    legacy = (pwd.getpwuid(os.geteuid()).pw_name == "ansimble"
+              and os.uname().nodename == "ansimble-" + site)
+    offline = os.environ.get("DH_MTLS_OFFLINE_OPERATOR") == "1"
+    if not (legacy or offline):
+        raise Block("EXPLICIT_TRUSTED_OFFLINE_OPERATOR_REQUIRED")
     fs = subprocess.run(
         ["findmnt", "-T", str(BASE), "-n", "-o", "FSTYPE"],
         capture_output=True, text=True, check=False,
