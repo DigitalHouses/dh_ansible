@@ -77,7 +77,7 @@ def main():
         require(site["id"] == site_id == site["owner_slug"] + "-" + site["type"],
                 "SITE_IDENTITY_DRIFT")
         cf = haos["cloudflare"]
-        require(cf["hostname"] == site_id + "-ha-mtls.digitalhouses.vip"
+        require(cf["hostname"] == site_id + "-pve-ha-mtls.digitalhouses.vip"
                 and cf["tunnel"] == site_id
                 and cf["mtls_required"] is True
                 and cf["mtls_method"] == "cloudflare_client_cert_waf"
