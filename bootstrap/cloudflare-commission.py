@@ -125,6 +125,7 @@ def main():
     for source in haos_sources:
         valid_source(source)
 
+    # Cloudflared may be completely absent on an uncommissioned site.
     # Existing sites have a pinned, working task-10 cutover worker that may
     # predate this installer. --haos-only never compares/replaces that worker.
     if not args.haos_only:
