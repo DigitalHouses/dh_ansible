@@ -80,6 +80,7 @@
         netalertx_native_web_port: "{{ netalertx.application.web_port }}"
         netalertx_native_api_port: "{{ netalertx.application.api_port }}"
         netalertx_native_name_resolution: "{{ netalertx.application.name_resolution | default({}) }}"
+        netalertx_native_refresh_fqdn: "{{ netalertx.application.refresh_fqdn | default(none) }}"
       changed_when: false
 
 - name: Install native NetAlertX on the independently verified new guest
