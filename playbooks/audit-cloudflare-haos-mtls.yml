@@ -29,7 +29,7 @@
           - haos.network.port | int >= 1
           - haos.network.port | int <= 65535
           - haos.cloudflare.tunnel == site.id
-          - haos.cloudflare.hostname == site.id ~ '-ha-mtls.digitalhouses.vip'
+          - haos.cloudflare.hostname == site.id ~ '-pve-ha-mtls.digitalhouses.vip'
           - haos.cloudflare.certificate_policy == 'one-per-home-shared-with-residents'
           - haos.cloudflare.mtls_required | bool
           - haos.cloudflare.mtls_method == 'cloudflare_client_cert_waf'

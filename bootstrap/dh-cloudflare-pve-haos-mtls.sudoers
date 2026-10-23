@@ -1,0 +1,2 @@
+# Fixed command only: no shell, no arbitrary CLI arguments.
+ansible-linux ALL=(root) NOPASSWD: /usr/local/sbin/dh-cloudflare-pve-haos-mtls --apply
