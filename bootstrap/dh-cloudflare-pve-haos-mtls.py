@@ -334,11 +334,22 @@ def ensure_access(token, cf, ha):
     matching = [a for a in apps if a.get("domain") == ha["hostname"]]
     require(len(matching) <= 1, "ACCESS_EXACT_APP_COLLISION")
     if not matching:
-        policy = api(token, "POST", base + "/access/policies",
-                     {"name": "DigitalHouses HAOS mTLS Bypass " + cf["site_id"],
-                      "decision": "bypass", "include": [{"everyone": {}}]})
-        require(isinstance(policy, dict) and isinstance(policy.get("id"), str),
-                "ACCESS_POLICY_CREATE_FAILED")
+        policy_name = "DigitalHouses HAOS mTLS Bypass " + cf["site_id"]
+        policies = api(token, "GET", base + "/access/policies?per_page=100")
+        require(isinstance(policies, list), "ACCESS_POLICY_LIST_INVALID")
+        named = [p for p in policies if p.get("name") == policy_name]
+        require(len(named) <= 1, "ACCESS_POLICY_NAME_COLLISION")
+        if named:
+            policy = named[0]
+        else:
+            policy = api(token, "POST", base + "/access/policies",
+                         {"name": policy_name, "decision": "bypass",
+                          "include": [{"everyone": {}}]})
+            changed = True
+        require(isinstance(policy, dict) and isinstance(policy.get("id"), str)
+                and policy.get("decision") == "bypass"
+                and policy.get("include") == [{"everyone": {}}],
+                "ACCESS_POLICY_NOT_EXACT_BYPASS")
         app = api(token, "POST", base + "/access/apps",
                   {"name": "DigitalHouses HAOS mTLS " + cf["site_id"],
                    "type": "self_hosted", "domain": ha["hostname"],
