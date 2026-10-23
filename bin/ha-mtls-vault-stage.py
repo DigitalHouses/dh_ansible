@@ -73,7 +73,9 @@ def canonical_intent(site: str):
     cf = ha.get("cloudflare") if isinstance(ha, dict) else None
     if (not isinstance(info, dict) or not isinstance(cf, dict)
             or info.get("id") != site
-            or info.get("owner_slug") + "-" + info.get("type") != site
+            or not isinstance(info.get("owner_slug"), str)
+            or not isinstance(info.get("type"), str)
+            or info["owner_slug"] + "-" + info["type"] != site
             or cf.get("hostname") != site + "-pve-ha-mtls.digitalhouses.vip"
             or cf.get("tunnel") != site
             or cf.get("approved_for_publish") is not False
