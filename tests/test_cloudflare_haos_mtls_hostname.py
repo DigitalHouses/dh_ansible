@@ -76,8 +76,9 @@ def test_pve_worker_rejects_noncanonical_hostname(monkeypatch, tmp_path, hostnam
 def test_shared_waf_guard_covers_new_namespace_without_changing_fleet_guard():
     worker = _worker()
     expression = worker.EXPRESSION
-    assert 'ends_with(http.host, "-ha-mtls.digitalhouses.vip")' in expression
+    assert 'http.host wildcard "*-ha-mtls.digitalhouses.vip"' in expression
     assert "not cf.tls_client_auth.cert_verified" in expression
     assert "cf.tls_client_auth.cert_revoked" in expression
-    assert 'cert_subject_dn ne concat("CN=", http.host)' in expression
+    assert 'not starts_with(cf.tls_client_auth.cert_subject_dn_rfc2253, "CN=")' in expression
+    assert 'substring(cf.tls_client_auth.cert_subject_dn_rfc2253, 3) ne lower(http.host)' in expression
     assert "pve" not in expression  # Keep the existing WAF guard for legacy Amir too.
