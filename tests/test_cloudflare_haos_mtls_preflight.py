@@ -47,7 +47,7 @@ def test_preflight_strict_hostname_single_site_certificate_and_safe_apply():
 def test_workers_fixed_purpose_no_user_commands_or_insecure_cert_flags():
     runner = (ROOT / "bootstrap/dh-haos-mtls-runner.py").read_text()
     pve = (ROOT / "bootstrap/dh-cloudflare-pve-haos-mtls.py").read_text()
-    for term in ("REQUEST.unlink()", "NONCE.fullmatch",
+    for term in ("request.unlink()", "NONCE.fullmatch",
                  "SITE_BASE", "approved_for_publish",
                  "StrictHostKeyChecking=yes",
                  "PVE_IDENTITY_OR_RESULT_INVALID"):
