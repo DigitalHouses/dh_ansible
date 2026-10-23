@@ -3,9 +3,15 @@
 ## Accepted fleet decisions (2026-10-23)
 
 - **One certificate per household/site**, shared by its permitted iPhone/iPad devices. No per-device identity in this policy.
-- New hostname: `<owner-object>-ha-mtls.digitalhouses.vip`; examples:
-  `amir-office-ha-mtls.digitalhouses.vip` (existing) and
-  `serzhan-home-ha-mtls.digitalhouses.vip` (new).
+- Canonical **new route hostname**: `<owner-object>-pve-ha-mtls.digitalhouses.vip`,
+  for example `serzhan-home-pve-ha-mtls.digitalhouses.vip`.
+  The `pve` segment indicates the PVE site's VM/LXC service namespace, not
+  an additional Cloudflare Tunnel: **one tunnel per site, multiple hostnames**.
+- Legacy `amir-office-ha-mtls.digitalhouses.vip` is retained unmodified.
+  `amir-office-pve-ha-mtls.digitalhouses.vip` is the canonical name for any
+  **future approved** cutover. Do not automatically issue a second household
+  identity or change the existing mobile Companion URL/certificate in Amir Office.
+  A name migration needs a separately reviewed certificate-replacement plan.
 - **One Semaphore catalog task №70**: `70-Cloudflare · HAOS · mTLS · Настроить`.
   Its existing playbook performs a read-only site preflight and, only when
   `haos.cloudflare.approved_for_publish: true`, requests a fixed-purpose
@@ -19,7 +25,7 @@
 2. Confirm or issue **one** 365-day Cloudflare Managed CA certificate
    (RSA-2048 CSR generated locally). Do not overwrite/revoke previous keys.
 3. Preserve existing Managed CA hostname associations, adding just this host.
-4. Verify/establish a global **block** WAF rule for `*-ha-mtls.digitalhouses.vip`.
+4. Verify/establish a global **block** WAF rule for `*-ha-mtls.digitalhouses.vip` (the `-pve-ha-mtls` suffix is included).
    Require `cert_verified`, **not** `cert_revoked`, and subject
    `CN=<requested http.host>`; reject skip rules preceding the guard.
 5. Verify/create only an **exact-host** Access application with `Bypass /
