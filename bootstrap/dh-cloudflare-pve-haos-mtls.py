@@ -57,6 +57,14 @@ def root_file(path):
     return path.read_text(encoding="utf-8")
 
 
+def guarded_binary(path):
+    require(path.is_file() and not path.is_symlink(), "ROOT_BINARY_MISSING")
+    info = path.stat()
+    require(info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600,
+            "ROOT_BINARY_PERMISSIONS_INVALID")
+    return path.read_bytes()
+
+
 def new_file(path, content):
     require(path.parent.is_dir() and not path.parent.is_symlink()
             and path.parent.stat().st_uid == 0
@@ -243,7 +251,7 @@ def certificate(token, cf, ha):
         new_file(apple, result)
         changed = True
     for path in (modern, apple):
-        root_file(path)  # encrypted PKCS#12 bytes are never logged.
+        guarded_binary(path)  # encrypted PKCS#12 bytes are never logged.
         run("/usr/bin/openssl", "pkcs12", "-info", "-noout",
             "-in", str(path), "-passin", "file:" + str(password_file))
     return pem, key
@@ -452,6 +460,8 @@ def main():
     dns(token, cf, ha)
     public_check(ha, MATERIAL / "client.key", MATERIAL / "client.crt")
     print("HAOS_MTLS=PASS")
+    print("HAOS_MTLS_HOSTNAME=" + ha["hostname"])
+    print("HAOS_MTLS_ORIGIN=http://" + ha["ipv4"] + ":" + str(ha["port"]))
     print("HAOS_MTLS_RESULT=" + ("CHANGED" if changed else "UNCHANGED"))
     print("CERTIFICATE_POLICY=ONE_PER_SITE")
     print("PUBLIC_WITHOUT_CERT=403")
