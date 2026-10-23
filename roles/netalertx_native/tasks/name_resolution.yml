@@ -32,7 +32,7 @@
 
 - name: Decode installed plugins and preserve unrelated Web UI choices
   ansible.builtin.set_fact:
-    netalertx_native_existing_plugins: "{{ netalertx_native_loaded_plugin_lines[0] | from_json }}"
+    netalertx_native_existing_plugins: "{{ netalertx_native_loaded_plugin_lines[0] | from_yaml }}"
   when: netalertx_native_name_resolution | length > 0
 
 - name: Validate installed plugin list before selective merge
@@ -55,7 +55,9 @@
     mode: "0600"
     backup: false
   register: netalertx_native_name_loaded
-  when: netalertx_native_name_resolution | length > 0
+  when:
+    - netalertx_native_name_resolution | length > 0
+    - (netalertx_native_name_resolution.keys() | list | difference(netalertx_native_existing_plugins)) | length > 0
 
 - name: Enable approved upstream name resolvers at each name-update pass
   ansible.builtin.lineinfile:
