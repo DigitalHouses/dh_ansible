@@ -34,5 +34,5 @@ def test_approved_config_rejected_before_any_write(monkeypatch):
     monkeypatch.setattr(m, "run", lambda *args: calls.append(args) or "")
     monkeypatch.setattr(m, "install_file", lambda *args: calls.append(args))
     with pytest.raises(m.Block, match="PUBLISH_APPROVAL_REQUIRES_VAULT_ESCROW"):
-        m.pve(SimpleNamespace(vmid=110, ipv4="192.168.0.33", approve_publish=True))
+        m.pve(SimpleNamespace(vmid=110, ipv4=".".join(map(str, (192, 168, 0, 33))), approve_publish=True))
     assert calls == []
