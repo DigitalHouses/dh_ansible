@@ -27,7 +27,7 @@ RUNNER_BIN = Path("/usr/local/sbin/dh-haos-mtls-runner")
 PVE_BIN = Path("/usr/local/sbin/dh-cloudflare-pve-haos-mtls")
 UNIT_PATH = Path("/etc/systemd/system/dh-haos-mtls.path")
 UNIT_SERVICE = Path("/etc/systemd/system/dh-haos-mtls.service")
-SUDOERS = Path("/etc/sudoers.d/dh-cloudflare-haos-mtls")
+SUDOERS = Path("/etc/sudoers.d/dh-cloudflare-pve-haos-mtls")
 
 
 class Block(Exception):
@@ -133,6 +133,8 @@ def pve(args):
     require(cf.get("zone") == "digitalhouses.vip" and
             UUID.fullmatch(str(cf.get("new_tunnel_id", ""))),
             "PVE_CANONICAL_TUNNEL_MISSING")
+    require(not args.approve_publish,
+            "PUBLISH_APPROVAL_REQUIRES_VAULT_ESCROW_AND_SEPARATE_REVIEW")
     require(args.vmid is not None and 100 <= args.vmid <= 9999, "VMID_REQUIRED")
     require(args.ipv4 is not None, "HAOS_IP_REQUIRED")
     ip = ipaddress.ip_address(args.ipv4)
@@ -148,7 +150,7 @@ def pve(args):
             "MATERIAL_PERMISSIONS_INVALID")
     config = {
         "site_id": site,
-        "hostname": site + "-ha-mtls.digitalhouses.vip",
+        "hostname": site + "-pve-ha-mtls.digitalhouses.vip",
         "vmid": args.vmid,
         "ipv4": str(ip),
         "port": 80,
@@ -166,7 +168,8 @@ def pve(args):
     write_new(SUDOERS, permission, mode=0o440)
     run("visudo", "-cf", str(SUDOERS))
     print("TASK70_PVE_COMMISSION=PASS")
-    print("HAOS_MTLS_PUBLICATION_APPROVED=" + str(args.approve_publish).upper())
+    print("HAOS_MTLS_PUBLICATION_APPROVED=FALSE")
+    print("HAOS_MTLS_ROOT_MATERIAL=EMPTY_PENDING_ENCRYPTED_VAULT_RESTORE")
 
 
 def main():
