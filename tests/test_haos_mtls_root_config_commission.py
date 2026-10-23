@@ -18,6 +18,8 @@ def load():
 def test_existing_fixed_sudoers_path_and_canonical_hostname():
     m = load()
     assert str(m.SUDOERS) == "/etc/sudoers.d/dh-cloudflare-pve-haos-mtls"
+    assert 'install_file(HERE / "dh-cloudflare-pve-haos-mtls.sudoers", SUDOERS, 0o440)' in (
+        ROOT / "bootstrap/haos-mtls-commission.py").read_text()
     content = (ROOT / "bootstrap/haos-mtls-commission.py").read_text()
     assert 'site + "-pve-ha-mtls.digitalhouses.vip"' in content
     assert "PUBLISH_APPROVAL_REQUIRES_VAULT_ESCROW_AND_SEPARATE_REVIEW" in content
