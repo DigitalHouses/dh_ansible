@@ -19,6 +19,7 @@ import ssl
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -466,24 +467,50 @@ def dns(token, cf, ha):
             "HAOS_DNS_READBACK_FAILED")
 
 
+def curl_https_status(url, key=None, cert=None):
+    """Get just the HTTPS status. Keep client key local and response body unread.
+
+    PVE acceptance 2026-10-24: curl returned 401 with the installed client
+    certificate, while Python urllib + SSLContext.load_cert_chain returned 403
+    for the exact same endpoint. Use the tested PVE TLS client consistently.
+    """
+    require(url.startswith("https://"), "E2E_URL_NOT_HTTPS")
+    require((key is None) == (cert is None), "E2E_KEY_CERT_PAIR_REQUIRED")
+    argv = ["/usr/bin/curl", "--silent", "--show-error",
+            "--noproxy", "*", "--proto", "=https", "--connect-timeout", "5",
+            "--max-time", "10", "--output", "/dev/null",
+            "--write-out", "%{http_code}"]
+    if key is not None:
+        argv.extend(["--cert", str(cert), "--key", str(key)])
+    argv.append(url)
+    result = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                            stderr=subprocess.DEVNULL, timeout=12, check=False)
+    if result.returncode != 0 or not re.fullmatch(rb"[1-5][0-9]{2}", result.stdout):
+        return None
+    return int(result.stdout)
+
+
 def public_check(ha, key, cert):
-    """No client certificate: 403. Valid certificate: HA API returns 401."""
+    """mTLS E2E: anonymous 403, valid household certificate reaches HA (401).
+
+    Permit a short bounded convergence window after creating the tunnel route,
+    DNS record and CA hostname association. Never accept anonymous success.
+    """
     url = "https://" + ha["hostname"] + "/api/"
-    req = urllib.request.Request(url, method="GET")
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            anonymous_status = response.status
-    except urllib.error.HTTPError as exc:
-        anonymous_status = exc.code
+    anonymous_status = None
+    authorized_status = None
+    for attempt in range(8):
+        anonymous_status = curl_https_status(url)
+        require(anonymous_status in (None, 403, 502, 503, 530),
+                "ANONYMOUS_NOT_BLOCKED")
+        if anonymous_status == 403:
+            authorized_status = curl_https_status(url, key=key, cert=cert)
+            if authorized_status == 401:
+                return
+        if attempt < 7:
+            time.sleep(4)
     require(anonymous_status == 403, "ANONYMOUS_NOT_BLOCKED")
-    context = ssl.create_default_context()
-    context.load_cert_chain(str(cert), str(key))
-    try:
-        with urllib.request.urlopen(req, timeout=20, context=context) as response:
-            authorized_status = response.status
-    except urllib.error.HTTPError as exc:
-        authorized_status = exc.code
-    require(authorized_status == 401, "VALID_CERT_NOT_REACHING_HA")
+    raise Block("VALID_CERT_NOT_REACHING_HA")
 
 
 def main():
