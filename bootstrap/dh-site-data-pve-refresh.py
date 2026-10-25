@@ -133,6 +133,9 @@ def push_atomic(raw: bytes, target: str, *, group: str, mode: str):
         staged = target + ".dh-staged"
         # Fail if leftover staging from an interrupted run; never adopt unknown data.
         require(not pct_exists(staged), "SITE_STALE_STAGE_BLOCKED")
+        staged_link = subprocess.run(["/usr/sbin/pct", "exec", str(RUNNER_CID), "--",
+                                       "test", "-L", staged], timeout=10).returncode
+        require(staged_link == 1, "SITE_STALE_SYMLINK_BLOCKED")
         pct("exec", str(RUNNER_CID), "--", "install", "-o", "root", "-g", group,
             "-m", mode, remote, staged)
         require(pct_hash(staged) == expected, "SITE_INSTALL_SHA_MISMATCH")
@@ -183,7 +186,8 @@ def _reconcile_locked(site: str, component: str):
         pct_file_guard(target)
         if prior is not None:
             pct_file_guard(revision, group="root", mode="600")
-            require(pct("exec", str(RUNNER_CID), "--", "cat", revision) == old,
+            last_accepted = pct("exec", str(RUNNER_CID), "--", "cat", revision)
+            require(last_accepted == old or old == checksum,
                     "LOCAL_SITE_DATA_DRIFT_BLOCKED")
         else:
             require(old == checksum, "UNTRACKED_SITE_DATA_DRIFT_BLOCKED")
