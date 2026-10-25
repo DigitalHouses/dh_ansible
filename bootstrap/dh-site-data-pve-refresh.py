@@ -60,7 +60,7 @@ def authenticate() -> str:
     )
     require(process.returncode == 0, "GH_LOGIN_REQUIRED")
     value = process.stdout.strip()
-    require(8 < len(value) < 512 and "\\n" not in value and "\\r" not in value,
+    require(8 < len(value) < 512 and "\n" not in value and "\r" not in value,
             "GH_AUTH_SESSION_INVALID")
     return value
 
