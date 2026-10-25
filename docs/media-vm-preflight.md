@@ -1,26 +1,26 @@
 # Media VM: PCI preflight and commissioning sequence
 
 This is an operator-visible, read-only entrypoint for the canonical
-`serzhan-mediaserver` guest. It is **not** an installation or cutover.
+`media-server-serzhan-home` guest. It is **not** an installation or cutover.
 
-1. Run Semaphore task `80-Медиасервер · Аудит PCI/VM`.
-2. Confirm the target VMID/IP and pinned Debian 13 cloud image checksum in
+1. Canonical home proposal: `media-server-serzhan-home`, VMID `2238`, IP `192.168.11.238/24`; relation VMID=2000+last IPv4 octet. IP is not accepted until DHCP exclusion and LAN conflict checks pass.\n2. Run Semaphore task `80-Медиасервер · Аудит PCI/VM`.
+3. Confirm the target VMID/IP and pinned Debian 13 cloud image checksum in
    private Fleet inventory `media_vm.yml`. Verify static IP/DHCP reservation.
-3. Existing VM 501 (Plex) currently owns Intel GPU 0000:00:02.0 and is running.
+4. Existing VM 501 (Plex) currently owns Intel GPU 0000:00:02.0 and is running.
    VM 700 (TrueNAS) owns SATA 0000:00:17.0 and is stopped, but onboot=1.
    **Do not silently shut down either guest or remove any PCI attachment.**
-4. The enabled `dh-backup-critical-daily` job targets currently offline
+5. The enabled `dh-backup-critical-daily` job targets currently offline
    `truenas_backup`. Verify an independent backup/recovery route before
    migrating disks or workloads.
-5. Commissioning phase must create the new VM **stopped**, with no PCI use
+6. Commissioning phase must create the new VM **stopped**, with no PCI use
    until an exact cutover has been explicitly approved. Install/verify the
    guest OS first, then transfer ownership and start it.
-6. SATA disks contain existing data of unknown layout/health; never
+7. SATA disks contain existing data of unknown layout/health; never
    initialize, format, mount read-write, import or change ownership as a
    provisioning side effect. Require a separate data adoption plan.
-7. GPU passthrough requires an actual E2E decode/transcode acceptance, not
+8. GPU passthrough requires an actual E2E decode/transcode acceptance, not
    merely a successful QEMU boot or `lspci` output.
-8. Both device handoffs must be planned against the current live VM configs,
+9. Both device handoffs must be planned against the current live VM configs,
    protected by exact VMID/PCI identities, independently verified after
    changes, and tested for idempotence.
 
