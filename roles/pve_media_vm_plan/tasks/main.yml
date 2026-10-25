@@ -4,18 +4,22 @@
   ansible.builtin.assert:
     that:
       - media_vm is mapping
-      - media_vm.name == site.owner_slug ~ '-mediaserver'
-      - media_vm.vmid | int >= 100
-      - media_vm.vmid | int <= 999999999
+      - media_vm.name == 'media-server-' ~ site.id
+      - media_vm.vmid | int >= 2200
+      - media_vm.vmid | int <= 2254
       - media_vm.os.distribution == 'debian'
       - media_vm.os.major_version | int == 13
       - media_vm.network.bridge is match('^vmbr[0-9]+$')
+      - media_vm.network.ipv4 is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/24$')
+      - (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int) in range(200, 255)
+      - (media_vm.network.ipv4.split('/')[0].split('.')[:3]) == (pve.host.split('.')[:3])
+      - media_vm.vmid | int == 2000 + (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int)
       - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.gpu != media_vm.pci.sata_controller
       - media_vm.legacy_gpu_owner_vmid | int != media_vm.vmid | int
       - media_vm.legacy_sata_owner_vmid | int != media_vm.vmid | int
-    fail_msg: "Media VM identity, network or PCI desired state is invalid."
+    fail_msg: "Media VM name must be media-server-<site_id> and VMID 2000+IPv4 last octet (2xx); network/PCI must be valid."
 
 - name: Read live PCI inventory from pinned PVE API
   ansible.builtin.uri:
@@ -93,7 +97,7 @@
         + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
         + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
         + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
-        + (['OS_IMAGE_NOT_PINNED'] if not (media_vm.os.image_sha256 | default('') is match('^[0-9a-f]{64}$')) else [])
+        + (['OS_IMAGE_NOT_PINNED'] if not (media_vm.os.image_sha256 | default('', true) is match('^[0-9a-f]{64}$')) else [])
         + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
         + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
       }}

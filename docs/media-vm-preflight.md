@@ -1,32 +1,15 @@
-# Media VM: PCI preflight and commissioning sequence
+# Media VM · PCI preflight и последовательность развёртывания
 
-This is an operator-visible, read-only entrypoint for the canonical
-`serzhan-mediaserver` guest. It is **not** an installation or cutover.
+Задача Semaphore `80-Медиасервер · Аудит PCI/VM` выполняет **только read-only аудит**. Она не создаёт VM, не отключает прежних владельцев PCI и не изменяет диски.
 
-1. Run Semaphore task `80-Медиасервер · Аудит PCI/VM`.
-2. Confirm the target VMID/IP and pinned Debian 13 cloud image checksum in
-   private Fleet inventory `media_vm.yml`. Verify static IP/DHCP reservation.
-3. Existing VM 501 (Plex) currently owns Intel GPU 0000:00:02.0 and is running.
-   VM 700 (TrueNAS) owns SATA 0000:00:17.0 and is stopped, but onboot=1.
-   **Do not silently shut down either guest or remove any PCI attachment.**
-4. The enabled `dh-backup-critical-daily` job targets currently offline
-   `truenas_backup`. Verify an independent backup/recovery route before
-   migrating disks or workloads.
-5. Commissioning phase must create the new VM **stopped**, with no PCI use
-   until an exact cutover has been explicitly approved. Install/verify the
-   guest OS first, then transfer ownership and start it.
-6. SATA disks contain existing data of unknown layout/health; never
-   initialize, format, mount read-write, import or change ownership as a
-   provisioning side effect. Require a separate data adoption plan.
-7. GPU passthrough requires an actual E2E decode/transcode acceptance, not
-   merely a successful QEMU boot or `lspci` output.
-8. Both device handoffs must be planned against the current live VM configs,
-   protected by exact VMID/PCI identities, independently verified after
-   changes, and tested for idempotence.
+1. Проверить из приватного Fleet inventory имя `media-server-<site_id>`, VMID = `2000 + последний октет IP`, IP из инфраструктурного диапазона `.2xx` и отсутствие DHCP/IP-конфликтов.
+2. Проверить, что VMID свободен, Debian 13 образ имеет зафиксированный SHA256, и подготовлены параметры сети, CPU/RAM и системного диска.
+3. Определить текущих владельцев GPU и SATA по **фактической** конфигурации PVE, состоянию VM и IOMMU-группам. Не предполагать заранее, какие VMID или адреса устройств используются.
+4. Не останавливать прежние VM и не переназначать PCI без отдельного согласованного cutover-плана с возможностью отката.
+5. Проверить, что включённые задания резервирования указывают на доступное хранилище. До миграции должен существовать независимый путь восстановления.
+6. Отдельная задача provisioning должна сначала создать защищённую VM **выключенной**, без проброса PCI; проверить Debian/Guest Agent/сеть и лишь затем перейти к переносу устройств.
+7. Существующие физические SATA-диски и данные не форматировать, не инициализировать, не импортировать для записи и не менять владельцев в ходе установки ОС; подключение данных — отдельный план adopt.
+8. PCI GPU принять только после реального теста декодирования/транскодирования, а не по одному `lspci`.
+9. Все изменения строго декларативны и параметризуются через site inventory; повторный apply должен иметь `changed=0`.
 
-## Engineering boundary
-
-Implementation is generic to any site. Site-specific BDFs, VMID, image
-SHA256, network and approvals belong only in private Fleet inventory.
-Existing running guests, PCI owners, backups and SATA contents are protected.
-The read-only plan never performs guest lifecycle writes.
+В публичном репозитории — только общая логика. Фактические BDF, IP, VMID, разрешения на cutover и другие параметры объектов — в приватном Fleet Detail.
