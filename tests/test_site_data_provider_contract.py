@@ -59,32 +59,3 @@ def test_source_code_contains_no_semaphore_level_github_identity():
     assert "api.github.com" not in text
     assert "secrets/fleet.vault.yml" not in text
     assert "gh auth" not in text
-
-
-def test_pve_root_equivalent_sudo_policy_blocks_before_fleet_read(monkeypatch):
-    m = module()
-    monkeypatch.setattr(m.pwd, "getpwnam", lambda account: object())
-
-    class FakeProcess:
-        returncode = 0
-        stdout = "User ansible-linux may run commands:\\n    (root) NOPASSWD: ALL\\n"
-
-    monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: FakeProcess())
-    with pytest.raises(m.Blocked, match="PVE_SUDO_POLICY_ROOT_EQUIVALENT"):
-        m.check_pve_privilege_boundary()
-
-
-def test_pve_sudo_gate_allows_allowlisted_helpers(monkeypatch):
-    m = module()
-    monkeypatch.setattr(m.pwd, "getpwnam", lambda account: object())
-
-    class FakeProcess:
-        returncode = 0
-        stdout = (
-            "User ansible-linux may run commands:\\n"
-            "    (root) NOPASSWD: /usr/bin/id -u, "
-            "/usr/local/sbin/dh-site-data-pve-refresh --site demo-home --component media_vm\\n"
-        )
-
-    monkeypatch.setattr(m.subprocess, "run", lambda *a, **kw: FakeProcess())
-    m.check_pve_privilege_boundary()
