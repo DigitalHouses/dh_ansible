@@ -8,6 +8,7 @@ Installation/credential commissioning is separate from invoking task 80.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import base64
 import hashlib
 import json
@@ -108,9 +109,12 @@ def pct_hash(path: str) -> str | None:
     return out.split()[0]
 
 
-def pct_file_guard(path: str, mode: str = "640"):
+def pct_file_guard(path: str, *, group: str = "semaphore", mode: str = "640"):
+    is_link = subprocess.run(["/usr/sbin/pct", "exec", str(RUNNER_CID), "--",
+                              "test", "-L", path], timeout=10).returncode
+    require(is_link == 1, "EXISTING_SITE_FILE_SYMLINK_BLOCKED")
     info = pct("exec", str(RUNNER_CID), "--", "stat", "-c", "%U:%G:%a:%F", path)
-    require(info == f"root:semaphore:{mode}:regular file",
+    require(info == f"root:{group}:{mode}:regular file",
             "EXISTING_SITE_FILE_PERMISSIONS_DRIFT")
 
 
@@ -137,8 +141,11 @@ def push_atomic(raw: bytes, target: str, *, group: str, mode: str):
     finally:
         if tmp:
             os.unlink(tmp)
-            # Host and runner staging are cleaned only by a follow-up verified
-            # maintenance operation if push failed; no blind cleanup.
+            # Remove only the random, root-owned transient staging file.
+            if "remote" in locals() and pct_exists(remote):
+                require(pct_hash(remote) == hashlib.sha256(raw).hexdigest(),
+                        "REMOTE_STAGE_CONTENT_CHANGED")
+                pct("exec", str(RUNNER_CID), "--", "rm", "-f", remote)
 
 
 def reconcile(site: str, component: str):
@@ -146,6 +153,18 @@ def reconcile(site: str, component: str):
             "PVE_ROOT_REQUIRED")
     require(SITE_RE.fullmatch(site) is not None, "SITE_INVALID")
     require(component in COMPONENTS, "COMPONENT_NOT_ALLOWED")
+    lockfd = os.open("/run/dh-site-data-pve.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        try:
+            fcntl.flock(lockfd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise Blocked("SITE_DATA_PROVIDER_BUSY") from exc
+        _reconcile_locked(site, component)
+    finally:
+        os.close(lockfd)
+
+
+def _reconcile_locked(site: str, component: str):
     require(pct("status", str(RUNNER_CID)) == "status: running", "RUNNER_NOT_RUNNING")
     require(pct("exec", str(RUNNER_CID), "--", "hostname") == "ansible-" + site,
             "RUNNER_SITE_MISMATCH")
@@ -156,15 +175,33 @@ def reconcile(site: str, component: str):
     del token
     target = f"{location}/{component}.yml"
     checksum = hashlib.sha256(data).hexdigest()
+    rev_dir = f"/var/lib/ansible/.site-revisions/{site}"
+    revision = rev_dir + "/" + component + ".sha256"
     old = pct_hash(target)
+    prior = pct_hash(revision)
     if old is not None:
         pct_file_guard(target)
-        require(old == checksum, "EXISTING_SITE_DATA_DRIFT_BLOCKED")
-        print("SITE_DATA_RESULT=UNCHANGED")
-    else:
+        if prior is not None:
+            pct_file_guard(revision, group="root", mode="600")
+            require(pct("exec", str(RUNNER_CID), "--", "cat", revision) == old,
+                    "LOCAL_SITE_DATA_DRIFT_BLOCKED")
+        else:
+            require(old == checksum, "UNTRACKED_SITE_DATA_DRIFT_BLOCKED")
+    if old != checksum:
         push_atomic(data, target, group="semaphore", mode="0640")
         pct_file_guard(target)
         print("SITE_DATA_RESULT=CHANGED")
+    else:
+        print("SITE_DATA_RESULT=UNCHANGED")
+    # Record the previously verified hash, allowing future automatic updates
+    # only if a subsequent run finds that hash unchanged on disk.
+    if prior is None or pct("exec", str(RUNNER_CID), "--", "cat", revision) != checksum:
+        pct("exec", str(RUNNER_CID), "--", "install", "-d", "-o", "root",
+            "-g", "root", "-m", "0700", "/var/lib/ansible/.site-revisions")
+        pct("exec", str(RUNNER_CID), "--", "install", "-d", "-o", "root",
+            "-g", "root", "-m", "0700", rev_dir)
+        push_atomic((checksum + "\\n").encode(), revision, group="root", mode="0600")
+        pct_file_guard(revision, group="root", mode="600")
     print("SITE_DATA_SOURCE_SHA=" + sha)
     print("SITE_DATA=PASS")
 
