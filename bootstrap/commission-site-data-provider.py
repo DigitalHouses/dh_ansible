@@ -22,7 +22,7 @@ CTID = "1231"
 SITE = re.compile(r"[a-z][a-z0-9-]{1,40}\Z")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 
-PVE_FILES = ("bootstrap/dh-site-data-pve-refresh.py",)
+PVE_FILES = (("bootstrap/dh-site-data-pve-refresh.py", "/usr/local/sbin/dh-site-data-pve-refresh"),)
 GUEST_FILES = (
     ("bootstrap/pve-access-audit-request.sh", "/usr/local/sbin/dh-pve-access-audit"),
     ("bootstrap/dh-pve-access-audit.service", "/etc/systemd/system/dh-pve-access-audit.service"),
@@ -63,7 +63,7 @@ def verify_checkout(root: Path, commit: str) -> None:
         raise Blocked("SOURCE_COMMIT_MISMATCH")
     if call("git", "-C", str(root), "status", "--porcelain") != "":
         raise Blocked("SOURCE_TREE_NOT_CLEAN")
-    for src in PVE_FILES:
+    for src, _ in PVE_FILES:
         f = root / src
         if not f.is_file() or f.is_symlink():
             raise Blocked("SOURCE_FILE_MISSING")
@@ -92,8 +92,8 @@ def backup_existing(root: Path, site: str):
     backup.mkdir(mode=0o700, parents=True, exist_ok=False)
     os.chmod(backup, 0o700)
     saved = 0
-    for source in PVE_FILES:
-        target = Path("/usr/local/sbin") / Path(source).name
+    for source, path in PVE_FILES:
+        target = Path(path)
         if target.is_file() and not target.is_symlink():
             dest = backup / ("pve_" + target.name)
             shutil.copy2(target, dest)
@@ -114,8 +114,8 @@ def backup_existing(root: Path, site: str):
 
 
 def verify_live(root: Path):
-    for source in PVE_FILES:
-        dest = Path("/usr/local/sbin") / Path(source).name
+    for source, path in PVE_FILES:
+        dest = Path(path)
         if file_hash(root / source) != file_hash(dest):
             raise Blocked("PVE_WORKER_HASH_MISMATCH")
     for source, target in GUEST_FILES:
