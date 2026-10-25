@@ -6,18 +6,20 @@ Fleet Detail inventory; existing legacy guests are **not** automatically renamed
 
 ## Canonical identity contract
 
+The following IPs/site IDs are illustrative examples, not real deployment inventory.
+
 * Hostname: `<service>-<site_id>` with lowercase English labels, e.g.
-  `media-server-serzhan-home`, `netalertx-serzhan-home` or `truenas-amir`.
+  `media-server-demo-home`, `netalertx-demo-home` or `truenas-demo-home`.
 * Standard infrastructure host addresses in each site's /24 use last octet
   `.200` through `.254`. Never infer that an IP is available merely because it
   does not respond to a probe. Verify DHCP exclusion/reservation and conflicts.
 * **VM (QEMU):** `VMID = 2000 + IPv4_last_octet`.
 * **LXC (CT):** `CTID = 1000 + IPv4_last_octet`.
-* Examples: VM2232 / 192.168.8.232 (`truenas-amir`);
-  VM2238 / 192.168.8.238 (`media-server-amir`);
-  CT1239 / 192.168.11.239 (`netalertx-serzhan-home`).
+* Examples: VM2232 / 192.168.22.232 (`truenas-amir`);
+  VM2238 / 192.168.22.238 (`media-server-demo-home`);
+  CT1239 / 192.168.22.239 (`netalertx-serzhan-home`).
 * For the proposed home media VM, the candidate is
-  **VM2238 / 192.168.11.238 / media-server-serzhan-home**.
+  **VM2238 / 192.168.22.238 / media-server-serzhan-home**.
   The address remains unapproved until live reservation/conflict verification.
 
 ## Safety and exceptions
