@@ -61,6 +61,9 @@ echo "TERMINAL REMAINS OPEN"
 
 ## Semaphore · локальные операции
 
+**Обязательный стандарт проектирования и выбора механизма задач:** [Semaphore · создание задач, reusable-этапы и Workflows](docs/standards/semaphore-task-design.md). Перед добавлением нового шаблона сверяйте функциональный класс, источник site data/секретов, границу root-worker и E2E-приёмку одной кнопкой.
+
+
 **Новый режим (кандидат; Fresh E2E ещё не принят):** Installer создаёт в Semaphore
 **ровно одну задачу — `00-Обновить список задач`**. Остальные определения
 хранятся в `catalog/semaphore-tasks.json` публичного `dh_ansible`
