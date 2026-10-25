@@ -40,6 +40,11 @@
       "title": "70-Cloudflare · HAOS · mTLS · Настроить",
       "playbook": "playbooks/audit-cloudflare-haos-mtls.yml",
       "view": "01 · Подготовка"
+    },
+    {
+      "title": "80-Медиасервер · Аудит PCI/VM",
+      "playbook": "playbooks/plan-pve-media-vm.yml",
+      "view": "02 · Развёртывание"
     }
   ]
 }
