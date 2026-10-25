@@ -54,9 +54,14 @@ def authenticate() -> str:
     """Reuse the GitHub CLI device login from the canonical bootstrap."""
     gh = "/usr/bin/gh"
     require(Path(gh).is_file(), "GH_CLI_NOT_INSTALLED")
+    env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env["HOME"] = "/root"
+    env["GH_CONFIG_DIR"] = "/root/.config/gh"
     process = subprocess.run(
         [gh, "auth", "token", "--hostname", "github.com"],
-        capture_output=True, text=True, timeout=15, check=False,
+        capture_output=True, text=True, timeout=15, check=False, env=env,
     )
     require(process.returncode == 0, "GH_LOGIN_REQUIRED")
     value = process.stdout.strip()
