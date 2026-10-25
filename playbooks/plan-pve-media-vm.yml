@@ -1,0 +1,34 @@
+---
+# Semaphore read-only phase. No guest creation, device detaching, or boot changes.
+- name: Audit and plan media-server Debian QEMU VM and PCI ownership
+  hosts: site_runner
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load canonical site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load canonical PVE identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load desired media server VM state
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+
+    - name: Enforce site-local runner
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+
+  roles:
+    - role: fleet_secrets
+    - role: pve_audit
+      vars:
+        pve_audit_token_secret_effective: "{{ site_secrets.pve.audit_token_secret }}"
+    - role: pve_media_vm_plan
