@@ -1,35 +1,22 @@
-# Canonical new guest identity: PVE ID, IPv4 and hostname
+# Стандарт ID, IP и имени нового PVE-гостя · DigitalHouses
 
-**Scope:** newly commissioned infrastructure guests of DigitalHouses Ansible-2.
-Site-specific network ranges, addresses and service names live only in private
-Fleet Detail inventory; existing legacy guests are **not** automatically renamed.
+**Область:** новые VM/LXC в инфраструктурной сети объекта. Источник фактических адресов и исключений — **приватный Fleet Detail inventory**. Существующие исторические VM и CT автоматически не переименовываются.
 
-## Canonical identity contract
+## Правила
 
-The following IPs/site IDs are illustrative examples, not real deployment inventory.
+- Имя гостя: `<service>-<site_id>`, английские имена через дефис. Примеры: `media-server-demo-home`, `truenas-demo-home`, `netalertx-demo-home`.
+- Для новых инфраструктурных гостей сайта с /24 используются IP с последним октетом `200..254`.
+- **VM/QEMU:** `VMID = 2000 + последний октет IPv4`.
+- **LXC:** `CTID = 1000 + последний октет IPv4`.
+- Иллюстративные примеры (не реальные адреса сайтов):
+  - `192.168.22.232` → VM2232, `truenas-demo-home`;
+  - `192.168.22.238` → VM2238, `media-server-demo-home`;
+  - `192.168.22.239` → CT1239, `netalertx-demo-home`.
 
-* Hostname: `<service>-<site_id>` with lowercase English labels, e.g.
-  `media-server-demo-home`, `netalertx-demo-home` or `truenas-demo-home`.
-* Standard infrastructure host addresses in each site's /24 use last octet
-  `.200` through `.254`. Never infer that an IP is available merely because it
-  does not respond to a probe. Verify DHCP exclusion/reservation and conflicts.
-* **VM (QEMU):** `VMID = 2000 + IPv4_last_octet`.
-* **LXC (CT):** `CTID = 1000 + IPv4_last_octet`.
-* Examples: VM2232 / 192.168.22.232 (`truenas-amir`);
-  VM2238 / 192.168.22.238 (`media-server-demo-home`);
-  CT1239 / 192.168.22.239 (`netalertx-serzhan-home`).
-* For the proposed home media VM, the candidate is
-  **VM2238 / 192.168.22.238 / media-server-serzhan-home**.
-  The address remains unapproved until live reservation/conflict verification.
+## Безопасность и применение
 
-## Safety and exceptions
-
-* Verify that both PVE guest ID and LAN address are unoccupied **before apply**.
-* Preserve PVE guest identities, PCI assignments, machine IDs, DHCP leases and
-  data of existing unrelated guests. Never rename or re-number them implicitly.
-* Exceptions for existing systems (e.g. legacy VM501, VM700, CT333 or adopted
-  historical pilot guests) require an explicit inventory annotation, not a
-  rewrite of the canonical rule.
-* Plan and apply must reject new guests whose name, address and ID disagree.
-* Network acceptance additionally requires the mDNS/Bonjour baseline from
-  `docs/standards/guest-network-mdns.md`.
+- Не считать IP свободным только потому, что он не отвечает на ping. Проверить DHCP exclusion/reservation, адресацию сети и отсутствие конфликта.
+- До создания гостя проверять существующие VMID/CTID и IP через audit → plan → apply → verify.
+- Не менять IDs, имена, IP, PCI и диски существующих legacy-гостей автоматически.
+- Допущенные исторические исключения должны быть задекларированы в inventory.
+- Для новых Linux-гостей дополнительно применяется стандарт самостоятельной публикации имени через mDNS: `docs/standards/guest-network-mdns.md`.
