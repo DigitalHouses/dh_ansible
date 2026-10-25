@@ -121,7 +121,7 @@ print('PINNED_HOST_KEY=PASS')
     print(runner_exec(ctid, "python3", "-c", script, line))
 
 
-def install_linux_user(source_ip: str, key: str) -> None:
+def install_linux_user(source_ip: str, key: str, site: str) -> None:
     try:
         account = pwd.getpwnam(HOST_USER)
     except KeyError:
@@ -156,7 +156,20 @@ def install_linux_user(source_ip: str, key: str) -> None:
     os.chown(authorized, account.pw_uid, account.pw_gid)
     os.chmod(authorized, 0o600)
     sudoers = Path("/etc/sudoers.d/90-digitalhouses-ansible-linux")
-    desired = "ansible-linux ALL=(root) NOPASSWD: ALL\n"
+    # Future fresh sites receive an exact least-privilege policy.
+    # Existing unrestricted sudoers deliberately block, requiring explicit
+    # migration after audit of existing SSH/worker dependencies.
+    if not re.fullmatch(r"[a-z][a-z0-9-]{1,30}", site):
+        fail("BLOCKED: Invalid site for sudoers policy")
+    allowed = [
+        "/usr/bin/id -u",
+        "/usr/bin/cat /var/lib/digitalhouses/bootstrap/"
+        f"pve-identities-{site}-ansible-v2-pending.json",
+        "/usr/local/sbin/dh-cloudflare-pve-cutover --apply",
+        "/usr/local/sbin/dh-cloudflare-pve-haos-mtls --apply",
+        f"/usr/local/sbin/dh-site-data-pve-refresh --site {site} --component media_vm",
+    ]
+    desired = "ansible-linux ALL=(root) NOPASSWD: " + ", ".join(allowed) + "\\n"
     if sudoers.is_symlink():
         fail("BLOCKED: sudoers path symlink")
     if sudoers.exists() and sudoers.read_text() != desired:
@@ -284,7 +297,7 @@ def main() -> None:
         if not args.apply:
             print("PVE_RESTORED_IDENTITIES=READ_ONLY_PASS")
             return
-        install_linux_user(str(source), restored_pub)
+        install_linux_user(str(source), restored_pub, args.site)
         install_known_host(str(args.runner_ctid), str(target))
         print("PVE_RESTORED_IDENTITIES=PASS (tokens preserved)")
         return
@@ -342,7 +355,7 @@ def main() -> None:
     if staging.get("runner_ip") != str(source) or staging.get("pve_ip") != str(target):
         fail("BLOCKED: Staging file identity mismatch")
     key = prepare_runner_key(str(args.runner_ctid), args.site)
-    install_linux_user(str(source), key)
+    install_linux_user(str(source), key, args.site)
     install_known_host(str(args.runner_ctid), str(target))
     for user, role in ((AUDIT_USER, "PVEAuditor"), (WRITE_USER, "PVEAdmin")):
         ensure_pve_user(user, role, users, acl)
