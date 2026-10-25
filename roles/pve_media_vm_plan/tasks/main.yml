@@ -4,12 +4,239 @@
   ansible.builtin.assert:
     that:
       - media_vm is mapping
-      - media_vm.name == site.owner_slug ~ '-mediaserver'
-      - media_vm.vmid | int >= 100
-      - media_vm.vmid | int <= 999999999
+      - media_vm.name == 'media-server-' ~ site.id
+      - media_vm.vmid | int >= 2200
+      - media_vm.vmid | int <= 2254
       - media_vm.os.distribution == 'debian'
       - media_vm.os.major_version | int == 13
-      - media_vm.network.bridge is match('^vmbr[0-9]+$')
+      - media_vm.network.bridge is match('^vmbr[0-9]+
+      - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+      - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+      - media_vm.pci.gpu != media_vm.pci.sata_controller
+      - media_vm.legacy_gpu_owner_vmid | int != media_vm.vmid | int
+      - media_vm.legacy_sata_owner_vmid | int != media_vm.vmid | int
+    fail_msg: "Media VM name must be media-server-<site_id> and VMID 2000+IPv4 last octet (2xx); network/PCI must be valid."
+
+- name: Read live PCI inventory from pinned PVE API
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/hardware/pci"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}"
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 20
+  register: media_vm_pci_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve exact GPU and SATA PCI functions
+  ansible.builtin.set_fact:
+    media_vm_gpu_device: "{{ (media_vm_pci_raw.json.data | selectattr('id', 'equalto', media_vm.pci.gpu) | list | first) | default({}) }}"
+    media_vm_sata_device: "{{ (media_vm_pci_raw.json.data | selectattr('id', 'equalto', media_vm.pci.sata_controller) | list | first) | default({}) }}"
+  changed_when: false
+
+- name: Require both PCI devices and isolated IOMMU groups
+  ansible.builtin.assert:
+    that:
+      - media_vm_gpu_device.id | default('') == media_vm.pci.gpu
+      - media_vm_sata_device.id | default('') == media_vm.pci.sata_controller
+      - media_vm_gpu_device.iommugroup is defined
+      - media_vm_sata_device.iommugroup is defined
+      - media_vm_gpu_device.iommugroup | int != media_vm_sata_device.iommugroup | int
+      - (media_vm_pci_raw.json.data | selectattr('iommugroup', 'equalto', media_vm_gpu_device.iommugroup) | list | length) == 1
+      - (media_vm_pci_raw.json.data | selectattr('iommugroup', 'equalto', media_vm_sata_device.iommugroup) | list | length) == 1
+    fail_msg: "PCI passthrough BLOCKED: missing device or shared IOMMU group."
+
+- name: Build read-only PCI ownership inventory from all QEMU configurations
+  ansible.builtin.set_fact:
+    media_vm_pci_assignments: >-
+      {%- set found = [] -%}
+      {%- for vm in pve_qemu_configs.results -%}
+        {%- for entry in vm.json.data | dict2items -%}
+          {%- if entry.key is match('^hostpci[0-9]+$') -%}
+            {%- set _ = found.append({
+              'vmid': vm.item.vmid | int,
+              'name': vm.item.name | default(''),
+              'status': vm.item.status | default('unknown'),
+              'slot': entry.key,
+              'value': entry.value | string
+            }) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ found }}
+  changed_when: false
+
+- name: Select PCI owners and intended target guest
+  ansible.builtin.set_fact:
+    media_vm_gpu_owners: "{{ media_vm_pci_assignments | selectattr('value', 'search', media_vm.pci.gpu | regex_escape) | list }}"
+    media_vm_sata_owners: "{{ media_vm_pci_assignments | selectattr('value', 'search', media_vm.pci.sata_controller | regex_escape) | list }}"
+    media_vm_existing_targets: "{{ pve_lifecycle_entries | selectattr('vmid', 'equalto', media_vm.vmid | int) | list }}"
+    media_vm_active_backup_jobs: "{{ pve_backup_jobs.json.data | selectattr('enabled', 'equalto', 1) | list }}"
+    media_vm_active_storage_names: "{{ pve_storage.json.data | selectattr('active', 'equalto', 1) | map(attribute='storage') | list }}"
+  changed_when: false
+
+- name: Identify enabled jobs pointing at unavailable storage
+  ansible.builtin.set_fact:
+    media_vm_offline_backup_targets: "{{ (media_vm_active_backup_jobs | map(attribute='storage') | list | unique | list) | difference(media_vm_active_storage_names) }}"
+  changed_when: false
+
+- name: Calculate cutover and commissioning blockers without modifying PVE
+  ansible.builtin.set_fact:
+    media_vm_plan_blockers: >-
+      {{
+        (['TARGET_VMID_OCCUPIED'] if media_vm_existing_targets | length > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
+        + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
+        + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
+        + (['OS_IMAGE_NOT_PINNED'] if not (media_vm.os.image_sha256 | default('', true) is match('^[0-9a-f]{64}$')) else [])
+        + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
+        + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
+      }}
+  changed_when: false
+
+- name: Report exact read-only hardware and provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      vmid: "{{ media_vm.vmid }}"
+      name: "{{ media_vm.name }}"
+      guest_exists: "{{ media_vm_existing_targets | length > 0 }}"
+      gpu:
+        bdf: "{{ media_vm.pci.gpu }}"
+        iommu_group: "{{ media_vm_gpu_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_gpu_owners }}"
+      sata_controller:
+        bdf: "{{ media_vm.pci.sata_controller }}"
+        iommu_group: "{{ media_vm_sata_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_sata_owners }}"
+      enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
+      blockers: "{{ media_vm_plan_blockers }}"
+      result: PLAN_ONLY
+      vm_created: false
+      pci_detached: false
+      existing_guests_changed: false
+)
+      - media_vm.network.ipv4 is match('^192\\.168\\.[0-9]{1,3}\\.2[0-5][0-9]/24
+      - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+      - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
+      - media_vm.pci.gpu != media_vm.pci.sata_controller
+      - media_vm.legacy_gpu_owner_vmid | int != media_vm.vmid | int
+      - media_vm.legacy_sata_owner_vmid | int != media_vm.vmid | int
+    fail_msg: "Media VM identity, network or PCI desired state is invalid."
+
+- name: Read live PCI inventory from pinned PVE API
+  ansible.builtin.uri:
+    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/nodes/{{ pve.node }}/hardware/pci"
+    method: GET
+    headers:
+      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}"
+    validate_certs: false
+    return_content: true
+    status_code: 200
+    timeout: 20
+  register: media_vm_pci_raw
+  changed_when: false
+  no_log: true
+
+- name: Resolve exact GPU and SATA PCI functions
+  ansible.builtin.set_fact:
+    media_vm_gpu_device: "{{ (media_vm_pci_raw.json.data | selectattr('id', 'equalto', media_vm.pci.gpu) | list | first) | default({}) }}"
+    media_vm_sata_device: "{{ (media_vm_pci_raw.json.data | selectattr('id', 'equalto', media_vm.pci.sata_controller) | list | first) | default({}) }}"
+  changed_when: false
+
+- name: Require both PCI devices and isolated IOMMU groups
+  ansible.builtin.assert:
+    that:
+      - media_vm_gpu_device.id | default('') == media_vm.pci.gpu
+      - media_vm_sata_device.id | default('') == media_vm.pci.sata_controller
+      - media_vm_gpu_device.iommugroup is defined
+      - media_vm_sata_device.iommugroup is defined
+      - media_vm_gpu_device.iommugroup | int != media_vm_sata_device.iommugroup | int
+      - (media_vm_pci_raw.json.data | selectattr('iommugroup', 'equalto', media_vm_gpu_device.iommugroup) | list | length) == 1
+      - (media_vm_pci_raw.json.data | selectattr('iommugroup', 'equalto', media_vm_sata_device.iommugroup) | list | length) == 1
+    fail_msg: "PCI passthrough BLOCKED: missing device or shared IOMMU group."
+
+- name: Build read-only PCI ownership inventory from all QEMU configurations
+  ansible.builtin.set_fact:
+    media_vm_pci_assignments: >-
+      {%- set found = [] -%}
+      {%- for vm in pve_qemu_configs.results -%}
+        {%- for entry in vm.json.data | dict2items -%}
+          {%- if entry.key is match('^hostpci[0-9]+$') -%}
+            {%- set _ = found.append({
+              'vmid': vm.item.vmid | int,
+              'name': vm.item.name | default(''),
+              'status': vm.item.status | default('unknown'),
+              'slot': entry.key,
+              'value': entry.value | string
+            }) -%}
+          {%- endif -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ found }}
+  changed_when: false
+
+- name: Select PCI owners and intended target guest
+  ansible.builtin.set_fact:
+    media_vm_gpu_owners: "{{ media_vm_pci_assignments | selectattr('value', 'search', media_vm.pci.gpu | regex_escape) | list }}"
+    media_vm_sata_owners: "{{ media_vm_pci_assignments | selectattr('value', 'search', media_vm.pci.sata_controller | regex_escape) | list }}"
+    media_vm_existing_targets: "{{ pve_lifecycle_entries | selectattr('vmid', 'equalto', media_vm.vmid | int) | list }}"
+    media_vm_active_backup_jobs: "{{ pve_backup_jobs.json.data | selectattr('enabled', 'equalto', 1) | list }}"
+    media_vm_active_storage_names: "{{ pve_storage.json.data | selectattr('active', 'equalto', 1) | map(attribute='storage') | list }}"
+  changed_when: false
+
+- name: Identify enabled jobs pointing at unavailable storage
+  ansible.builtin.set_fact:
+    media_vm_offline_backup_targets: "{{ (media_vm_active_backup_jobs | map(attribute='storage') | list | unique | list) | difference(media_vm_active_storage_names) }}"
+  changed_when: false
+
+- name: Calculate cutover and commissioning blockers without modifying PVE
+  ansible.builtin.set_fact:
+    media_vm_plan_blockers: >-
+      {{
+        (['TARGET_VMID_OCCUPIED'] if media_vm_existing_targets | length > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
+        + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
+        + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
+        + (['OS_IMAGE_NOT_PINNED'] if not (media_vm.os.image_sha256 | default('') is match('^[0-9a-f]{64}$')) else [])
+        + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
+        + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
+      }}
+  changed_when: false
+
+- name: Report exact read-only hardware and provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      vmid: "{{ media_vm.vmid }}"
+      name: "{{ media_vm.name }}"
+      guest_exists: "{{ media_vm_existing_targets | length > 0 }}"
+      gpu:
+        bdf: "{{ media_vm.pci.gpu }}"
+        iommu_group: "{{ media_vm_gpu_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_gpu_owners }}"
+      sata_controller:
+        bdf: "{{ media_vm.pci.sata_controller }}"
+        iommu_group: "{{ media_vm_sata_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_sata_owners }}"
+      enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
+      blockers: "{{ media_vm_plan_blockers }}"
+      result: PLAN_ONLY
+      vm_created: false
+      pci_detached: false
+      existing_guests_changed: false
+)
+      - (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int) in range(200, 255)
+      - media_vm.vmid | int == 2000 + (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int)
       - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.gpu != media_vm.pci.sata_controller
