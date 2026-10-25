@@ -15,8 +15,8 @@ def test_task_design_standard_is_linked_from_readme():
 def test_task_design_standard_lists_exact_catalog_task_numbers():
     text = DOC.read_text()
     catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
-    actual = [re.match(r"^(\\d\\d)-", task["title"]).group(1) for task in catalog]
-    listed = re.findall(r"^\\| \\*\\*(\\d\\d)\\*\\* \\|", text, re.MULTILINE)
+    actual = [re.match(r"^(\d\d)-", task["title"]).group(1) for task in catalog]
+    listed = re.findall(r"^\| \*\*(\d\d)\*\* \|", text, re.MULTILINE)
     assert len(actual) == len(set(actual)), "Catalog numbering must be unique"
     assert sorted(actual) == sorted(listed), "Update task mechanism registry with catalog"
 
