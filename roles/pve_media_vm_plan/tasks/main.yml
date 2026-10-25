@@ -75,6 +75,12 @@
     media_vm_sata_owners: "{{ media_vm_pci_assignments | selectattr('value', 'search', media_vm.pci.sata_controller | regex_escape) | list }}"
     media_vm_existing_targets: "{{ pve_lifecycle_entries | selectattr('vmid', 'equalto', media_vm.vmid | int) | list }}"
     media_vm_active_backup_jobs: "{{ pve_backup_jobs.json.data | selectattr('enabled', 'equalto', 1) | list }}"
+    media_vm_active_storage_names: "{{ pve_storage.json.data | selectattr('active', 'equalto', 1) | map(attribute='storage') | list }}"
+  changed_when: false
+
+- name: Identify enabled jobs pointing at unavailable storage
+  ansible.builtin.set_fact:
+    media_vm_offline_backup_targets: "{{ (media_vm_active_backup_jobs | map(attribute='storage') | list | unique | list) | difference(media_vm_active_storage_names) }}"
   changed_when: false
 
 - name: Calculate cutover and commissioning blockers without modifying PVE
@@ -82,6 +88,8 @@
     media_vm_plan_blockers: >-
       {{
         (['TARGET_VMID_OCCUPIED'] if media_vm_existing_targets | length > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
         + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
         + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
         + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
@@ -107,6 +115,7 @@
         iommu_group: "{{ media_vm_sata_device.iommugroup }}"
         currently_assigned_to: "{{ media_vm_sata_owners }}"
       enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
       blockers: "{{ media_vm_plan_blockers }}"
       result: PLAN_ONLY
       vm_created: false
