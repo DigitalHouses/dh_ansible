@@ -30,6 +30,10 @@ jobs:
       - name: Validate Cloudflare root worker Python syntax
         run: |
           python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
+      - name: Validate site-data provider and PVE reuse helper syntax
+        run: |
+          python3 -m py_compile bootstrap/dh-site-data-runner.py bootstrap/dh-site-data-pve-refresh.py
+          bash -n bootstrap/pve-access-audit-request.sh
       - name: Validate runner wrapper syntax
         run: bash -n bin/ansimble-run
       - name: Validate PVE installer and release launcher shell syntax
@@ -80,6 +84,8 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-cloudflare-tunnel.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-pve-access.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-netalertx-install.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-netalertx-native.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/deploy-netalertx-pve-from-worker.yml
