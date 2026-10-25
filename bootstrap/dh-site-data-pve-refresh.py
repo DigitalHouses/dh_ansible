@@ -173,6 +173,8 @@ def _reconcile_locked(site: str, component: str):
             "RUNNER_SITE_MISMATCH")
     location = f"{ROOT}/{site}"
     require(pct_exists(location + "/hosts.yml"), "SITE_INVENTORY_MISSING")
+    check = pct("exec", str(RUNNER_CID), "--", "stat", "-c", "%U:%G:%a:%F", location)
+    require(check == "root:semaphore:750:directory", "SITE_DIRECTORY_DRIFT")
     token = authenticate()
     data, sha = pinned_source(site, component, token)
     del token
