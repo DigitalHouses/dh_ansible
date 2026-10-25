@@ -13,6 +13,7 @@ import base64
 import hashlib
 import json
 import os
+import pwd
 from pathlib import Path
 import re
 import stat
@@ -54,6 +55,10 @@ def pct(*args: str) -> str:
 def check_pve_privilege_boundary():
     """Refuse private Fleet credentials while SSH principals have blanket sudo."""
     for account in ("ansible-linux", "ansimble"):
+        try:
+            pwd.getpwnam(account)
+        except KeyError:
+            continue
         p = subprocess.run(["/usr/bin/sudo", "-n", "-l", "-U", account],
                            capture_output=True, text=True, timeout=10, check=False)
         require(p.returncode == 0, "PVE_SUDO_POLICY_UNVERIFIABLE")
