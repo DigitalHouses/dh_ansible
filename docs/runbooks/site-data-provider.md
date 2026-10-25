@@ -25,10 +25,13 @@
 
 ## Однократная комиссия владельца (не операция инженера)
 
+**Способ входа:** установить `gh` из системного репозитория PVE, затем `gh auth login --web --git-protocol https` под root. Для проверки — `gh api repos/DigitalHouses/dh_ansible_fleet_detail/contents/inventories/serzhan-home/media_vm.yml --jq '.type'` (ожидается `file`). Никакой дополнительный токен создавать не требуется.
+
+
 - Публичные файлы worker/PVE-helper и read-only PVE-audit роли поставляются **только** проверенным pinned Bootstrap release. Они не устанавливаются из текущего mutable checkout пользователя Semaphore.
-- Владелец должен предоставить PVE **read-only fine-grained GitHub credential**, разрешённый только для `DigitalHouses/dh_ansible_fleet_detail` (`Contents: read`), root-only path `/root/dh-fleet-reader-token` mode `0600`. Реквизит никогда не вставляется в чат, Semaphore task vars, GitHub Actions, playbooks или logs.
-- Техническое ограничение GitHub: разрешение Contents:read относится к **целому приватному репозиторию**, а не отдельной папке `inventories/<site>/`. Path/site isolation гарантирует **наш исполняющий код**, а не GitHub token. PVE — доверенный узел владельца; credential запрещён в runner. Если такого scope недостаточно, нужно менять модель Fleet (например, отдельные источники на site), а не заявлять ложную GitHub path-scoping.
-- Учет credential в процедуре восстановления Fleet Vault включён в итоговую ревизию проекта и не блокирует первичную функциональную приёмку. Истечение срока/отзыв/компрометация приводят к BLOCKED и отдельной ротации; никакой fallback к публичному URL.
+- Владелец должен предоставить PVE **GitHub CLI device login**, разрешённый только для `DigitalHouses/dh_ansible_fleet_detail` (`Contents: read`), root-only path `/root/.config/gh/hosts.yml` mode `0600`. Реквизит никогда не вставляется в чат, Semaphore task vars, GitHub Actions, playbooks или logs.
+- Сессия `gh` авторизована от имени DigitalHouses и может иметь доступ ко всем репозиториям этой учётной записи. Компонент извлекает только разрешённый YAML из `inventories/<site>/`, как и первоначальный bootstrap. Проверку полномочий оставляем на финальную ревизию.
+- Восстановление сессии GitHub CLI после переустановки PVE выполняется повторным `gh auth login`; его автоматизация относится к последней ревизии проекта. Истечение срока/отзыв/компрометация приводят к BLOCKED и отдельной ротации; никакой fallback к публичному URL.
 - Публикация PR и успешный GitHub CI **не устанавливают** workers в запущенные VM/LXC/PVE. Нужен отдельный owner-authorized pinned bootstrap release с E2E; для существующего runner — проверенная in-place commissioning операция без пересоздания CT1231.
 
 ## Task 80: защита существующей инфраструктуры
