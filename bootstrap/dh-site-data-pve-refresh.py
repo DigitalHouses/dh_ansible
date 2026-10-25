@@ -23,7 +23,6 @@ import urllib.error
 import urllib.request
 
 REPO = "DigitalHouses/dh_ansible_fleet_detail"
-TOKEN = Path("/root/dh-fleet-reader-token")
 RUNNER_CID = 1231
 SITE_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\Z")
 COMPONENTS = frozenset(("media_vm", "netalertx", "haos"))
@@ -52,14 +51,23 @@ def pct(*args: str) -> str:
 
 
 def authenticate() -> str:
-    require(TOKEN.is_file() and not TOKEN.is_symlink(), "FLEET_READER_NOT_COMMISSIONED")
-    info = TOKEN.stat()
-    require(info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o600
-            and 8 < info.st_size < 512, "FLEET_READER_UNSAFE")
-    value = TOKEN.read_text().strip()
-    require("\n" not in value and "\r" not in value, "FLEET_READER_INVALID")
+    """Reuse the GitHub CLI device login from the canonical bootstrap."""
+    gh = "/usr/bin/gh"
+    require(Path(gh).is_file(), "GH_CLI_NOT_INSTALLED")
+    env = os.environ.copy()
+    env.pop("GH_TOKEN", None)
+    env.pop("GITHUB_TOKEN", None)
+    env["HOME"] = "/root"
+    env["GH_CONFIG_DIR"] = "/root/.config/gh"
+    process = subprocess.run(
+        [gh, "auth", "token", "--hostname", "github.com"],
+        capture_output=True, text=True, timeout=15, check=False, env=env,
+    )
+    require(process.returncode == 0, "GH_LOGIN_REQUIRED")
+    value = process.stdout.strip()
+    require(8 < len(value) < 512 and "\n" not in value and "\r" not in value,
+            "GH_AUTH_SESSION_INVALID")
     return value
-
 
 def api(path: str, token: str) -> dict:
     url = "https://api.github.com/" + path

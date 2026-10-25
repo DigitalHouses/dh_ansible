@@ -59,3 +59,36 @@ def test_source_code_contains_no_semaphore_level_github_identity():
     assert "api.github.com" not in text
     assert "secrets/fleet.vault.yml" not in text
     assert "gh auth" not in text
+
+
+def test_reuses_root_gh_cli_session_without_independent_pat(monkeypatch):
+    m = module()
+    class MockRun:
+        returncode = 0
+        stdout = "synthetic-device-session-token\n"
+        stderr = ""
+
+    seen = []
+    def mock_run(*args, **kwargs):
+        seen.append((args, kwargs))
+        return MockRun()
+
+    monkeypatch.setattr(m.Path, "is_file", lambda _: True)
+    monkeypatch.setattr(m.subprocess, "run", mock_run)
+    assert m.authenticate() == "synthetic-device-session-token"
+    argv = seen[0][0][0]
+    assert argv == ["/usr/bin/gh", "auth", "token", "--hostname", "github.com"]
+    assert seen[0][1]["env"]["GH_CONFIG_DIR"] == "/root/.config/gh"
+    assert not hasattr(m, "TOKEN")
+
+
+def test_gh_login_missing_fails_without_fallback(monkeypatch):
+    m = module()
+    monkeypatch.setattr(m.Path, "is_file", lambda _: True)
+    class MockRun:
+        returncode = 1
+        stdout = ""
+        stderr = "not authenticated"
+    monkeypatch.setattr(m.subprocess, "run", lambda *a, **k: MockRun())
+    with pytest.raises(m.Blocked, match="GH_LOGIN_REQUIRED"):
+        m.authenticate()
