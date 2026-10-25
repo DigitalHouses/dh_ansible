@@ -9,7 +9,11 @@
       - media_vm.vmid | int <= 2254
       - media_vm.os.distribution == 'debian'
       - media_vm.os.major_version | int == 13
-      - media_vm.network.bridge is match('^vmbr[0-9]+
+      - media_vm.network.bridge is match('^vmbr[0-9]+$')
+      - media_vm.network.ipv4 is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/24$')
+      - (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int) in range(200, 255)
+      - (media_vm.network.ipv4.split('/')[0].split('.')[:3]) == (pve.host.split('.')[:3])
+      - media_vm.vmid | int == 2000 + (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int)
       - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]$')
       - media_vm.pci.gpu != media_vm.pci.sata_controller
