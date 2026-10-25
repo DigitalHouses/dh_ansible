@@ -56,7 +56,12 @@ def test_secret_staging_permissions_and_no_stdout(tmp_path, capsys):
 def test_host_ssh_transport_is_source_restricted():
     text = BOOTSTRAP.read_text()
     assert 'from="{source_ip}",restrict' in text
-    assert "NOPASSWD: ALL" in text
+    assert "NOPASSWD: ALL" not in text
+    assert "NOPASSWD: " in text
+    assert "/usr/bin/id -u" in text
+    assert "dh-cloudflare-pve-cutover --apply" in text
+    assert "dh-cloudflare-pve-haos-mtls --apply" in text
+    assert "dh-site-data-pve-refresh --site {site} --component media_vm" in text
     assert 'runner_exec(ctid, "ssh-keygen"' in text
     assert 'runner_user_exec(ctid, "ssh-keygen"' not in text
     assert "ansible-v2-pending.json" in text
