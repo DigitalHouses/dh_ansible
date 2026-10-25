@@ -204,7 +204,7 @@ def _reconcile_locked(site: str, component: str):
             "-g", "root", "-m", "0700", "/var/lib/ansible/.site-revisions")
         pct("exec", str(RUNNER_CID), "--", "install", "-d", "-o", "root",
             "-g", "root", "-m", "0700", rev_dir)
-        push_atomic((checksum + "\\n").encode(), revision, group="root", mode="0600")
+        push_atomic((checksum + "\n").encode(), revision, group="root", mode="0600")
         pct_file_guard(revision, group="root", mode="600")
     print("SITE_DATA_SOURCE_SHA=" + sha)
     print("SITE_DATA=PASS")
