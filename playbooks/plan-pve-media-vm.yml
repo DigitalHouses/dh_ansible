@@ -14,6 +14,16 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/pve.yml"
 
+
+    # Generic dependency: future automated Fleet Detail refresh is inserted
+    # here, behind its own trusted authorization and exact site scope.
+    - name: Resolve reusable site inventory prerequisite
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - media_vm.yml
+
     - name: Load desired media server VM state
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/media_vm.yml"
