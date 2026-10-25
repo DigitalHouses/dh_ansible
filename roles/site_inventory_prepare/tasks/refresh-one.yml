@@ -1,0 +1,57 @@
+---
+- name: Derive fixed allowlisted component from requested site YAML
+  ansible.builtin.set_fact:
+    site_data_component: "{{ site_inventory_required_file | regex_replace('[.]yml$', '') }}"
+  changed_when: false
+
+- name: Refuse uncommissioned Fleet component without submitting a request
+  ansible.builtin.assert:
+    that:
+      - site_data_component in ['media_vm', 'netalertx', 'haos']
+    fail_msg: "SITE_DATA_COMPONENT_NOT_COMMISSIONED: unsupported private site file."
+
+- name: Generate unique request identity for this component
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/kernel/random/uuid]
+  register: site_data_nonce
+  changed_when: false
+
+- name: Request trusted private Fleet reconciliation
+  ansible.builtin.copy:
+    dest: /var/lib/semaphore/dh-site-data.request
+    content: "SITE_DATA:{{ site_data_nonce.stdout }}:{{ site_data_component }}\n"
+    mode: "0600"
+  changed_when: false
+
+- name: Wait for matching source reconciliation, never stale status
+  ansible.builtin.command:
+    argv: [cat, /run/dh-site-data.status]
+  register: site_data_result
+  changed_when: false
+  failed_when: false
+  retries: 70
+  delay: 3
+  until: >-
+    site_data_result.stdout in [
+      site_data_nonce.stdout ~ '|PASS|UNCHANGED',
+      site_data_nonce.stdout ~ '|PASS|CHANGED',
+      site_data_nonce.stdout ~ '|FAILED'
+    ]
+
+- name: Require completed site-data refresh before loading component vars
+  ansible.builtin.assert:
+    that:
+      - site_data_result.stdout in [
+          site_data_nonce.stdout ~ '|PASS|UNCHANGED',
+          site_data_nonce.stdout ~ '|PASS|CHANGED'
+        ]
+    fail_msg: >-
+      SITE_DATA_REFRESH_BLOCKED: protected provider failed or was unavailable.
+      Check root-only journal for dh-site-data.service. No PVE guest was changed.
+
+- name: Report source reconciliation without private material
+  ansible.builtin.debug:
+    msg:
+      component: "{{ site_data_component }}"
+      status: "{{ site_data_result.stdout.split('|')[1] }}"
+      changed: "{{ site_data_result.stdout.split('|')[2] }}"

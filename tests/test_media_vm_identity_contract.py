@@ -11,10 +11,14 @@ def test_media_vm_preflight_catalog_is_read_only():
     entries = [x for x in catalog["tasks"] if x["title"].startswith("80-Медиасервер")]
     assert len(entries) == 1
     assert entries[0]["playbook"] == "playbooks/plan-pve-media-vm.yml"
-    roles = yaml.safe_load((ROOT / entries[0]["playbook"]).read_text())[0]["roles"]
-    assert "pve_audit" in str(roles)
-    assert "pve_media_vm_plan" in str(roles)
-    assert "pve_media_vm_apply" not in str(roles)
+    playbook = (ROOT / entries[0]["playbook"]).read_text()
+    worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
+    guarded = (ROOT / "playbooks/audit-pve-access.yml").read_text()
+    assert "MEDIA_PLAN:" in playbook
+    assert "MEDIA_PLAN" in worker
+    assert "pve_audit" in guarded
+    assert "pve_media_vm_plan" in guarded
+    assert "pve_media_vm_apply" not in playbook
 
 
 def test_media_vm_identity_uses_service_site_ip_octet_rule():

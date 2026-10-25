@@ -36,9 +36,75 @@
           - (ansible_connection | default('')) == 'local'
           - site.id == site.owner_slug ~ '-' ~ site.type
 
-  roles:
-    - role: fleet_secrets
-    - role: pve_audit
-      vars:
-        pve_audit_token_secret_effective: "{{ site_secrets.pve.audit_token_secret }}"
-    - role: pve_media_vm_plan
+
+  tasks:
+    - name: Require commissioned fixed-purpose PVE audit worker
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-pve-access-audit.path]
+      register: media_pve_audit_watcher
+      changed_when: false
+      failed_when: false
+
+    - name: Reject unavailable PVE audit privilege boundary
+      ansible.builtin.assert:
+        that:
+          - media_pve_audit_watcher.stdout == 'active'
+        fail_msg: "MEDIA_PVE_AUDIT_NOT_COMMISSIONED: root worker absent."
+
+    - name: Create unique PCI plan request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: media_plan_nonce
+      changed_when: false
+
+    - name: Request fixed-purpose read-only media PCI plan
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-pve-access-audit.request
+        content: "MEDIA_PLAN:{{ media_plan_nonce.stdout }}\n"
+        mode: '0600'
+      changed_when: false
+
+    - name: Await exact request identity from protected worker
+      ansible.builtin.command:
+        argv: [cat, /run/dh-pve-access-audit.status]
+      register: media_plan_worker_status
+      changed_when: false
+      failed_when: false
+      retries: 120
+      delay: 3
+      until: >-
+        media_plan_worker_status.stdout in [
+          'PASS:' ~ media_plan_nonce.stdout,
+          'FAILED:' ~ media_plan_nonce.stdout
+        ]
+
+    - name: Fail when PVE audit did not complete
+      ansible.builtin.assert:
+        that:
+          - media_plan_worker_status.stdout == 'PASS:' ~ media_plan_nonce.stdout
+        fail_msg: "MEDIA_PVE_PLAN_FAILED: inspect root-only dh-pve-access-audit log."
+
+    - name: Read sanitized PCI plan produced by privileged audit
+      ansible.builtin.slurp:
+        src: /run/dh-pve-media-plan.json
+      register: media_plan_report
+      changed_when: false
+
+    - name: Parse authorized media plan
+      ansible.builtin.set_fact:
+        media_plan_summary: "{{ media_plan_report.content | b64decode | from_json }}"
+      changed_when: false
+
+    - name: Verify plan provenance and exact target identity
+      ansible.builtin.assert:
+        that:
+          - media_plan_summary.nonce == media_plan_nonce.stdout
+          - media_plan_summary.site == site.id
+          - media_plan_summary.name == media_vm.name
+          - media_plan_summary.vmid | int == media_vm.vmid | int
+          - media_plan_summary.result == 'PLAN_ONLY'
+        fail_msg: "MEDIA_PVE_PLAN_PROVENANCE_MISMATCH: stale or foreign worker result."
+
+    - name: Show audited current hardware and blockers
+      ansible.builtin.debug:
+        msg: "{{ media_plan_summary }}"

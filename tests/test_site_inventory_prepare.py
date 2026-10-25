@@ -1,6 +1,6 @@
-"""Semaphore task-80 composition: reusable prerequisites stay within one task."""
+"""Semaphore task-80 orchestration: site-data is an internal prerequisite."""
 from pathlib import Path
-
+import json
 import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -18,24 +18,24 @@ def test_task80_has_site_dependency_before_load_vars():
     assert dep["vars"]["site_inventory_required_files"] == ["media_vm.yml"]
 
 
-def test_site_prerequisite_cannot_write_private_data_or_spawn_other_tasks():
-    role = (ROOT / "roles/site_inventory_prepare/tasks/main.yml").read_text()
-    steps = yaml.safe_load(role)
-    assert steps and all(isinstance(x, dict) for x in steps)
-    assert "FLEET_SOURCE_NOT_COMMISSIONED" in role
-    assert "root:semaphore" in role
-    assert "inventory_dir" in role
-    for forbidden in (
-        "method: POST", "method: PUT", "method: DELETE",
-        "ansible.builtin.shell", "ansible.builtin.command",
-        "ansible.builtin.copy", "ansible.builtin.fetch", "ansible.builtin.get_url",
-        "qm stop", "qm set", "qm destroy",
-    ):
-        assert forbidden not in role
+def test_site_prerequisite_uses_root_worker_and_no_private_git_tokens():
+    main = (ROOT / "roles/site_inventory_prepare/tasks/main.yml").read_text()
+    one = (ROOT / "roles/site_inventory_prepare/tasks/refresh-one.yml").read_text()
+    assert yaml.safe_load(main) and yaml.safe_load(one)
+    assert "SITE_DATA_PROVIDER_NOT_COMMISSIONED" in main
+    assert "site_inventory_required_files" in main
+    assert "site_inventory_required_file" in one
+    assert "dh-site-data.request" in one
+    assert "dh-site-data.status" in one
+    assert "site_data_nonce.stdout" in one
+    assert "root:semaphore" in main
+    for forbidden in ("github_pat_", "GH_TOKEN", "GITHUB_TOKEN",
+                      "git clone", "vault.yml", "method: POST",
+                      "become: true"):
+        assert forbidden not in one
 
 
-def test_no_extra_semaphore_task_was_added():
-    import json
-    tasks = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
-    assert sum(t["title"].startswith("80-Медиасервер") for t in tasks) == 1
-    assert not any("Fleet Detail" in t["title"] for t in tasks)
+def test_no_extra_semaphore_template():
+    catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
+    assert sum(t["title"].startswith("80-Медиасервер") for t in catalog) == 1
+    assert not any(t["title"].startswith("05-") for t in catalog)

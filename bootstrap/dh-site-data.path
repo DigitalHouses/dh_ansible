@@ -1,0 +1,11 @@
+[Unit]
+Description=DigitalHouses site-inventory reusable prerequisite watcher
+
+[Path]
+PathExists=/var/lib/semaphore/dh-site-data.request
+Unit=dh-site-data.service
+TriggerLimitIntervalSec=10min
+TriggerLimitBurst=4
+
+[Install]
+WantedBy=multi-user.target

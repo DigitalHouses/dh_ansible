@@ -181,3 +181,53 @@
           linux_ssh_sudo: PASS
           token_escrow: PRESENT
           result: PASS
+
+  post_tasks:
+    - name: Validate fixed-purpose media planning request
+      ansible.builtin.assert:
+        that:
+          - pve_media_plan_nonce is defined
+          - pve_media_plan_nonce is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+        fail_msg: "MEDIA_PLAN_INVALID_REQUEST"
+      when: pve_media_plan_requested | default(false) | bool
+
+    - name: Read canonical media desired state in trusted root-only audit context
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+      when: pve_media_plan_requested | default(false) | bool
+
+    - name: Reuse generic PVE read-only audit with verified escrow audit token
+      ansible.builtin.include_role:
+        name: pve_audit
+      vars:
+        pve_audit_token_secret_effective: "{{ pve_escrow.pve_tokens.audit }}"
+      when: pve_media_plan_requested | default(false) | bool
+
+    - name: Build media PCI ownership and safety plan without PVE changes
+      ansible.builtin.include_role:
+        name: pve_media_vm_plan
+      when: pve_media_plan_requested | default(false) | bool
+
+    - name: Publish sanitized nonce-scoped plan for operator task
+      ansible.builtin.copy:
+        dest: /run/dh-pve-media-plan.json
+        owner: root
+        group: semaphore
+        mode: '0640'
+        content: >-
+          {{
+            {
+              'nonce': pve_media_plan_nonce,
+              'site': site.id,
+              'name': media_vm.name,
+              'vmid': media_vm.vmid,
+              'gpu': media_vm.pci.gpu,
+              'sata_controller': media_vm.pci.sata_controller,
+              'gpu_owners': media_vm_gpu_owners,
+              'sata_owners': media_vm_sata_owners,
+              'offline_backup_targets': media_vm_offline_backup_targets,
+              'blockers': media_vm_plan_blockers,
+              'result': 'PLAN_ONLY'
+            } | to_nice_json
+          }}
+      when: pve_media_plan_requested | default(false) | bool

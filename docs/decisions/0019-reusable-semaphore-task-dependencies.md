@@ -14,8 +14,8 @@
 ## Граница авторизации
 
 - `dh_ansible` — только общий код. `dh_ansible_fleet_detail` — приватные данные, без доступа из обычного пользователя Semaphore к всему репозиторию.
-- Сейчас site inventory доставляет **owner-authorized PVE bootstrap**, а не Semaphore. Долгоживущий GitHub-credential на PVE не установлен. Автоматический fetch из private GitHub нельзя выдавать за работающий.
-- До появления доверенного `site-data` provider задача 80 делает точный fail-closed с `FLEET_SOURCE_NOT_COMMISSIONED`, не пишет частичные/неаутентифицированные данные.
+- Существующая установленная версия runner получает site data через **owner-authorized PVE bootstrap**. В PR с reusable provider подготовлена новая безопасная схема: root-worker на runner делегирует проверенному PVE helper запрос только нужного site YAML, получает проверенный Git SHA и атомарно размещает файл в runner. **В действующий runner/PVE этот код ещё не установлен; защищённый GitHub read-credential на PVE также не настроен.**
+- До завершения commissioning задача 80 делает точный fail-closed с `SITE_DATA_PROVIDER_NOT_COMMISSIONED` / `SITE_DATA_REFRESH_BLOCKED`, не пишет непроверенные данные.
 - Для истинного one-click refresh требуется один commissioned, site-scoped доверенный provider: PVE-side credential и проверяемый commit/scope либо эквивалентный сервис. Его отдельное согласование — prerequisite, **не новая задача для инженера**.
 - Гарантии provider: проверенный источник и pinned revision, разрешённые файлы только `inventories/<site>/`, запрет секретов и symlink/необычных типов, staging + atomic replace, owner/mode `root:semaphore 0640`, запрет удаления неперечисленных файлов, повторное выполнение без изменений, postcondition хеши. При конфликте — BLOCKED; никогда не silent overwrite.
 - Контракт `site_inventory_prepare` является общей точкой расширения; код развёртывания Media VM не должен самостоятельно решать проблемы GitHub авторизации.
@@ -24,7 +24,7 @@
 
 `Load site identity → site_inventory_prepare → Load media_vm.yml → fleet_secrets → pve_audit → pve_media_vm_plan`.
 
-Сейчас это read-only сценарий, **не** создание VM и **не** автоматическая загрузка отсутствующих приватных данных. Второй шаблон Semaphore не создан. Отдельная capability синхронизации будет подключена внутри `site_inventory_prepare`, когда появится одобренный источник.
+В действующем main до принятия provider это read-only сценарий **без** создания VM и без автоматического получения отсутствующих site YAML. Новая кандидатная реализация в PR #29 вызывает reusable root-worker для site-data, а затем существующий PVE Access root-worker (режим MEDIA_PLAN) для GET-аудита оборудования с escrow-токеном. **Новая реализация не установлена и не принята E2E**, поэтому не объявлять её доступной в Semaphore. Дополнительный UI template не создаётся.
 
 ## Acceptance будущей синхронизации
 

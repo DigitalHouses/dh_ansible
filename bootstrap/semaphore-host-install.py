@@ -45,6 +45,13 @@ CODE_FILES = (
     "bootstrap/pve-access-audit-request.sh",
     "bootstrap/dh-pve-access-audit.service",
     "bootstrap/dh-pve-access-audit.path",
+    "roles/pve_audit/defaults/main.yml",
+    "roles/pve_audit/tasks/main.yml",
+    "roles/pve_media_vm_plan/tasks/main.yml",
+    "bootstrap/dh-site-data-runner.py",
+    "bootstrap/dh-site-data-pve-refresh.py",
+    "bootstrap/dh-site-data.service",
+    "bootstrap/dh-site-data.path",
     "bootstrap/fleet-master-gate.py",
     "bootstrap/semaphore-guest-install.py",
     "bootstrap/semaphore-project.py",
@@ -1060,6 +1067,21 @@ def stage_pve_access_audit(checkout: Path) -> None:
     folder = "/opt/digitalhouses/bootstrap/pve-access"
     stage_guest_root_directory(folder, stage="pve_access")
     stage_guest_root_directory(folder + "/playbooks", stage="pve_access")
+    for role, relative in (
+        ("pve_audit", "defaults/main.yml"),
+        ("pve_audit", "tasks/main.yml"),
+        ("pve_media_vm_plan", "tasks/main.yml"),
+    ):
+        role_dir = folder + "/roles/" + role
+        stage_guest_root_directory(folder + "/roles", stage="pve_access")
+        stage_guest_root_directory(role_dir, stage="pve_access")
+        stage_guest_root_directory(role_dir + "/" + relative.split("/")[0], stage="pve_access")
+        origin = checkout / "roles" / role / relative
+        if not origin.is_file() or origin.is_symlink():
+            raise Blocked("Pinned generic PVE audit role absent")
+        destination = role_dir + "/" + relative
+        run("pct", "push", str(CTID), str(origin), destination, timeout=30)
+        pct_guest("chmod", "0644", destination)
     source = checkout / "playbooks/audit-pve-access.yml"
     if not source.is_file() or source.is_symlink():
         raise Blocked("Pinned PVE access playbook missing")
@@ -1086,6 +1108,30 @@ def stage_pve_access_audit(checkout: Path) -> None:
         raise Blocked("Fixed-purpose PVE access audit watcher inactive")
     print("PVE_ACCESS_SEMAPHORE_AUDIT=READY", flush=True)
 
+
+
+def stage_site_data_provider(checkout: Path) -> None:
+    """Commission fixed helpers; owner must separately provision scoped GitHub read credential."""
+    host_helper = checkout / "bootstrap/dh-site-data-pve-refresh.py"
+    if not host_helper.is_file() or host_helper.is_symlink():
+        raise Blocked("Pinned PVE site-data provider missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(host_helper), "/usr/local/sbin/dh-site-data-pve-refresh")
+    for source, target, mode in (
+        ("bootstrap/dh-site-data-runner.py", "/usr/local/sbin/dh-site-data-runner", "0700"),
+        ("bootstrap/dh-site-data.service", "/etc/systemd/system/dh-site-data.service", "0644"),
+        ("bootstrap/dh-site-data.path", "/etc/systemd/system/dh-site-data.path", "0644"),
+    ):
+        item = checkout / source
+        if not item.is_file() or item.is_symlink():
+            raise Blocked("Pinned site-data provider asset absent")
+        run("pct", "push", str(CTID), str(item), target, timeout=30)
+        pct_guest("chmod", mode, target)
+    pct_guest("systemctl", "daemon-reload")
+    pct_guest("systemctl", "enable", "--now", "dh-site-data.path")
+    if pct_guest("systemctl", "is-active", "dh-site-data.path") != "active":
+        raise Blocked("Site-data root watcher inactive")
+    print("SITE_DATA_WORKER=READY; FLEET_READER_OWNER_COMMISSION_REQUIRED", flush=True)
 
 def assert_private_fleet_head(expected_fleet_commit: str, env: dict) -> dict:
     """No secret issue until private Git HEAD agrees with the pinned snapshot."""
@@ -1423,6 +1469,7 @@ def apply(args, template):
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
         stage_pve_access_audit(checkout)
+        stage_site_data_provider(checkout)
         # Fresh creation and resume-fresh both build a NEW empty runner.
         # Restore its original SSH private key from encrypted Fleet Vault.
         # Existing mature runner resume modes do not touch PVE credentials.
