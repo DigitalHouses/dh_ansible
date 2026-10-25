@@ -1,7 +1,7 @@
 ---
 # Reusable gate before accessing any site-specific component inventory.
-# Never fetch private GitHub data with a site runner's code credentials.
-# No implicit creation of missing data or edits to root-owned inventory.
+# Private Fleet credentials remain on PVE, never in the Semaphore process.
+# Refresher is a pre-commissioned root-only systemd worker; no extra UI task.
 - name: Validate local site data contract
   ansible.builtin.assert:
     that:
@@ -25,6 +25,28 @@
   loop: "{{ site_inventory_required_files }}"
   loop_control:
     label: "{{ item }}"
+
+- name: Require trusted local site-data root worker
+  ansible.builtin.command:
+    argv: [systemctl, is-active, dh-site-data.path]
+  register: site_data_watcher
+  changed_when: false
+  failed_when: false
+
+- name: Block before loading stale or missing Fleet data when worker absent
+  ansible.builtin.assert:
+    that:
+      - site_data_watcher.stdout == 'active'
+    fail_msg: >-
+      SITE_DATA_PROVIDER_NOT_COMMISSIONED: The single-task Fleet refresh
+      worker must be commissioned before this template can run.
+      No data or PVE resources were modified.
+
+- name: Ask reusable trusted worker to reconcile each required site file
+  ansible.builtin.include_tasks: refresh-one.yml
+  loop: "{{ site_inventory_required_files }}"
+  loop_control:
+    loop_var: site_inventory_required_file
 
 - name: Inspect each required local site file
   ansible.builtin.stat:
@@ -69,15 +91,11 @@
   loop_control:
     label: "{{ item.item }}"
 
-- name: Stop when the trusted Fleet Detail delivery source is absent
-  ansible.builtin.fail:
-    msg: >-
-      FLEET_SOURCE_NOT_COMMISSIONED: Required site data {{ site_inventory_missing_files }}
-      are not staged at {{ inventory_dir }}.
-      Owner-authorized PVE bootstrap is the only existing trusted delivery route.
-      Task 80 must not obtain repository-wide private GitHub credentials or copy
-      unmanaged files. No PVE writes were performed.
-  when: site_inventory_missing_files | length > 0
+- name: Verify every requested Fleet file is available after refresh
+  ansible.builtin.assert:
+    that:
+      - site_inventory_missing_files | length == 0
+    fail_msg: "SITE_DATA_REFRESH_INCOMPLETE: trusted worker returned without required files."
 
 - name: Report reusable site data dependency fulfilled
   ansible.builtin.debug:
