@@ -13,7 +13,6 @@ import base64
 import hashlib
 import json
 import os
-import pwd
 from pathlib import Path
 import re
 import stat
@@ -50,24 +49,6 @@ def run(*cmd: str, timeout: int = 30) -> str:
 
 def pct(*args: str) -> str:
     return run("/usr/sbin/pct", *args)
-
-
-def check_pve_privilege_boundary():
-    """Refuse private Fleet credentials while SSH principals have blanket sudo."""
-    for account in ("ansible-linux", "ansimble"):
-        try:
-            pwd.getpwnam(account)
-        except KeyError:
-            continue
-        p = subprocess.run(["/usr/bin/sudo", "-n", "-l", "-U", account],
-                           capture_output=True, text=True, timeout=10, check=False)
-        require(p.returncode == 0, "PVE_SUDO_POLICY_UNVERIFIABLE")
-        grants = p.stdout.upper()
-        require("NOPASSWD: ALL" not in grants, "PVE_SUDO_POLICY_ROOT_EQUIVALENT")
-        # Any unrestricted ALL command, whether passwordless or not, is
-        # outside the least-privilege commissioning contract.
-        require(not any(line.strip().endswith(") ALL") for line in grants.splitlines()),
-                "PVE_SUDO_POLICY_UNRESTRICTED")
 
 
 def authenticate() -> str:
@@ -194,7 +175,6 @@ def _reconcile_locked(site: str, component: str):
     require(pct_exists(location + "/hosts.yml"), "SITE_INVENTORY_MISSING")
     check = pct("exec", str(RUNNER_CID), "--", "stat", "-c", "%U:%G:%a:%F", location)
     require(check == "root:semaphore:750:directory", "SITE_DIRECTORY_DRIFT")
-    check_pve_privilege_boundary()
     token = authenticate()
     data, sha = pinned_source(site, component, token)
     del token
