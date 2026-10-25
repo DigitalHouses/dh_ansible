@@ -65,7 +65,7 @@ def test_reuses_root_gh_cli_session_without_independent_pat(monkeypatch):
     m = module()
     class MockRun:
         returncode = 0
-        stdout = "synthetic-device-session-token\\n"
+        stdout = "synthetic-device-session-token\n"
         stderr = ""
 
     seen = []
