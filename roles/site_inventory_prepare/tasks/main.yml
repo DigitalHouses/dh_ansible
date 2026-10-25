@@ -1,0 +1,88 @@
+---
+# Reusable gate before accessing any site-specific component inventory.
+# Never fetch private GitHub data with a site runner's code credentials.
+# No implicit creation of missing data or edits to root-owned inventory.
+- name: Validate local site data contract
+  ansible.builtin.assert:
+    that:
+      - site is mapping
+      - site.id is match('^[a-z][a-z0-9-]+$')
+      - site.id == site.owner_slug ~ '-' ~ site.type
+      - inventory_hostname == 'runner'
+      - (ansible_connection | default('')) == 'local'
+      - inventory_dir == '/var/lib/ansible/site-data/' ~ site.id
+      - site_inventory_required_files is sequence
+      - site_inventory_required_files | length > 0
+      - site_inventory_required_files | unique | list | length == site_inventory_required_files | length
+    fail_msg: "SITE_DATA_IDENTITY_BLOCKED: current task is not a trusted site-local run."
+
+- name: Validate requested site file names
+  ansible.builtin.assert:
+    that:
+      - item is match('^[a-z][a-z0-9_-]*\\.yml$')
+      - item not in ['secrets.yml', 'vault.yml', 'fleet.vault.yml']
+    fail_msg: "SITE_DATA_SCOPE_BLOCKED: only component YAML data is eligible."
+  loop: "{{ site_inventory_required_files }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: Inspect each required local site file
+  ansible.builtin.stat:
+    path: "{{ inventory_dir }}/{{ item }}"
+    follow: false
+  loop: "{{ site_inventory_required_files }}"
+  loop_control:
+    label: "{{ item }}"
+  register: site_inventory_required_status
+  changed_when: false
+
+- name: Detect missing or unsafe site data
+  ansible.builtin.set_fact:
+    site_inventory_missing_files: >-
+      {{
+        site_inventory_required_status.results
+        | rejectattr('stat.exists')
+        | map(attribute='item')
+        | list
+      }}
+    site_inventory_unsafe_files: >-
+      {{
+        site_inventory_required_status.results
+        | selectattr('stat.exists')
+        | rejectattr('stat.isreg')
+        | map(attribute='item')
+        | list
+      }}
+  changed_when: false
+
+- name: Require valid, root-owned and semaphore-readable site files
+  ansible.builtin.assert:
+    that:
+      - site_inventory_unsafe_files | length == 0
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'semaphore'
+      - item.stat.mode == '0640'
+      - item.stat.isreg | bool
+      - not item.stat.islnk | default(false) | bool
+    fail_msg: "SITE_DATA_PERMISSIONS_BLOCKED: site inventory is not canonical root:semaphore 0640."
+  loop: "{{ site_inventory_required_status.results | selectattr('stat.exists') | list }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Stop when the trusted Fleet Detail delivery source is absent
+  ansible.builtin.fail:
+    msg: >-
+      FLEET_SOURCE_NOT_COMMISSIONED: Required site data {{ site_inventory_missing_files }}
+      are not staged at {{ inventory_dir }}.
+      Owner-authorized PVE bootstrap is the only existing trusted delivery route.
+      Task 80 must not obtain repository-wide private GitHub credentials or copy
+      unmanaged files. No PVE writes were performed.
+  when: site_inventory_missing_files | length > 0
+
+- name: Report reusable site data dependency fulfilled
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      required_files: "{{ site_inventory_required_files }}"
+      result: SITE_DATA_READY
+      modified: false
