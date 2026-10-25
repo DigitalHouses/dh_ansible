@@ -169,7 +169,7 @@ def install_linux_user(source_ip: str, key: str, site: str) -> None:
         "/usr/local/sbin/dh-cloudflare-pve-haos-mtls --apply",
         f"/usr/local/sbin/dh-site-data-pve-refresh --site {site} --component media_vm",
     ]
-    desired = "ansible-linux ALL=(root) NOPASSWD: " + ", ".join(allowed) + "\\n"
+    desired = "ansible-linux ALL=(root) NOPASSWD: " + ", ".join(allowed) + "\n"
     if sudoers.is_symlink():
         fail("BLOCKED: sudoers path symlink")
     if sudoers.exists() and sudoers.read_text() != desired:
