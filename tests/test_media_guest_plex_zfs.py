@@ -81,3 +81,21 @@ def test_media_smb_discovery_is_readonly_and_idempotent():
     assert template.count("[Media]") == 1
     assert "netbios name = {{ media_vm.discovery.netbios_name }}" in template
     assert "media-smb.conf.j2" in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+
+def test_native_radarr_sonarr_pinned_without_extra_semaphore_task():
+    entries = yaml.safe_load((ROOT / "roles/media_guest_setup/defaults/main.yml").read_text())["media_arr_releases"]
+    assert [x["slug"] for x in entries] == ["radarr", "sonarr"]
+    assert [x["port"] for x in entries] == [7878, 8989]
+    assert all(x["source"].startswith("https://github.com/") for x in entries)
+    assert all(len(x["sha256"]) == 64 for x in entries)
+    yml = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
+    for phrase in ("media_vm.applications[item.slug]", "get_url", "checksum:",
+                   "unarchive", "systemd_service", "wait_for", "radarr", "sonarr"):
+        assert phrase in yml
+    template = (ROOT / "roles/media_guest_setup/templates/media-arr.service.j2").read_text()
+    assert "ExecStart=/opt/{{ item.name }}/{{ item.name }}" in template
+    assert "User={{ item.slug }}" in template
+    assert "/var/lib/{{ item.slug }}" in template
+    setup = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    assert '("media_guest_setup", "defaults/main.yml")' in setup
+    assert '("media_guest_setup", "templates/media-arr.service.j2")' in setup
