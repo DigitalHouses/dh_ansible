@@ -6,6 +6,20 @@
   become: false
 
   pre_tasks:
+    - name: Require engineer-selected storage action from Semaphore survey
+      ansible.builtin.assert:
+        that:
+          - media_storage_action is defined
+          - media_storage_action in ['create', 'import']
+        fail_msg: "MEDIA_STORAGE_ACTION_REQUIRED: choose create or import in task 80 Run dialog."
+
+    - name: Block destructive create until its verified implementation is deployed
+      ansible.builtin.fail:
+        msg: >-
+          MEDIA_CREATE_NOT_READY: the create workflow and physical disk identity
+          verification are not implemented yet; no VM or disk has been changed.
+      when: media_storage_action == 'create'
+
     - name: Load canonical site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
