@@ -1,5 +1,5 @@
 ---
-# Semaphore read-only phase. No guest creation, device detaching, or boot changes.
+# Semaphore single-button phase: audit first, then provision if approved in Fleet.\n# No modifications of old guests, backup jobs or host disks.
 - name: Audit and plan media-server Debian QEMU VM and PCI ownership
   hosts: site_runner
   gather_facts: false
@@ -108,3 +108,58 @@
     - name: Show audited current hardware and blockers
       ansible.builtin.debug:
         msg: "{{ media_plan_summary }}"
+
+    - name: Provision only when canonical Fleet authorizes media server
+      ansible.builtin.assert:
+        that:
+          - media_plan_summary.gpu_owners | length == 0
+          - media_plan_summary.sata_owners | length == 0
+          - media_vm.approvals.gpu_cutover | bool
+          - media_vm.approvals.sata_cutover | bool
+        fail_msg: "MEDIA_PCI_ALREADY_OWNED_OR_NOT_APPROVED"
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Create deployment request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: media_deploy_nonce
+      changed_when: false
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Submit fixed-purpose media deploy to existing PVE root worker
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-pve-access-audit.request
+        content: "MEDIA_DEPLOY:{{ media_deploy_nonce.stdout }}\n"
+        mode: '0600'
+      changed_when: false
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Await media VM provisioning on PVE
+      ansible.builtin.command:
+        argv: [cat, /run/dh-pve-access-audit.status]
+      register: media_deploy_worker
+      changed_when: false
+      failed_when: false
+      retries: 240
+      delay: 5
+      until: >-
+        media_deploy_worker.stdout in [
+          'PASS:' ~ media_deploy_nonce.stdout,
+          'FAILED:' ~ media_deploy_nonce.stdout
+        ]
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Require successful VM deployment
+      ansible.builtin.assert:
+        that:
+          - media_deploy_worker.stdout == 'PASS:' ~ media_deploy_nonce.stdout
+        fail_msg: "MEDIA_DEPLOY_FAILED: inspect dh-pve-access-audit root-worker log."
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Report media VM provisioning status
+      ansible.builtin.debug:
+        msg:
+          vmid: "{{ media_vm.vmid }}"
+          name: "{{ media_vm.name }}"
+          ipv4: "{{ media_vm.network.ipv4 }}"
+          result: "{{ 'DEPLOYED' if media_vm.approvals.provision | default(false) | bool else 'AUDIT_ONLY' }}"
