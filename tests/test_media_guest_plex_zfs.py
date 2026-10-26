@@ -135,3 +135,26 @@ def test_native_qbittorrent_and_staging_only_downloads():
     assert '("media_guest_setup", "templates/media-qbittorrent.service.j2")' in setup
     assert '("media_guest_setup", "templates/media-qbittorrent.conf.j2")' in setup
     assert len([t for t in json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"] if t["title"].startswith("80-Медиасервер")]) == 1
+
+
+def test_fully_automatic_arr_wiring_without_exposing_api_keys():
+    from pathlib import Path
+    import ast
+    path = ROOT / "roles/media_guest_setup/files/dh-media-arr-wire.py"
+    ast.parse(path.read_text())
+    code = path.read_text()
+    for phrase in ("X-Api-Key", "applications/schema", "downloadclient/schema",
+                   "rootfolder", "downloadclient/test", "applications/test",
+                   "torrents/createCategory", "ZFS_LIBRARY=UNCHANGED_READONLY"):
+        assert phrase in code
+    assert "print(key)" not in code
+    assert "print(api_key" not in code
+    assert "os.environ.get('API_KEY')" not in code
+    role = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    named = {r["name"]: r for r in role}
+    assert "Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys" in named
+    assert "Check staging-only automation outcome" in named
+    assert "Ensure qBittorrent local API can be used without copying passwords" in named
+    assert "Create separate writable download and staging roots on system disk" in named
+    assert named["Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys"]["ansible.builtin.command"]["argv"][0] == '/usr/local/sbin/dh-media-arr-wire'
+    assert '("media_guest_setup", "files/dh-media-arr-wire.py")' in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
