@@ -1,0 +1,30 @@
+---
+# Existing runner root worker calls this only after media VM has been provisioned.
+- name: Resolve existing media VM from site inventory
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Load site media VM data
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+
+    - name: Resolve guest SSH target without extra Semaphore inventory
+      ansible.builtin.add_host:
+        name: media_server
+        groups: dh_media_guest
+        ansible_host: "{{ media_vm.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_ssh_private_key_file: /var/lib/ansible/.ssh/pve_host_write_ed25519
+        ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        media_vm: "{{ media_vm }}"
+      changed_when: false
+
+- name: Configure media applications on existing Debian VM
+  hosts: dh_media_guest
+  gather_facts: false
+  become: true
+  roles:
+    - media_guest_setup
