@@ -262,6 +262,107 @@
       - media_zfs_properties.results[1].stdout == media_vm.storage.pool_guid
       - media_plex_http.status == 200
 
+- name: Require declarative selection of media management applications
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - media_vm.applications.radarr is boolean
+      - media_vm.applications.sonarr is boolean
+
+- name: Create shared media application group
+  ansible.builtin.group:
+    name: media
+    system: true
+    state: present
+
+- name: Create native application users
+  ansible.builtin.user:
+    name: "{{ item.slug }}"
+    group: media
+    system: true
+    home: "/var/lib/{{ item.slug }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create application data directories on Debian system disk
+  ansible.builtin.file:
+    path: "/var/lib/{{ item.slug }}"
+    state: directory
+    owner: "{{ item.slug }}"
+    group: media
+    mode: '0775'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create artifact cache on Debian system disk
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned upstream Radarr/Sonarr release archives
+  ansible.builtin.get_url:
+    url: "{{ item.source }}"
+    dest: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: '0644'
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Extract native media management binaries
+  ansible.builtin.unarchive:
+    src: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/{{ item.name }}/{{ item.name }}"
+    owner: root
+    group: root
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Install native Radarr/Sonarr service definitions
+  ansible.builtin.template:
+    src: media-arr.service.j2
+    dest: "/etc/systemd/system/{{ item.slug }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Enable and start native media management services
+  ansible.builtin.systemd_service:
+    name: "{{ item.slug }}.service"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Wait until native media applications listen on their ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item.port }}"
+    state: started
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Check HTTP access to native media application UI
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/"
+    status_code: [200, 302, 401, 403]
+    return_content: false
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+  changed_when: false
+
 - name: Report installed Plex service and existing readonly ZFS media
   ansible.builtin.debug:
     msg:
