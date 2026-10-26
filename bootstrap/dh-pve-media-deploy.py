@@ -24,6 +24,7 @@ IMAGE_URL = "https://cloud.debian.org/images/cloud/trixie/latest/"
 IMAGE_NAME = "debian-13-generic-amd64.qcow2"
 CACHE = Path("/var/cache/digitalhouses/media")
 RUNNER = "1231"
+MANAGED_MEDIA_DESCRIPTION = "DigitalHouses managed media guest v2"
 SITE_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\Z")
 BDF_PATTERN = re.compile(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\Z")
 
@@ -293,6 +294,9 @@ def recreate_legacy_guest_if_needed(vmid, site, data, action):
         return
     state = config(vmid)
     need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
+    if state.get("description") == MANAGED_MEDIA_DESCRIPTION:
+        print("VM_RECREATE=ALREADY_MANAGED_OR_PARTIAL", flush=True)
+        return
     if qm("status", vmid) != "status: running":
         # Do not destroy a stopped VM with unknown disk state.
         print("VM_RECREATE=SKIPPED_STOPPED", flush=True)
@@ -352,7 +356,8 @@ def apply(site, action):
            "--scsihw", "virtio-scsi-single",
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
            "--vga", data.get("lifecycle", {}).get("display", "serial0"),
-           "--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0")
+           "--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0",
+           "--description", MANAGED_MEDIA_DESCRIPTION)
         print("VM_CREATED=YES", flush=True)
     ensure_disk(vmid, image, int(data.get("resources", {}).get("disk_gb", 64)))
     ensure_config(vmid, site, data)
