@@ -13,3 +13,9 @@ media_arr_releases:
     archive: Sonarr.main.4.0.20.3014.linux-x64.tar.gz
     source: https://github.com/Sonarr/Sonarr/releases/download/v4.0.20.3014/Sonarr.main.4.0.20.3014.linux-x64.tar.gz
     sha256: 1fc48544b5a3401b2fc3df8d0642c1e6a73a28e41a351169edd9cd8f54770db5
+  - slug: prowlarr
+    name: Prowlarr
+    port: 9696
+    archive: Prowlarr.master.2.6.5.5623.linux-core-x64.tar.gz
+    source: https://github.com/Prowlarr/Prowlarr/releases/download/v2.6.5.5623/Prowlarr.master.2.6.5.5623.linux-core-x64.tar.gz
+    sha256: c0824e9f0e9c79e085882f6143041be5c2cde0519baa59e9477d9e4dcbe1b5e3
