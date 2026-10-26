@@ -36,13 +36,13 @@ if [[ "$ACTION" == "MEDIA_DEPLOY" ]]; then
   PVE_FILE="$INV_ROOT/$SITE/pve.yml"
   [[ -f "$PVE_FILE" && ! -L "$PVE_FILE" ]] || exit 2
   PVE_IP="$(/opt/ansible/venv/bin/python -c 'import sys,yaml,ipaddress; d=yaml.safe_load(open(sys.argv[1]))["pve"]; host=d["host"]; ipaddress.IPv4Address(host); print(host)' "$PVE_FILE")"
-  [[ "$PVE_IP" =~ ^[0-9]{1,3}(\\.[0-9]{1,3}){3}$ ]] || exit 2
-  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \\
-    -o StrictHostKeyChecking=yes \\
-    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \\
-    -o ConnectTimeout=8 \\
-    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \\
-    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \\
+  [[ "$PVE_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || exit 2
+  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
+    -o ConnectTimeout=8 \
+    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
+    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
     --site "$SITE" --apply >> "$LOG" 2>&1
   report PASS
   exit 0
