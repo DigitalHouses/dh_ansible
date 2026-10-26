@@ -27,6 +27,8 @@
       - zfs-dkms
       - zfsutils-linux
       - zfs-zed
+      - firmware-intel-graphics
+      - intel-media-va-driver
       - curl
       - gnupg
     state: present
