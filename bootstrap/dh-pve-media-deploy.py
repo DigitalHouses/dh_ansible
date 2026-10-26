@@ -89,7 +89,7 @@ def check(site, data, pve):
          and int(data["os"]["major_version"]) == 13, "OS_INVALID")
     need(data["network"]["bridge"] == "vmbr0", "BRIDGE_INVALID")
     ip = data["network"]["ipv4"]
-    need(re.fullmatch(r"[0-9]{1,3}(\\.[0-9]{1,3}){3}/24", ip) is not None,
+    need(re.fullmatch(r"[0-9]{1,3}(\.[0-9]{1,3}){3}/24", ip) is not None,
          "STATIC_IP_INVALID")
     need(ip.split("/")[0].split(".")[:3] == pve["host"].split(".")[:3],
          "STATIC_IP_SUBNET_MISMATCH")
