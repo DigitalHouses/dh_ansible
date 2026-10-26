@@ -283,6 +283,20 @@ def old_guest_matches(vmid, site, data):
     observed = guest_exec(vmid, "/usr/sbin/zpool", "get",
                           "-H", "-o", "value", "guid", old["name"])
     need(observed == str(old["guid"]), "LEGACY_ZFS_GUID_MISMATCH")
+    # Match legacy ZFS's sole vdev to the approved SSD, not merely a pool
+    # with the correct GUID on another disk of the passed SATA controller.
+    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-LP", old["name"])
+    vdevs = []
+    for line in status.splitlines():
+        column = line.strip().split()
+        if column and column[0].startswith("/dev/"):
+            vdevs.append(column[0])
+    need(len(vdevs) == 1, "LEGACY_ZFS_MULTIPLE_OR_MISSING_VDEVS")
+    vdev = vdevs[0]
+    parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o", "PKNAME", vdev)
+    disk_path = matches[0].get("path")
+    need(disk_path == "/dev/" + parent or
+         (not parent and disk_path == vdev), "LEGACY_ZFS_ON_FOREIGN_DISK")
     print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
 
 
