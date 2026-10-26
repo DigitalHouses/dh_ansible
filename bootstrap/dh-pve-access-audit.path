@@ -4,6 +4,6 @@ Description=DigitalHouses PVE Access read-only audit request watcher
 PathExists=/var/lib/semaphore/dh-pve-access-audit.request
 Unit=dh-pve-access-audit.service
 TriggerLimitIntervalSec=10min
-TriggerLimitBurst=5
+TriggerLimitBurst=20
 [Install]
 WantedBy=multi-user.target
