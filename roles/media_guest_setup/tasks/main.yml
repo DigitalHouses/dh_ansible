@@ -598,7 +598,6 @@
       - "{{ media_vm.downloads.path }}"
   register: media_arr_wiring
   changed_when: "'=CREATED' in media_arr_wiring.stdout"
-  no_log: false
 
 - name: Check staging-only automation outcome
   ansible.builtin.assert:
