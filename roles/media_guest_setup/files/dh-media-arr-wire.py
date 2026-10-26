@@ -110,7 +110,7 @@ def ensure_categories(download_root: str):
                            ("tv-sonarr", "complete/series"),
                            ("prowlarr", "complete/prowlarr")):
         target = download_root + "/" + relative
-        Path(target).mkdir(parents=True, exist_ok=True)
+        require(Path(target).is_dir(), "QBT_CATEGORY_FOLDER_MISSING_" + name)
         if name not in categories:
             qbt("torrents/createCategory", method="POST", data={"category": name, "savePath": target})
             print("QBT_CATEGORY_" + name.upper().replace("-", "_") + "=CREATED", flush=True)
@@ -204,7 +204,7 @@ def main():
     # Manage only OS-system-disk staging; protected ZFS media is not changed.
     for path in ("complete/movies", "complete/series", "complete/prowlarr",
                  "library/movies", "library/tvshows"):
-        (root / path).mkdir(parents=True, exist_ok=True)
+        require((root / path).is_dir(), "STAGING_FOLDER_MISSING_" + path.replace("/", "_"))
     ensure_qbt_access()
     ensure_categories(str(root))
     for app, folder in (("radarr", "movies"), ("sonarr", "tvshows")):
