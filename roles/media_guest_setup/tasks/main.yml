@@ -142,6 +142,10 @@
 - name: Inspect existing Plex library paths without changing its database
   ansible.builtin.command:
     argv:
+      - runuser
+      - -u
+      - plex
+      - --
       - python3
       - -c
       - |
@@ -150,13 +154,16 @@
         with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
             for (path,) in connection.execute("SELECT root_path FROM section_locations"):
                 print(path)
-  become_user: plex
   register: media_existing_plex_paths
   changed_when: false
 
 - name: Create missing Plex libraries using the installed Plex scanner
   ansible.builtin.command:
     argv:
+      - runuser
+      - -u
+      - plex
+      - --
       - /usr/lib/plexmediaserver/Plex Media Scanner
       - --add-section
       - "{{ item.title }}"
@@ -168,7 +175,6 @@
       - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
       - --lang
       - ru
-  become_user: plex
   loop:
     - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
     - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
@@ -179,11 +185,14 @@
 - name: Scan only newly created Plex libraries
   ansible.builtin.command:
     argv:
+      - runuser
+      - -u
+      - plex
+      - --
       - /usr/lib/plexmediaserver/Plex Media Scanner
       - --scan
       - --section
       - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
-  become_user: plex
   loop: "{{ media_new_plex_sections.results }}"
   when: item.changed | default(false)
 
