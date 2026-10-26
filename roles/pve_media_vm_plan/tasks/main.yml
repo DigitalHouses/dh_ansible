@@ -91,11 +91,11 @@
   ansible.builtin.set_fact:
     media_vm_plan_blockers: >-
       {{
-        (['TARGET_VMID_OCCUPIED'] if media_vm_existing_targets | length > 0 else [])
+        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'equalto', media_vm.name) | list | length) > 0 else [])
         + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
         + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
-        + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
-        + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
+        + (['GPU_ALREADY_ASSIGNED'] if (media_vm_gpu_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if (media_vm_sata_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
         + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
         + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
         + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
