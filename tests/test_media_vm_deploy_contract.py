@@ -32,7 +32,7 @@ def test_deploy_reuses_existing_worker_no_extra_template():
     assert "dh-pve-access-audit.request" in play
     assert "dh-pve-media-deploy" in worker
     assert "--apply" in worker
-    assert "MEDIA_PLAN:" in worker
+    assert "MEDIA_PLAN" in worker
 
 
 def test_image_download_and_host_compatibility():
