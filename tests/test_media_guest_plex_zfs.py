@@ -58,7 +58,7 @@ def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
     assert "Create missing Plex libraries using the installed Plex scanner" in labels
     assert "Scan only newly created Plex libraries" in labels
     create = next(x for x in data if x["name"].startswith("Create missing Plex libraries"))
-    assert create["become_user"] == "plex"
+    assert create["ansible.builtin.command"]["argv"][:4] == ["runuser", "-u", "plex", "--"]
     assert len(create["loop"]) == 3
     assert [x["folder"] for x in create["loop"]] == ["movies", "tvshows", "music"]
     assert "not in media_existing_plex_paths.stdout_lines" in create["when"]
