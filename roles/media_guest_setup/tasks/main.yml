@@ -276,6 +276,12 @@
       - media_vm.applications is mapping
       - media_vm.applications.radarr is boolean
       - media_vm.applications.sonarr is boolean
+      - media_vm.applications.prowlarr is boolean
+      - media_vm.applications.qbittorrent is boolean
+      - media_vm.downloads is mapping
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path is match('^/srv/[a-z][a-z0-9_-]+$')
+      - not media_vm.downloads.path.startswith('/' ~ media_vm.storage.pool_name)
 
 - name: Create shared media application group
   ansible.builtin.group:
@@ -370,6 +376,122 @@
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
   changed_when: false
+
+- name: Install Debian qBittorrent headless client
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: present
+    update_cache: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create qBittorrent native service user
+  ansible.builtin.user:
+    name: qbittorrent
+    group: media
+    home: /var/lib/qbittorrent
+    shell: /usr/sbin/nologin
+    create_home: true
+    system: true
+    state: present
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Check temporary download directory is not a symlink
+  ansible.builtin.stat:
+    path: "{{ media_vm.downloads.path }}"
+    follow: false
+  register: media_downloads_stat
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Reject symbolic link download root
+  ansible.builtin.assert:
+    that:
+      - not media_downloads_stat.stat.islnk | default(false)
+    fail_msg: "DOWNLOAD_ROOT_SYMLINK_NOT_ALLOWED"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create temporary media download directory on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}"
+    state: directory
+    owner: qbittorrent
+    group: media
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Ensure temporary download directory is not on ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ media_vm.downloads.path }}"]
+  register: media_downloads_fs
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Require separate writable staging filesystem
+  ansible.builtin.assert:
+    that:
+      - media_downloads_fs.stdout != 'zfs'
+    fail_msg: "DOWNLOAD_ROOT_MUST_NOT_BE_ZFS"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create incomplete download directory
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/incomplete"
+    state: directory
+    owner: qbittorrent
+    group: media
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create initial qBittorrent preferences directory
+  ansible.builtin.file:
+    path: /var/lib/qbittorrent/.config/qBittorrent
+    state: directory
+    owner: qbittorrent
+    group: media
+    mode: '0750'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Set staging-only qBittorrent defaults on first installation
+  ansible.builtin.template:
+    src: media-qbittorrent.conf.j2
+    dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    owner: qbittorrent
+    group: media
+    mode: '0640'
+    force: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Install native headless qBittorrent service
+  ansible.builtin.template:
+    src: media-qbittorrent.service.j2
+    dest: /etc/systemd/system/qbittorrent.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Enable and start qBittorrent WebUI
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Wait for qBittorrent WebUI to respond
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8080
+    state: started
+    timeout: 90
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Verify qBittorrent WebUI startup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/
+    status_code: [200, 302]
+    return_content: false
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
 
 - name: Report installed Plex service and existing readonly ZFS media
   ansible.builtin.debug:
