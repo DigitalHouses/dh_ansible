@@ -682,3 +682,6 @@
       plex: "http://{{ ansible_host }}:32400/web"
       pool_mode: "{{ media_vm.storage.mode }}"
       agent: active
+
+- name: Provision Filestash Sambee and Jellyfin
+  ansible.builtin.import_tasks: apps.yml
