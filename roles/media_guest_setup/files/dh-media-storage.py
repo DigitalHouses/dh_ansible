@@ -254,10 +254,10 @@ def main():
     else:
         guid, changed = ensure_import(data["pool_name"], disk, physical, data["mode"])
         print("POOL=IMPORTED", flush=True)
-    if data["mode"] == "readwrite":
-        require(command("/usr/sbin/zpool", "get", "-H", "-o", "value",
-                        "readonly", data["pool_name"]) == "off",
-                "READWRITE_POOL_REQUIRED")
+    expected_access = "on" if data["mode"] == "readonly" else "off"
+    require(command("/usr/sbin/zpool", "get", "-H", "-o", "value",
+                    "readonly", data["pool_name"]) == expected_access,
+            "POOL_ACCESS_MODE_MISMATCH")
     require(reconcile_layout(data) is not None, "STORAGE_LAYOUT_ERROR")
     print("POOL_GUID=" + guid, flush=True)
     print("MEDIA_STORAGE_RECONCILED=PASS", flush=True)
