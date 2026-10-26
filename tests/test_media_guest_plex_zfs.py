@@ -84,8 +84,8 @@ def test_media_smb_discovery_is_readonly_and_idempotent():
 
 def test_native_radarr_sonarr_pinned_without_extra_semaphore_task():
     entries = yaml.safe_load((ROOT / "roles/media_guest_setup/defaults/main.yml").read_text())["media_arr_releases"]
-    assert [x["slug"] for x in entries] == ["radarr", "sonarr"]
-    assert [x["port"] for x in entries] == [7878, 8989]
+    assert [x["slug"] for x in entries] == ["radarr", "sonarr", "prowlarr"]
+    assert [x["port"] for x in entries] == [7878, 8989, 9696]
     assert all(x["source"].startswith("https://github.com/") for x in entries)
     assert all(len(x["sha256"]) == 64 for x in entries)
     yml = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
@@ -108,3 +108,30 @@ def test_guest_smartmontools_is_provisioned_for_dh_pve_agent():
     probe = next(x for x in tasks if x["name"] == "Verify SMART monitoring binary available for dh_pve_agent")
     assert probe["ansible.builtin.command"]["argv"] == ["smartctl", "--version"]
     assert probe["changed_when"] is False
+
+
+def test_native_qbittorrent_and_staging_only_downloads():
+    tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    names = {task["name"] for task in tasks}
+    required = {
+        "Install Debian qBittorrent headless client",
+        "Create qBittorrent native service user",
+        "Ensure temporary download directory is not on ZFS",
+        "Set staging-only qBittorrent defaults on first installation",
+        "Enable and start qBittorrent WebUI",
+        "Verify qBittorrent WebUI startup",
+    }
+    assert required.issubset(names)
+    assert "qbittorrent-nox" in str(tasks)
+    assert "media_vm.downloads.mode == 'staging-only'" in str(tasks)
+    template = (ROOT / "roles/media_guest_setup/templates/media-qbittorrent.conf.j2").read_text()
+    assert "Session\\DefaultSavePath={{ media_vm.downloads.path }}/" in template
+    assert "Session\\TempPath={{ media_vm.downloads.path }}/incomplete/" in template
+    unit = (ROOT / "roles/media_guest_setup/templates/media-qbittorrent.service.j2").read_text()
+    assert "User=qbittorrent" in unit
+    assert "--webui-port=8080" in unit
+    assert "Restart=on-failure" in unit
+    setup = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    assert '("media_guest_setup", "templates/media-qbittorrent.service.j2")' in setup
+    assert '("media_guest_setup", "templates/media-qbittorrent.conf.j2")' in setup
+    assert len([t for t in json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"] if t["title"].startswith("80-Медиасервер")]) == 1
