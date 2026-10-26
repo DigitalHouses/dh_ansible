@@ -60,3 +60,11 @@ def test_metadata_validation_before_any_download(monkeypatch):
     ))
     data, _ = m.site_data("demo-home")
     assert data == {}
+
+def test_media_vm_ownership_after_first_success_is_idempotent():
+    import yaml
+    text = PLAY.read_text()
+    assert "difference([media_vm.vmid | int])" in text
+    role = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
+    assert "rejectattr('vmid', 'equalto', media_vm.vmid | int)" in role
+    assert "80-Медиасервер · Развёртывание" in (ROOT / "catalog/semaphore-tasks.json").read_text()
