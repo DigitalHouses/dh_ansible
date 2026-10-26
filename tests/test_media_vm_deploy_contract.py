@@ -55,7 +55,7 @@ def test_metadata_validation_before_any_download(monkeypatch):
         "ansible-demo-home" if args[0] == "hostname"
         else "site:\n  id: demo-home\n  owner_slug: demo\n  type: home" if args[-1].endswith("all.yml")
         else "media_vm: {}" if args[-1].endswith("media_vm.yml")
-        else "pve:\n  host: 192.168.11.30\n  node: pve"
+        else "pve:\n  host: 198.51.100.30\n  node: pve"
     ))
     data, _ = m.site_data("demo-home")
     assert data == {}
