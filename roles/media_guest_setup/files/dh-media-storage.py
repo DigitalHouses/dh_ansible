@@ -168,6 +168,28 @@ def ensure_create(data, disk, physical):
     return guid, True
 
 
+def validate_layout(data):
+    """Validate *before* any pool destruction or partition writes."""
+    require(data["mode"] in ("readonly", "readwrite"), "INVALID_ACCESS_MODE")
+    layout = data["layout"]
+    datasets = layout["datasets"]
+    directories = layout["directories"]
+    require(isinstance(datasets, list) and datasets and "media" in datasets
+            and len(set(datasets)) == len(datasets), "INVALID_DATASET_LIST")
+    for name in datasets:
+        require(isinstance(name, str)
+                and re.fullmatch(r"[a-z][a-z0-9_-]{1,35}", name),
+                "INVALID_DATASET_NAME")
+    require(isinstance(directories, list)
+            and len(set(directories)) == len(directories), "INVALID_DIRECTORY_LIST")
+    for directory in directories:
+        require(isinstance(directory, str)
+                and re.fullmatch(r"[a-z][a-z0-9_-]{1,35}(?:/[a-z][a-z0-9_-]{1,35}){1,5}",
+                                 directory), "INVALID_DIRECTORY_PATH")
+        require(directory.split("/")[0] in datasets,
+                "UNDECLARED_DATASET_DIRECTORY")
+
+
 def reconcile_layout(data):
     pool = data["pool_name"]
     layout = data["layout"]
@@ -218,7 +240,9 @@ def main():
             "POOL_NAMING_INVALID")
     require(data["media_dataset"] == data["pool_name"] + "/media",
             "CANONICAL_MEDIA_DATASET_MISMATCH")
-    require(data["mode"] in ("readonly", "readwrite"), "INVALID_ACCESS_MODE")
+    validate_layout(data)
+    require(args.action != "create" or data["mode"] == "readwrite",
+            "CREATE_REQUIRES_READWRITE")
     disk, physical = find_disk(data["disk"])
     command("/usr/sbin/modprobe", "zfs")
     if args.action == "create":
