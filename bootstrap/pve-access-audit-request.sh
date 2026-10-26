@@ -44,6 +44,11 @@ if [[ "$ACTION" == "MEDIA_DEPLOY" ]]; then
     -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
     "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
     --site "$SITE" --apply >> "$LOG" 2>&1
+  GUEST_PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/setup-pve-media-guest.yml
+  [[ -f "$GUEST_PLAY" && ! -L "$GUEST_PLAY" ]] || exit 2
+  [[ "$(stat -c '%U:%G:%a' "$GUEST_PLAY")" == 'root:root:644' ]] || exit 2
+  export ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles
+  /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$GUEST_PLAY" >> "$LOG" 2>&1
   report PASS
   exit 0
 fi
