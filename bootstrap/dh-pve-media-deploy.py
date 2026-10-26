@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """PVE fixed-purpose Debian 13 media VM provisioning (one canonical site VM).
 
-Called from the existing Semaphore PVE root worker. No VM deletion, storage
-formatting, legacy guest mutation, or host controller rebinding is performed.
+Called from the existing Semaphore PVE root worker. An explicit create action
+may rebuild only the exact audited media guest. The physical disk is never
+formatted on PVE: guest storage reconciliation owns that separate operation.
 """
 from __future__ import annotations
 
@@ -243,9 +244,96 @@ def ensure_config(vmid, site, data):
     qm("cloudinit", "update", vmid)
 
 
-def apply(site):
+def guest_exec(vmid, *args):
+    """Verified QEMU agent command, without host shell or SSH credentials."""
+    result = json.loads(qm("guest", "exec", vmid, "--", *args, timeout=45))
+    need(result.get("exited") == 1 and result.get("exitcode") == 0,
+         "MEDIA_GUEST_AGENT_PREFLIGHT_FAILED")
+    return result.get("out-data", "").strip()
+
+
+def old_guest_matches(vmid, site, data):
+    """Read-only, exact disk and pool identity check before VM deletion."""
+    storage = data["storage"]
+    state = config(vmid)
+    need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
+    need(state.get("scsi0", "").startswith(
+        "local-lvm:vm-" + str(vmid) + "-disk-"), "FOREIGN_BOOT_VOLUME")
+    need(state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1",
+         "GPU_CONFIG_DRIFT")
+    need(state.get("hostpci1") == data["pci"]["sata_controller"] + ",pcie=1",
+         "SATA_CONFIG_DRIFT")
+    need(state.get("lock") is None, "VM_LOCKED")
+    for slot in ("scsi1", "scsi2", "sata0", "sata1", "virtio0",
+                 "virtio1", "ide0", "ide1", "unused0", "unused1"):
+        need(slot not in state, "UNEXPECTED_VM_DISK_" + slot)
+    devices = json.loads(guest_exec(vmid, "/usr/bin/lsblk",
+                                    "-J", "-b", "-d", "-o",
+                                    "NAME,PATH,TYPE,MODEL,SERIAL,WWN,SIZE"))
+    disks = devices.get("blockdevices", [])
+    matches = [d for d in disks if
+               d.get("type") == "disk"
+               and str(d.get("serial", "")).strip() == storage["disk"]["serial"]
+               and str(d.get("wwn", "")).lower() == storage["disk"]["wwn"].lower()
+               and int(d.get("size") or 0) == int(storage["disk"]["size_bytes"])]
+    need(len(matches) == 1 and matches[0].get("name") != "sda",
+         "LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH")
+    old = storage["legacy_pool"]
+    observed = guest_exec(vmid, "/usr/sbin/zpool", "get",
+                          "-H", "-o", "value", "guid", old["name"])
+    need(observed == str(old["guid"]), "LEGACY_ZFS_GUID_MISMATCH")
+    print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
+
+
+def recreate_legacy_guest_if_needed(vmid, site, data, action):
+    """One-time recreation. A canonical or partially recreated VM is never deleted."""
+    if action != "create":
+        return
+    if not Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists():
+        return
+    state = config(vmid)
+    need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
+    if qm("status", vmid) != "status: running":
+        # Do not destroy a stopped VM with unknown disk state.
+        print("VM_RECREATE=SKIPPED_STOPPED", flush=True)
+        return
+    # QGA can fail if new VM is still booting; never infer legacy from absence.
+    try:
+        target = guest_exec(vmid, "/usr/sbin/zpool", "get", "-H", "-o",
+                            "value", "name", data["storage"]["pool_name"])
+        if target == data["storage"]["pool_name"]:
+            print("VM_RECREATE=ALREADY_CANONICAL", flush=True)
+            return
+    except (Blocked, json.JSONDecodeError, subprocess.TimeoutExpired):
+        pass
+    try:
+        old_guest_matches(vmid, site, data)
+    except (Blocked, json.JSONDecodeError, subprocess.TimeoutExpired):
+        print("VM_RECREATE=BLOCKED_UNRECOGNIZED_STATE", flush=True)
+        raise
+    need(data["storage"].get("destructive_without_backup") is True,
+         "DESTRUCTIVE_APPROVAL_MISSING")
+    # The PCI SATA controller stays physically attached to the host;
+    # qm destroy removes only verified local-lvm guest volumes.
+    try:
+        qm("set", vmid, "--protection", "0")
+        qm("shutdown", vmid, "--timeout", "120", timeout=135)
+        need(qm("status", vmid) == "status: stopped",
+             "GUEST_SHUTDOWN_UNCONFIRMED")
+        qm("destroy", vmid, "--purge", "1", "--destroy-unreferenced-disks", "1",
+           timeout=150)
+        need(not Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists(),
+             "GUEST_DELETION_UNCONFIRMED")
+    finally:
+        if Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists():
+            qm("set", vmid, "--protection", "1")
+    print("VM_RECREATE=REMOVED_VERIFIED_LEGACY", flush=True)
+
+
+def apply(site, action):
     data, pve = site_data(site)
     vmid, name, ip = check(site, data, pve)
+    recreate_legacy_guest_if_needed(vmid, site, data, action)
     existing = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists()
     if existing:
         need(config(vmid).get("name") == name, "EXISTING_VM_MISMATCH")
@@ -279,19 +367,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True)
     parser.add_argument("--apply", action="store_true")
+    parser.add_argument("--storage-action", choices=("create", "import"), required=True)
     args = parser.parse_args()
     data, pve = site_data(args.site)
     vmid, name, ip = check(args.site, data, pve)
     if not args.apply:
         print("MEDIA_DEPLOY_PREFLIGHT=PASS VMID=" + str(vmid))
         return
-    apply(args.site)
+    apply(args.site, args.storage_action)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (Blocked, KeyError, TypeError, ValueError, subprocess.TimeoutExpired) as exc:
+    except (Blocked, KeyError, TypeError, ValueError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
         print("MEDIA_DEPLOY=BLOCKED: " + (str(exc) if isinstance(exc, Blocked)
               else type(exc).__name__), file=sys.stderr)
         sys.exit(2)
