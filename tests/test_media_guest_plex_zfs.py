@@ -99,3 +99,12 @@ def test_native_radarr_sonarr_pinned_without_extra_semaphore_task():
     setup = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
     assert '("media_guest_setup", "defaults/main.yml")' in setup
     assert '("media_guest_setup", "templates/media-arr.service.j2")' in setup
+
+
+def test_guest_smartmontools_is_provisioned_for_dh_pve_agent():
+    tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    packages = next(x for x in tasks if x["name"].startswith("Install QEMU Guest Agent"))["ansible.builtin.apt"]["name"]
+    assert "smartmontools" in packages
+    probe = next(x for x in tasks if x["name"] == "Verify SMART monitoring binary available for dh_pve_agent")
+    assert probe["ansible.builtin.command"]["argv"] == ["smartctl", "--version"]
+    assert probe["changed_when"] is False
