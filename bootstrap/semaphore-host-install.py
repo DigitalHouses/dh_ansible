@@ -1117,6 +1117,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned PVE site-data provider missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(host_helper), "/usr/local/sbin/dh-site-data-pve-refresh")
+    media_helper = checkout / "bootstrap/dh-pve-media-deploy.py"
+    if not media_helper.is_file() or media_helper.is_symlink():
+        raise Blocked("Pinned media VM deploy helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(media_helper), "/usr/local/sbin/dh-pve-media-deploy")
     for source, target, mode in (
         ("bootstrap/dh-site-data-runner.py", "/usr/local/sbin/dh-site-data-runner", "0700"),
         ("bootstrap/dh-site-data.service", "/etc/systemd/system/dh-site-data.service", "0644"),
