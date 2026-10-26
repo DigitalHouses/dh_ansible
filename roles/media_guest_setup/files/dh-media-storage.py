@@ -124,9 +124,9 @@ def ensure_create(data, disk, physical):
         guid, modified = ensure_import(name, disk, physical, data["mode"])
         print("POOL=ALREADY_CANONICAL", flush=True)
         return guid, modified
-    legacy = data["legacy_pool"]
-    legacy_active = get_pool(legacy["name"])
-    legacy_importable = imported_guid_visible(legacy["name"])
+    legacy = data.get("legacy_pool")
+    legacy_active = get_pool(legacy["name"]) if legacy else None
+    legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
     if legacy_active or legacy_importable:
         require(data.get("destructive_without_backup") is True, "DESTRUCTIVE_APPROVAL_MISSING")
         observed = legacy_active or legacy_importable
@@ -156,7 +156,8 @@ def ensure_create(data, disk, physical):
     command("/usr/sbin/wipefs", "--all", physical)
     command("/usr/sbin/sgdisk", "--zap-all", physical)
     command("/usr/bin/udevadm", "settle")
-    require(not get_pool(legacy["name"]), "LEGACY_POOL_STILL_ACTIVE")
+    if legacy:
+        require(not get_pool(legacy["name"]), "LEGACY_POOL_STILL_ACTIVE")
     command("/usr/sbin/zpool", "create", "-f", "-o", "ashift=12",
             "-O", "compression=zstd", "-O", "atime=off",
             "-O", "xattr=sa", "-O", "acltype=posixacl",
