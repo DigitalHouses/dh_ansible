@@ -220,6 +220,7 @@ def main():
             "CANONICAL_MEDIA_DATASET_MISMATCH")
     require(data["mode"] in ("readonly", "readwrite"), "INVALID_ACCESS_MODE")
     disk, physical = find_disk(data["disk"])
+    command("/usr/sbin/modprobe", "zfs")
     if args.action == "create":
         guid, changed = ensure_create(data, disk, physical)
     else:
