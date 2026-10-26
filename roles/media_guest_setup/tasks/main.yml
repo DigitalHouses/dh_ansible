@@ -177,6 +177,18 @@
     enabled: true
     state: started
 
+- name: Enforce shared media directories and write permissions
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}/{{ item }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  loop:
+    - movies
+    - tvshows
+    - music
+
 - name: Advertise existing readonly media library over SMB
   ansible.builtin.template:
     src: media-smb.conf.j2
@@ -332,14 +344,14 @@
 
 - name: Create shared media application group
   ansible.builtin.group:
-    name: media
+    name: media_group
     system: true
     state: present
 
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -353,7 +365,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -434,7 +446,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -461,7 +473,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -484,7 +496,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -493,7 +505,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -502,7 +514,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -583,7 +595,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -618,7 +630,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -641,6 +653,8 @@
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/dh-media-arr-wire
+      - --library-root
+      - "/{{ media_vm.storage.media_dataset }}"
       - --downloads
       - "{{ media_vm.downloads.path }}"
   register: media_arr_wiring
@@ -949,7 +963,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -963,7 +977,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -1044,7 +1058,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -1071,7 +1085,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1094,7 +1108,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1103,7 +1117,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1112,7 +1126,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -1193,7 +1207,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -1228,7 +1242,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -1559,7 +1573,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -1573,7 +1587,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -1654,7 +1668,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -1681,7 +1695,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1704,7 +1718,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1713,7 +1727,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -1722,7 +1736,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -1803,7 +1817,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -1838,7 +1852,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -2169,7 +2183,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -2183,7 +2197,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -2264,7 +2278,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -2291,7 +2305,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2314,7 +2328,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2323,7 +2337,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2332,7 +2346,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -2413,7 +2427,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -2448,7 +2462,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -2777,7 +2791,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -2791,7 +2805,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -2872,7 +2886,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -2899,7 +2913,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2922,7 +2936,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2931,7 +2945,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -2940,7 +2954,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -3021,7 +3035,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -3056,7 +3070,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -3387,7 +3401,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -3401,7 +3415,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -3482,7 +3496,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -3509,7 +3523,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -3532,7 +3546,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -3541,7 +3555,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -3550,7 +3564,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -3631,7 +3645,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -3666,7 +3680,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -3997,7 +4011,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -4011,7 +4025,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -4092,7 +4106,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -4119,7 +4133,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4142,7 +4156,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4151,7 +4165,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4160,7 +4174,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -4241,7 +4255,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -4276,7 +4290,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -4607,7 +4621,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -4621,7 +4635,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -4702,7 +4716,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -4729,7 +4743,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4752,7 +4766,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4761,7 +4775,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -4770,7 +4784,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -4851,7 +4865,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -4886,7 +4900,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -4954,7 +4968,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -4968,7 +4982,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -5049,7 +5063,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -5076,7 +5090,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5099,7 +5113,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5108,7 +5122,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5117,7 +5131,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -5198,7 +5212,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -5233,7 +5247,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -5564,7 +5578,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -5578,7 +5592,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -5659,7 +5673,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -5686,7 +5700,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5709,7 +5723,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5718,7 +5732,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -5727,7 +5741,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -5808,7 +5822,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -5843,7 +5857,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -6174,7 +6188,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -6188,7 +6202,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -6269,7 +6283,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -6296,7 +6310,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6319,7 +6333,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6328,7 +6342,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6337,7 +6351,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -6418,7 +6432,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -6453,7 +6467,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -6784,7 +6798,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -6798,7 +6812,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -6879,7 +6893,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -6906,7 +6920,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6929,7 +6943,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6938,7 +6952,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -6947,7 +6961,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -7028,7 +7042,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -7063,7 +7077,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -7392,7 +7406,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -7406,7 +7420,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -7487,7 +7501,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -7514,7 +7528,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -7537,7 +7551,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -7546,7 +7560,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -7555,7 +7569,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -7636,7 +7650,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -7671,7 +7685,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -8002,7 +8016,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -8016,7 +8030,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -8097,7 +8111,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -8124,7 +8138,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8147,7 +8161,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8156,7 +8170,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8165,7 +8179,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -8246,7 +8260,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -8281,7 +8295,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -8612,7 +8626,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -8626,7 +8640,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -8707,7 +8721,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -8734,7 +8748,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8757,7 +8771,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8766,7 +8780,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -8775,7 +8789,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -8856,7 +8870,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -8891,7 +8905,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -9222,7 +9236,7 @@
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -9236,7 +9250,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -9317,7 +9331,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -9344,7 +9358,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -9367,7 +9381,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -9376,7 +9390,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -9385,7 +9399,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -9466,7 +9480,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -9501,7 +9515,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
