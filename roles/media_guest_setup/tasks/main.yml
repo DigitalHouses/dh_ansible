@@ -182,7 +182,7 @@
       - /usr/lib/plexmediaserver/Plex Media Scanner
       - --scan
       - --section
-      - "{{ item.stdout | regex_replace('^.* ID ([0-9]+)\..*$', '\1') }}"
+      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
   become_user: plex
   loop: "{{ media_new_plex_sections.results }}"
   when: item.changed | default(false)
