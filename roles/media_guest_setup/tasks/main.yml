@@ -25,6 +25,7 @@
   ansible.builtin.apt:
     name:
       - qemu-guest-agent
+      - smartmontools
       - linux-headers-amd64
       - zfs-dkms
       - zfsutils-linux
@@ -40,6 +41,13 @@
     state: present
     update_cache: true
     cache_valid_time: 3600
+
+- name: Verify SMART monitoring binary available for dh_pve_agent
+  ansible.builtin.command:
+    argv:
+      - smartctl
+      - --version
+  changed_when: false
 
 - name: Start QEMU Guest Agent
   ansible.builtin.systemd_service:
