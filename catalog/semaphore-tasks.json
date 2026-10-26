@@ -42,7 +42,7 @@
       "view": "01 · Подготовка"
     },
     {
-      "title": "80-Медиасервер · Аудит PCI/VM",
+      "title": "80-Медиасервер · Развёртывание",
       "playbook": "playbooks/plan-pve-media-vm.yml",
       "view": "02 · Развёртывание"
     }
