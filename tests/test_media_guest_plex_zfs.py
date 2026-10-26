@@ -50,3 +50,19 @@ def test_official_plex_and_agent_setup_persisted():
     for name in ("setup-pve-media-guest.yml", "dh-media-zfs.service",
                  "dh-media-zfs-mount.sh.j2"):
         assert name in installer
+
+def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
+    data = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    labels = [task["name"] for task in data]
+    assert "Inspect existing Plex library paths without changing its database" in labels
+    assert "Create missing Plex libraries using the installed Plex scanner" in labels
+    assert "Scan only newly created Plex libraries" in labels
+    create = next(x for x in data if x["name"].startswith("Create missing Plex libraries"))
+    assert create["become_user"] == "plex"
+    assert len(create["loop"]) == 3
+    assert [x["folder"] for x in create["loop"]] == ["movies", "tvshows", "music"]
+    assert "not in media_existing_plex_paths.stdout_lines" in create["when"]
+    code = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
+    assert "firmware-intel-graphics" in code
+    assert "intel-media-va-driver" in code
+    assert "vainfo" in code

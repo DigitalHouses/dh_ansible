@@ -27,6 +27,9 @@
       - zfs-dkms
       - zfsutils-linux
       - zfs-zed
+      - firmware-intel-graphics
+      - intel-media-va-driver
+      - vainfo
       - curl
       - gnupg
     state: present
@@ -135,6 +138,54 @@
     - tvshows
     - music
   changed_when: false
+
+- name: Inspect existing Plex library paths without changing its database
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - |
+        import sqlite3
+        db = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+        with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
+            for (path,) in connection.execute("SELECT root_path FROM section_locations"):
+                print(path)
+  become_user: plex
+  register: media_existing_plex_paths
+  changed_when: false
+
+- name: Create missing Plex libraries using the installed Plex scanner
+  ansible.builtin.command:
+    argv:
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --add-section
+      - "{{ item.title }}"
+      - --type
+      - "{{ item.type }}"
+      - --agent
+      - "{{ item.agent }}"
+      - --location
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
+      - --lang
+      - ru
+  become_user: plex
+  loop:
+    - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
+    - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
+    - {title: 'Музыка', folder: music, type: '8', agent: 'tv.plex.agents.music'}
+  when: ('/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder) not in media_existing_plex_paths.stdout_lines
+  register: media_new_plex_sections
+
+- name: Scan only newly created Plex libraries
+  ansible.builtin.command:
+    argv:
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --scan
+      - --section
+      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
+  become_user: plex
+  loop: "{{ media_new_plex_sections.results }}"
+  when: item.changed | default(false)
 
 - name: Validate Plex local HTTP service
   ansible.builtin.uri:
