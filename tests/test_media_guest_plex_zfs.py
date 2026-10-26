@@ -66,3 +66,18 @@ def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
     assert "firmware-intel-graphics" in code
     assert "intel-media-va-driver" in code
     assert "vainfo" in code
+
+def test_media_smb_discovery_is_readonly_and_idempotent():
+    tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    named = {item["name"]: item for item in tasks}
+    assert "Advertise existing readonly media library over SMB" in named
+    assert "Start Samba and Windows WS-Discovery services" in named
+    assert "Confirm readonly guest SMB share is reachable" in named
+    assert "samba" in str(tasks) and "wsdd2" in str(tasks)
+    template = (ROOT / "roles/media_guest_setup/templates/media-smb.conf.j2").read_text()
+    assert "path = /{{ media_vm.storage.media_dataset }}" in template
+    assert "read only = yes" in template
+    assert "guest ok = yes" in template
+    assert template.count("[Media]") == 1
+    assert "netbios name = {{ media_vm.discovery.netbios_name }}" in template
+    assert "media-smb.conf.j2" in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
