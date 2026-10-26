@@ -94,6 +94,9 @@ def check(site, data, pve):
     need(ip.split("/")[0].split(".")[:3] == pve["host"].split(".")[:3],
          "STATIC_IP_SUBNET_MISMATCH")
     need(vmid == 2000 + int(ip.split(".")[-1].split("/")[0]), "VMID_IP_MISMATCH")
+    res = data.get("resources", {})
+    need(1 <= int(res.get("cores", 4)) <= 8 and 2048 <= int(res.get("memory_mb", 4096)) <= 8192
+         and 32 <= int(res.get("disk_gb", 64)) <= 256, "VM_RESOURCES_INVALID")
     for dev in ("gpu", "sata_controller"):
         need(BDF_PATTERN.fullmatch(data["pci"][dev]) is not None,
              "PCI_ADDRESS_INVALID")
@@ -164,7 +167,7 @@ def download_verified():
     return target, expected
 
 
-def ensure_disk(vmid, image):
+def ensure_disk(vmid, image, disk_gb):
     state = config(vmid)
     if "scsi0" not in state:
         if "unused0" not in state:
@@ -182,8 +185,8 @@ def ensure_disk(vmid, image):
     match = re.search(r"(?:^|,)size=(\d+)([GMT])", state["scsi0"])
     if match:
         current = int(match[1]) * {"G": 1, "M": 1/1024, "T": 1024}[match[2]]
-        if current < 64:
-            qm("resize", vmid, "scsi0", "64G")
+        if current < disk_gb:
+            qm("resize", vmid, "scsi0", str(disk_gb) + "G")
     if "ide2" not in config(vmid):
         qm("set", vmid, "--ide2", "local-lvm:cloudinit")
 
@@ -244,11 +247,13 @@ def apply(site):
     if not existing:
         qm("create", vmid, "--name", name,
            "--ostype", "l26", "--machine", "q35", "--bios", "seabios",
-           "--cores", "4", "--memory", "4096", "--scsihw", "virtio-scsi-single",
+           "--cores", str(data.get("resources", {}).get("cores", 4)),
+           "--memory", str(data.get("resources", {}).get("memory_mb", 4096)),
+           "--scsihw", "virtio-scsi-single",
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
            "--vga", "serial0", "--onboot", "0")
         print("VM_CREATED=YES", flush=True)
-    ensure_disk(vmid, image)
+    ensure_disk(vmid, image, int(data.get("resources", {}).get("disk_gb", 64)))
     ensure_config(vmid, site, data)
     qm("start", vmid, timeout=120)
     need(qm("status", vmid) == "status: running", "VM_START_FAILED")
