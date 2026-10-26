@@ -1080,6 +1080,7 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "templates/media-qbittorrent.service.j2"),
         ("media_guest_setup", "templates/media-qbittorrent.conf.j2"),
         ("media_guest_setup", "files/dh-media-arr-wire.py"),
+        ("media_guest_setup", "files/dh-media-storage.py"),
     ):
         role_dir = folder + "/roles/" + role
         stage_guest_root_directory(folder + "/roles", stage="pve_access")
