@@ -1,0 +1,18 @@
+[Unit]
+Description=DigitalHouses {{ item.name }} media management
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User={{ item.slug }}
+Group=media
+UMask=0002
+Type=simple
+WorkingDirectory=/opt/{{ item.name }}
+ExecStart=/opt/{{ item.name }}/{{ item.name }} -nobrowser -data=/var/lib/{{ item.slug }}
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+
+[Install]
+WantedBy=multi-user.target
