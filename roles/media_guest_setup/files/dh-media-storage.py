@@ -202,6 +202,7 @@ def reconcile_layout(data):
         if not dest.exists():
             dest.mkdir(parents=True, exist_ok=True)
             modified = True
+    print("LAYOUT=" + ("CREATED" if modified else "UNCHANGED"), flush=True)
     return modified
 
 
