@@ -129,6 +129,36 @@ class GuestLifecycle(unittest.TestCase):
         with patch.object(m, "qm", side_effect=AssertionError("guest modified")):
             m.recreate_legacy_guest_if_needed(2238, "demo-home", {}, "import")
 
+    def test_legacy_vdev_must_be_on_approved_ssd(self):
+        m = self.m
+        data = {
+            "pci": {"gpu": "0000:00:02.0", "sata_controller": "0000:00:17.0"},
+            "storage": configuration(),
+        }
+        state = {
+            "name": "media-server-demo-home",
+            "scsi0": "local-lvm:vm-2238-disk-0,size=64G",
+            "hostpci0": "0000:00:02.0,pcie=1",
+            "hostpci1": "0000:00:17.0,pcie=1",
+        }
+        def guest(_vmid, *args):
+            if args[0].endswith("/lsblk") and "-J" in args:
+                return json.dumps({"blockdevices": [
+                    {"name": "sdb", "path": "/dev/sdb", "type": "disk",
+                     "serial": "ABCDEFGHI123", "wwn": "0x1234567890abcdef",
+                     "size": 1000204886016}]})
+            if args[0].endswith("/zpool") and "get" in args:
+                return "123456789012345"
+            if args[0].endswith("/zpool") and "status" in args:
+                return "config:\\n    /dev/sdc1 ONLINE 0 0 0"
+            if args[0].endswith("/lsblk") and "-n" in args:
+                return "sdc"
+            raise AssertionError("unexpected guest command")
+        with patch.object(m, "config", return_value=state), \\
+             patch.object(m, "guest_exec", side_effect=guest):
+            with self.assertRaisesRegex(m.Blocked, "LEGACY_ZFS_ON_FOREIGN_DISK"):
+                m.old_guest_matches(2238, "demo-home", data)
+
 
 if __name__ == "__main__":
     unittest.main()
