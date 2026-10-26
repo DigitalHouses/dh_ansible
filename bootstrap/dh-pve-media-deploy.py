@@ -70,7 +70,8 @@ def site_data(site):
     pve = yaml.safe_load(pct("cat", base + "/pve.yml"))["pve"]
     need(meta["id"] == site and meta["owner_slug"] + "-" + meta["type"] == site,
          "SITE_DATA_MISMATCH")
-    need(pve["host"] == "192.168.11.30" and pve["node"] == "pve",
+    need(pve["node"] == run("/usr/bin/hostname", "-s"), "PVE_NODE_MISMATCH")
+    need(pve["host"] in run("/usr/sbin/ip", "-4", "-o", "addr", "show"),
          "PVE_HOST_MISMATCH")
     return data, pve
 
@@ -79,7 +80,7 @@ def qm_version():
     return Path("/usr/sbin/qm") if Path("/usr/sbin/qm").is_file() else None
 
 
-def check(site, data):
+def check(site, data, pve):
     vmid = int(data["vmid"])
     name = data["name"]
     need(2200 <= vmid <= 2254, "VMID_INVALID")
@@ -88,8 +89,10 @@ def check(site, data):
          and int(data["os"]["major_version"]) == 13, "OS_INVALID")
     need(data["network"]["bridge"] == "vmbr0", "BRIDGE_INVALID")
     ip = data["network"]["ipv4"]
-    need(re.fullmatch(r"192\.168\.11\.(2[0-4][0-9]|25[0-4])/24", ip) is not None,
+    need(re.fullmatch(r"[0-9]{1,3}(\\.[0-9]{1,3}){3}/24", ip) is not None,
          "STATIC_IP_INVALID")
+    need(ip.split("/")[0].split(".")[:3] == pve["host"].split(".")[:3],
+         "STATIC_IP_SUBNET_MISMATCH")
     need(vmid == 2000 + int(ip.split(".")[-1].split("/")[0]), "VMID_IP_MISMATCH")
     for dev in ("gpu", "sata_controller"):
         need(BDF_PATTERN.fullmatch(data["pci"][dev]) is not None,
@@ -196,9 +199,11 @@ def ensure_config(vmid, site, data):
     if "vga" not in config(vmid):
         qm("set", vmid, "--vga", "serial0")
     qm("set", vmid, "--ciuser", "debian")
+    gateway = data["network"].get("gateway")
+    need(gateway and re.fullmatch(r"[0-9.]+", gateway), "GATEWAY_NOT_DECLARED")
     qm("set", vmid, "--ipconfig0",
-       "ip=" + data["network"]["ipv4"] + ",gw=192.168.11.1")
-    qm("set", vmid, "--nameserver", "192.168.11.1")
+       "ip=" + data["network"]["ipv4"] + ",gw=" + gateway)
+    qm("set", vmid, "--nameserver", gateway)
     pubkey = pct("ssh-keygen", "-y", "-f",
                  "/var/lib/ansible/.ssh/pve_host_write_ed25519")
     need(pubkey.startswith("ssh-ed25519 "), "SSH_PUBLIC_KEY_UNAVAILABLE")
@@ -225,8 +230,8 @@ def ensure_config(vmid, site, data):
 
 
 def apply(site):
-    data, _ = site_data(site)
-    vmid, name, ip = check(site, data)
+    data, pve = site_data(site)
+    vmid, name, ip = check(site, data, pve)
     existing = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists()
     if existing:
         need(config(vmid).get("name") == name, "EXISTING_VM_MISMATCH")
@@ -257,8 +262,8 @@ def main():
     parser.add_argument("--site", required=True)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
-    data, _ = site_data(args.site)
-    vmid, name, ip = check(args.site, data)
+    data, pve = site_data(args.site)
+    vmid, name, ip = check(args.site, data, pve)
     if not args.apply:
         print("MEDIA_DEPLOY_PREFLIGHT=PASS VMID=" + str(vmid))
         return
