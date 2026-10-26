@@ -46,6 +46,14 @@ if [[ "$ACTION" == "MEDIA_DEPLOY_CREATE" || "$ACTION" == "MEDIA_DEPLOY_IMPORT" ]
     -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
     "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
     --site "$SITE" --storage-action "$STORAGE_ACTION" --apply >> "$LOG" 2>&1
+  if grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_LEGACY" "$LOG"; then
+    # The newly provisioned Debian VM generates a new host key.
+    GUEST_IP="$(/opt/ansible/venv/bin/python -c 'import yaml,ipaddress,sys; x=yaml.safe_load(open(sys.argv[1]))["media_vm"]["network"]["ipv4"]; print(ipaddress.IPv4Interface(x).ip)' "$INV_ROOT/$SITE/media_vm.yml")"
+    if [[ -f /root/.ssh/known_hosts ]]; then
+      /usr/bin/ssh-keygen -R "$GUEST_IP" -f /root/.ssh/known_hosts >> "$LOG" 2>&1
+    fi
+    echo "VM_SSH_IDENTITY=REINITIALIZED_AFTER_APPROVED_RECREATE" >> "$LOG"
+  fi
   GUEST_PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/setup-pve-media-guest.yml
   [[ -f "$GUEST_PLAY" && ! -L "$GUEST_PLAY" ]] || exit 2
   [[ "$(stat -c '%U:%G:%a' "$GUEST_PLAY")" == 'root:root:644' ]] || exit 2
