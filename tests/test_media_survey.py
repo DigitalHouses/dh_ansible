@@ -53,7 +53,7 @@ class MediaSurveyTest(unittest.TestCase):
             "arguments": "[]", "type": "", "autorun": False,
             "allow_override_args_in_task": False,
         }
-        return SurveyAPI(row), row
+        return SurveyAPI(row.copy()), row.copy()
 
     def test_exact_engineer_choices(self):
         self.assertEqual(len(self.survey), 1)
