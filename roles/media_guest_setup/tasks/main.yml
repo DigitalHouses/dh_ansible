@@ -1,0 +1,177 @@
+---
+- name: Require declarative existing ZFS media identity
+  ansible.builtin.assert:
+    that:
+      - media_vm.storage is mapping
+      - media_vm.storage.mode == 'readonly'
+      - media_vm.storage.pool_name is match('^[a-zA-Z][a-zA-Z0-9_-]+$')
+      - media_vm.storage.pool_guid is match('^[0-9]{8,24}$')
+      - media_vm.storage.partition_partuuid is match('^[0-9a-f-]{36}$')
+      - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
+      - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
+      - media_vm.os.distribution == 'debian'
+      - media_vm.os.major_version | int == 13
+
+- name: Enable Debian contrib for supported ZFS packages
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^(Components:\s*)main$'
+    replace: '\1main contrib non-free-firmware'
+  register: media_debian_sources
+
+- name: Install QEMU Guest Agent, supported OpenZFS and Plex dependencies
+  ansible.builtin.apt:
+    name:
+      - qemu-guest-agent
+      - linux-headers-amd64
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-zed
+      - curl
+      - gnupg
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Start QEMU Guest Agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent.service
+    state: started
+
+- name: Ensure APT signing-key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download official Plex repository signing key
+  ansible.builtin.get_url:
+    url: https://downloads.plex.tv/plex-keys/PlexSign.v2.key
+    dest: /etc/apt/keyrings/plex_signing.asc
+    mode: '0644'
+
+- name: Convert official Plex signing key for APT
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --dearmor
+      - -o
+      - /etc/apt/keyrings/plexmediaserver.v2.gpg
+      - /etc/apt/keyrings/plex_signing.asc
+    creates: /etc/apt/keyrings/plexmediaserver.v2.gpg
+
+- name: Configure official Plex APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/plex.list
+    content: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] https://repo.plex.tv/deb/ public main\n"
+    mode: '0644'
+
+- name: Install Plex Media Server
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Give Plex Intel GPU render access
+  ansible.builtin.user:
+    name: plex
+    groups:
+      - video
+      - render
+    append: true
+  register: media_plex_groups
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated readonly guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+
+- name: Install persistent readonly ZFS media importer
+  ansible.builtin.template:
+    src: dh-media-zfs-mount.sh.j2
+    dest: /usr/local/sbin/dh-media-zfs-mount
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install systemd unit to mount only media dataset
+  ansible.builtin.copy:
+    src: dh-media-zfs.service
+    dest: /etc/systemd/system/dh-media-zfs.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start readonly media dataset mount
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Start Plex with Intel video/render permissions
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_groups.changed else 'started' }}"
+
+- name: Validate existing library paths readable by Plex
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - test
+      - -r
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item }}"
+  loop:
+    - movies
+    - tvshows
+    - music
+  changed_when: false
+
+- name: Validate Plex local HTTP service
+  ansible.builtin.uri:
+    url: http://127.0.0.1:32400/identity
+    status_code: 200
+    return_content: false
+  register: media_plex_http
+  changed_when: false
+
+- name: Validate readonly ZFS import and pool GUID
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - get
+      - -H
+      - -o
+      - value
+      - "{{ item }}"
+      - "{{ media_vm.storage.pool_name }}"
+  loop:
+    - readonly
+    - guid
+  register: media_zfs_properties
+  changed_when: false
+
+- name: Verify final media service state
+  ansible.builtin.assert:
+    that:
+      - media_zfs_properties.results[0].stdout == 'on'
+      - media_zfs_properties.results[1].stdout == media_vm.storage.pool_guid
+      - media_plex_http.status == 200
+
+- name: Report installed Plex service and existing readonly ZFS media
+  ansible.builtin.debug:
+    msg:
+      result: PLEX_READY
+      media: "{{ '/' ~ media_vm.storage.media_dataset }}"
+      plex: "http://{{ ansible_host }}:32400/web"
+      pool_mode: readonly
+      agent: active
