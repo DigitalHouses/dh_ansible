@@ -1071,6 +1071,9 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("pve_audit", "defaults/main.yml"),
         ("pve_audit", "tasks/main.yml"),
         ("pve_media_vm_plan", "tasks/main.yml"),
+        ("media_guest_setup", "tasks/main.yml"),
+        ("media_guest_setup", "files/dh-media-zfs.service"),
+        ("media_guest_setup", "templates/dh-media-zfs-mount.sh.j2"),
     ):
         role_dir = folder + "/roles/" + role
         stage_guest_root_directory(folder + "/roles", stage="pve_access")
@@ -1082,12 +1085,13 @@ def stage_pve_access_audit(checkout: Path) -> None:
         destination = role_dir + "/" + relative
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
-    source = checkout / "playbooks/audit-pve-access.yml"
-    if not source.is_file() or source.is_symlink():
-        raise Blocked("Pinned PVE access playbook missing")
-    target = folder + "/playbooks/audit-pve-access.yml"
-    run("pct", "push", str(CTID), str(source), target, timeout=30)
-    pct_guest("chmod", "0644", target)
+    for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml"):
+        source = checkout / "playbooks" / playbook
+        if not source.is_file() or source.is_symlink():
+            raise Blocked("Pinned PVE/media playbook missing")
+        target = folder + "/playbooks/" + playbook
+        run("pct", "push", str(CTID), str(source), target, timeout=30)
+        pct_guest("chmod", "0644", target)
     handoff = (
         ("bootstrap/pve-access-audit-request.sh",
          "/usr/local/sbin/dh-pve-access-audit", "0700"),
