@@ -53,8 +53,8 @@ MANAGED_DESCRIPTION = "DigitalHouses · управляется каталого�
 # Explicit one-time display-name migration for the canonical Cloudflare lifecycle.
 # New title is published only with a playbook that provisions/reconciles a tunnel.
 CATALOG_RENAMES = {
-    "80-Медиасервер · Аудит PCI/VM": (
-        "80-Медиасервер · Развёртывание",
+    "80-Медиасервер · Развёртывание": (
+        "80-Медиасервер · Аудит PCI/VM",
         "playbooks/plan-pve-media-vm.yml",
     ),
     "10-Создание туннеля CF до PVE": (
