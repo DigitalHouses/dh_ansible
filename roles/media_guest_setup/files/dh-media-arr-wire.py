@@ -196,19 +196,21 @@ def ensure_application(app: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--downloads", required=True)
+    parser.add_argument("--library-root", required=True)
     args = parser.parse_args()
     root = Path(args.downloads)
+    library = Path(args.library_root)
+    require(library.is_dir() and not library.is_symlink(), "ZFS_MEDIA_LIBRARY_MISSING")
     require(str(root) == "/srv/downloads", "NONCANONICAL_DOWNLOAD_ROOT")
     require(root.is_dir() and not root.is_symlink(), "DOWNLOAD_ROOT_MISSING")
     require(os.geteuid() == 0, "ROOT_GUEST_ONLY")
     # Manage only OS-system-disk staging; protected ZFS media is not changed.
-    for path in ("complete/movies", "complete/series", "complete/prowlarr",
-                 "library/movies", "library/tvshows"):
+    for path in ("complete/movies", "complete/series", "complete/prowlarr"):
         require((root / path).is_dir(), "STAGING_FOLDER_MISSING_" + path.replace("/", "_"))
     ensure_qbt_access()
     ensure_categories(str(root))
     for app, folder in (("radarr", "movies"), ("sonarr", "tvshows")):
-        ensure_root(app, str(root / "library" / folder))
+        ensure_root(app, str(library / folder))
     for app in ("radarr", "sonarr", "prowlarr"):
         ensure_client(app)
     for app in ("radarr", "sonarr"):
