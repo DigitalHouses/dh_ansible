@@ -493,6 +493,120 @@
   changed_when: false
   when: media_vm.applications.qbittorrent | bool
 
+- name: Validate LAN boundary for qBittorrent initial configuration
+  ansible.builtin.assert:
+    that:
+      - media_vm.network.lan_cidr is match('^[0-9.]+/[0-9]{1,2}$')
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path == '/srv/downloads'
+      - media_vm.applications.radarr | bool
+      - media_vm.applications.sonarr | bool
+      - media_vm.applications.prowlarr | bool
+      - media_vm.applications.qbittorrent | bool
+
+- name: Check if qBittorrent's local/LAN API access is already configured
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: [200, 403]
+    return_content: true
+  register: media_qbt_web_prefs
+  changed_when: false
+
+- name: Decide if initial qBittorrent access requires reconciliation
+  ansible.builtin.set_fact:
+    media_qbt_access_update: >-
+      {{
+        media_qbt_web_prefs.status != 200
+        or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
+        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+      }}
+  changed_when: false
+
+- name: Stop qBittorrent only if the first-run local API access needs change
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: stopped
+  when: media_qbt_access_update | bool
+
+- name: Ensure qBittorrent local API can be used without copying passwords
+  ansible.builtin.lineinfile:
+    path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    regexp: "^{{ item.key | regex_escape }}="
+    insertafter: '^\[Preferences\]$'
+    line: "{{ item.key }}={{ item.value }}"
+    owner: qbittorrent
+    group: media
+    mode: '0640'
+  loop:
+    - {key: 'WebUI\LocalHostAuth', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+  when: media_qbt_access_update | bool
+
+- name: Start qBittorrent with local/LAN WebUI access
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: started
+
+- name: Wait for local qBittorrent API after authentication setup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: 200
+    return_content: true
+  register: media_qbt_authenticated_prefs
+  retries: 15
+  delay: 2
+  until: media_qbt_authenticated_prefs.status == 200
+  changed_when: false
+
+- name: Verify local qBittorrent authentication bypass for server-side API integrations
+  ansible.builtin.assert:
+    that:
+      - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
+      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+
+- name: Create separate writable download and staging roots on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: media
+    mode: '2775'
+  loop:
+    - {path: 'complete', owner: 'qbittorrent'}
+    - {path: 'complete/movies', owner: 'qbittorrent'}
+    - {path: 'complete/series', owner: 'qbittorrent'}
+    - {path: 'complete/prowlarr', owner: 'qbittorrent'}
+    - {path: 'library', owner: 'root'}
+    - {path: 'library/movies', owner: 'radarr'}
+    - {path: 'library/tvshows', owner: 'sonarr'}
+
+- name: Install native idempotent Arr API integration helper
+  ansible.builtin.copy:
+    src: dh-media-arr-wire.py
+    dest: /usr/local/sbin/dh-media-arr-wire
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-wire
+      - --downloads
+      - "{{ media_vm.downloads.path }}"
+  register: media_arr_wiring
+  changed_when: "'=CREATED' in media_arr_wiring.stdout"
+  no_log: false
+
+- name: Check staging-only automation outcome
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
+      - "'ZFS_LIBRARY=UNCHANGED_READONLY' in media_arr_wiring.stdout_lines"
+    fail_msg: "MEDIA_INTEGRATION_MISSING"
+
 - name: Report installed Plex service and existing readonly ZFS media
   ansible.builtin.debug:
     msg:
