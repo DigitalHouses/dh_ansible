@@ -1,0 +1,18 @@
+# DigitalHouses: standalone, LAN-discoverable, readonly existing media library.
+[global]
+    workgroup = {{ media_vm.discovery.workgroup }}
+    netbios name = {{ media_vm.discovery.netbios_name }}
+    server role = standalone server
+    map to guest = Bad User
+    server min protocol = SMB2
+    load printers = no
+    disable spoolss = yes
+
+[Media]
+    comment = Media library (movies / tvshows / music)
+    path = /{{ media_vm.storage.media_dataset }}
+    browseable = yes
+    read only = yes
+    guest ok = yes
+    guest only = yes
+    force user = nobody
