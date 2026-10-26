@@ -24,7 +24,7 @@ IMAGE_NAME = "debian-13-generic-amd64.qcow2"
 CACHE = Path("/var/cache/digitalhouses/media")
 RUNNER = "1231"
 SITE_PATTERN = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\Z")
-BDF_PATTERN = re.compile(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\\.[0-7]\Z")
+BDF_PATTERN = re.compile(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\Z")
 
 
 class Blocked(Exception):
@@ -88,7 +88,7 @@ def check(site, data):
          and int(data["os"]["major_version"]) == 13, "OS_INVALID")
     need(data["network"]["bridge"] == "vmbr0", "BRIDGE_INVALID")
     ip = data["network"]["ipv4"]
-    need(re.fullmatch(r"192\\.168\\.11\\.(2[0-4][0-9]|25[0-4])/24", ip) is not None,
+    need(re.fullmatch(r"192\.168\.11\.(2[0-4][0-9]|25[0-4])/24", ip) is not None,
          "STATIC_IP_INVALID")
     need(vmid == 2000 + int(ip.split(".")[-1].split("/")[0]), "VMID_IP_MISMATCH")
     for dev in ("gpu", "sata_controller"):
@@ -176,7 +176,7 @@ def ensure_disk(vmid, image):
     state = config(vmid)
     need(state.get("scsi0", "").startswith("local-lvm:vm-" + str(vmid) + "-disk-"),
          "FOREIGN_BOOT_DISK")
-    match = re.search(r"(?:^|,)size=(\\d+)([GMT])", state["scsi0"])
+    match = re.search(r"(?:^|,)size=(\d+)([GMT])", state["scsi0"])
     if match:
         current = int(match[1]) * {"G": 1, "M": 1/1024, "T": 1024}[match[2]]
         if current < 64:
@@ -235,7 +235,7 @@ def apply(site):
             return
     print("TARGET_VMID=" + str(vmid), flush=True)
     print("GUEST_IP=" + ip, flush=True)
-    image, checksum = download_verified() if not existing or "scsi0" not in config(vmid) else (None, None)
+    image, _ = download_verified() if not existing or "scsi0" not in config(vmid) else (None, None)
     if not existing:
         qm("create", vmid, "--name", name,
            "--ostype", "l26", "--machine", "q35", "--bios", "seabios",
