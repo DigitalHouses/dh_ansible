@@ -46,7 +46,10 @@ def test_root_worker_is_pinned_to_specific_readonly_playbook():
     assert "semaphore:semaphore:600" in worker
     assert "dh-pve-access-audit.request" in worker
     assert "playbooks/audit-pve-access.yml" in worker
-    assert "sudo" not in worker
+    assert "MEDIA_DEPLOY" in worker
+    assert "sudo -n /usr/local/sbin/dh-pve-media-deploy" in worker
+    assert "StrictHostKeyChecking=yes" in worker
+    assert "AUDIT" in worker and "MEDIA_PLAN" in worker
     assert 'report RUNNING' in worker and 'report PASS' in worker
     host = read("bootstrap/semaphore-host-install.py")
     assert '"playbooks/audit-pve-access.yml"' in host

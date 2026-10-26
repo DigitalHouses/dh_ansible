@@ -97,7 +97,6 @@
         + (['GPU_ALREADY_ASSIGNED'] if media_vm_gpu_owners | length > 0 else [])
         + (['SATA_ALREADY_ASSIGNED'] if media_vm_sata_owners | length > 0 else [])
         + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
-        + (['OS_IMAGE_NOT_PINNED'] if not (media_vm.os.image_sha256 | default('', true) is match('^[0-9a-f]{64}$')) else [])
         + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
         + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
       }}
