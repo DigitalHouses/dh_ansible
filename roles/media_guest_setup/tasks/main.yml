@@ -5,7 +5,2044 @@
       - media_vm.storage is mapping
       - media_vm.storage.mode in ['readonly', 'readwrite']
       - media_vm.storage.pool_name is match('^[a-zA-Z][a-zA-Z0-9_-]+$')
-      - media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
+      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}
+      - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
+      - media_storage_action in ['create', 'import']
+      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}
+      - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
+      - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
+      - media_vm.os.distribution == 'debian'
+      - media_vm.os.major_version | int == 13
+      - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
+
+- name: Enable Debian contrib for supported ZFS packages
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^(Components:\s*)main$'
+    replace: '\1main contrib non-free-firmware'
+  register: media_debian_sources
+
+- name: Install QEMU Guest Agent, supported OpenZFS and Plex dependencies
+  ansible.builtin.apt:
+    name:
+      - qemu-guest-agent
+      - smartmontools
+      - linux-headers-amd64
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-zed
+      - gdisk
+      - util-linux
+      - firmware-intel-graphics
+      - intel-media-va-driver
+      - vainfo
+      - curl
+      - gnupg
+      - samba
+      - wsdd2
+      - smbclient
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verify SMART monitoring binary available for dh_pve_agent
+  ansible.builtin.command:
+    argv:
+      - smartctl
+      - --version
+  changed_when: false
+
+- name: Start QEMU Guest Agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent.service
+    state: started
+
+- name: Ensure APT signing-key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download official Plex repository signing key
+  ansible.builtin.get_url:
+    url: https://downloads.plex.tv/plex-keys/PlexSign.v2.key
+    dest: /etc/apt/keyrings/plex_signing.asc
+    mode: '0644'
+
+- name: Convert official Plex signing key for APT
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --dearmor
+      - -o
+      - /etc/apt/keyrings/plexmediaserver.v2.gpg
+      - /etc/apt/keyrings/plex_signing.asc
+    creates: /etc/apt/keyrings/plexmediaserver.v2.gpg
+
+- name: Configure official Plex APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/plex.list
+    content: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] https://repo.plex.tv/deb/ public main\n"
+    mode: '0644'
+
+- name: Install Plex Media Server
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create canonical POSIX file groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - doc_group
+    - backup_group
+    - media_group
+    - admin_group
+    - download_group
+
+- name: Give Plex Intel GPU render access
+  ansible.builtin.user:
+    name: plex
+    groups:
+      - video
+      - render
+      - media_group
+    append: true
+  register: media_plex_groups
+
+- name: Create site storage configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    mode: '0750'
+
+- name: Install generic ZFS create/import reconciler
+  ansible.builtin.copy:
+    src: dh-media-storage.py
+    dest: /usr/local/sbin/dh-media-storage
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render exact declarative ZFS configuration
+  ansible.builtin.copy:
+    content: "{{ media_vm.storage | to_nice_json }}"
+    dest: /etc/digitalhouses/media-storage.json
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Reconcile physical ZFS pool and declared datasets
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-storage
+      - --config
+      - /etc/digitalhouses/media-storage.json
+      - --action
+      - "{{ media_storage_action }}"
+  register: media_zfs_reconcile
+  changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
+
+- name: Verify site ZFS reconciler succeeded
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_STORAGE_RECONCILED=PASS' in media_zfs_reconcile.stdout_lines"
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+
+- name: Install persistent declarative ZFS media importer
+  ansible.builtin.template:
+    src: dh-media-zfs-mount.sh.j2
+    dest: /usr/local/sbin/dh-media-zfs-mount
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install systemd unit to mount only media dataset
+  ansible.builtin.copy:
+    src: dh-media-zfs.service
+    dest: /etc/systemd/system/dh-media-zfs.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start existing media dataset mount
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Reconcile shared permanent media library directories
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}/{{ item }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  loop:
+    - movies
+    - tvshows
+    - music
+
+- name: Advertise existing media library over SMB
+  ansible.builtin.template:
+    src: media-smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'testparm -s %s'
+  register: media_smb_configuration
+
+- name: Start Samba and Windows WS-Discovery services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if media_smb_configuration.changed else 'started' }}"
+  loop:
+    - smbd.service
+    - nmbd.service
+    - wsdd2.service
+
+- name: Confirm readonly guest SMB share is reachable
+  ansible.builtin.command:
+    argv:
+      - smbclient
+      - -N
+      - //127.0.0.1/Media
+      - -c
+      - ls
+  changed_when: false
+
+- name: Start Plex with Intel video/render permissions
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_groups.changed else 'started' }}"
+
+- name: Validate existing library paths readable by Plex
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - test
+      - -r
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item }}"
+  loop:
+    - movies
+    - tvshows
+    - music
+  changed_when: false
+
+- name: Inspect existing Plex library paths without changing its database
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - python3
+      - -c
+      - |
+        import sqlite3
+        db = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+        with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
+            for (path,) in connection.execute("SELECT root_path FROM section_locations"):
+                print(path)
+  register: media_existing_plex_paths
+  changed_when: false
+
+- name: Create missing Plex libraries using the installed Plex scanner
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --add-section
+      - "{{ item.title }}"
+      - --type
+      - "{{ item.type }}"
+      - --agent
+      - "{{ item.agent }}"
+      - --location
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
+      - --lang
+      - ru
+  loop:
+    - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
+    - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
+    - {title: 'Музыка', folder: music, type: '8', agent: 'tv.plex.agents.music'}
+  when: ('/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder) not in media_existing_plex_paths.stdout_lines
+  register: media_new_plex_sections
+
+- name: Scan only newly created Plex libraries
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --scan
+      - --section
+      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
+  loop: "{{ media_new_plex_sections.results }}"
+  when: item.changed | default(false)
+
+- name: Validate Plex local HTTP service
+  ansible.builtin.uri:
+    url: http://127.0.0.1:32400/identity
+    status_code: 200
+    return_content: false
+  register: media_plex_http
+  changed_when: false
+
+- name: Validate declared ZFS import mode and pool GUID
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - get
+      - -H
+      - -o
+      - value
+      - "{{ item }}"
+      - "{{ media_vm.storage.pool_name }}"
+  loop:
+    - readonly
+    - guid
+  register: media_zfs_properties
+  changed_when: false
+
+- name: Verify final media service state
+  ansible.builtin.assert:
+    that:
+      - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
+      - media_zfs_properties.results[1].stdout is match('^[0-9]{8,24}$')
+      - media_plex_http.status == 200
+
+- name: Require declarative selection of media management applications
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - media_vm.applications.radarr is boolean
+      - media_vm.applications.sonarr is boolean
+      - media_vm.applications.prowlarr is boolean
+      - media_vm.applications.qbittorrent is boolean
+      - media_vm.downloads is mapping
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path is match('^/srv/[a-z][a-z0-9_-]+$')
+      - not media_vm.downloads.path.startswith('/' ~ media_vm.storage.pool_name)
+
+- name: Create shared media application group
+  ansible.builtin.group:
+    name: media_group
+    system: true
+    state: present
+
+- name: Create native application users
+  ansible.builtin.user:
+    name: "{{ item.slug }}"
+    group: media_group
+    system: true
+    home: "/var/lib/{{ item.slug }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create application data directories on Debian system disk
+  ansible.builtin.file:
+    path: "/var/lib/{{ item.slug }}"
+    state: directory
+    owner: "{{ item.slug }}"
+    group: media_group
+    mode: '0775'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create artifact cache on Debian system disk
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned upstream Radarr/Sonarr release archives
+  ansible.builtin.get_url:
+    url: "{{ item.source }}"
+    dest: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: '0644'
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Extract native media management binaries
+  ansible.builtin.unarchive:
+    src: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/{{ item.name }}/{{ item.name }}"
+    owner: root
+    group: root
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Install native Radarr/Sonarr service definitions
+  ansible.builtin.template:
+    src: media-arr.service.j2
+    dest: "/etc/systemd/system/{{ item.slug }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Enable and start native media management services
+  ansible.builtin.systemd_service:
+    name: "{{ item.slug }}.service"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Wait until native media applications listen on their ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item.port }}"
+    state: started
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Check HTTP access to native media application UI
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/"
+    status_code: [200, 302, 401, 403]
+    return_content: false
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+  changed_when: false
+
+- name: Install Debian qBittorrent headless client
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: present
+    update_cache: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create qBittorrent native service user
+  ansible.builtin.user:
+    name: qbittorrent
+    group: media_group
+    home: /var/lib/qbittorrent
+    shell: /usr/sbin/nologin
+    create_home: true
+    system: true
+    state: present
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Check temporary download directory is not a symlink
+  ansible.builtin.stat:
+    path: "{{ media_vm.downloads.path }}"
+    follow: false
+  register: media_downloads_stat
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Reject symbolic link download root
+  ansible.builtin.assert:
+    that:
+      - not media_downloads_stat.stat.islnk | default(false)
+    fail_msg: "DOWNLOAD_ROOT_SYMLINK_NOT_ALLOWED"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create temporary media download directory on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Ensure temporary download directory is not on ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ media_vm.downloads.path }}"]
+  register: media_downloads_fs
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Require separate writable staging filesystem
+  ansible.builtin.assert:
+    that:
+      - media_downloads_fs.stdout != 'zfs'
+    fail_msg: "DOWNLOAD_ROOT_MUST_NOT_BE_ZFS"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create incomplete download directory
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/incomplete"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create initial qBittorrent preferences directory
+  ansible.builtin.file:
+    path: /var/lib/qbittorrent/.config/qBittorrent
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '0750'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Set staging-only qBittorrent defaults on first installation
+  ansible.builtin.template:
+    src: media-qbittorrent.conf.j2
+    dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+    force: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Install native headless qBittorrent service
+  ansible.builtin.template:
+    src: media-qbittorrent.service.j2
+    dest: /etc/systemd/system/qbittorrent.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Enable and start qBittorrent WebUI
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Wait for qBittorrent WebUI to respond
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8080
+    state: started
+    timeout: 90
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Verify qBittorrent WebUI startup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/
+    status_code: [200, 302]
+    return_content: false
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Validate LAN boundary for qBittorrent initial configuration
+  ansible.builtin.assert:
+    that:
+      - media_vm.network.lan_cidr is match('^[0-9.]+/[0-9]{1,2}$')
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path == '/srv/downloads'
+      - media_vm.applications.radarr | bool
+      - media_vm.applications.sonarr | bool
+      - media_vm.applications.prowlarr | bool
+      - media_vm.applications.qbittorrent | bool
+
+- name: Check if qBittorrent's local/LAN API access is already configured
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: [200, 403]
+    return_content: true
+  register: media_qbt_web_prefs
+  changed_when: false
+
+- name: Decide if initial qBittorrent access requires reconciliation
+  ansible.builtin.set_fact:
+    media_qbt_access_update: >-
+      {{
+        media_qbt_web_prefs.status != 200
+        or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
+        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+      }}
+  changed_when: false
+
+- name: Stop qBittorrent only if the first-run local API access needs change
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: stopped
+  when: media_qbt_access_update | bool
+
+- name: Ensure qBittorrent local API can be used without copying passwords
+  ansible.builtin.lineinfile:
+    path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    regexp: "^{{ item.key | regex_escape }}="
+    insertafter: '^\[Preferences\]$'
+    line: "{{ item.key }}={{ item.value }}"
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+  loop:
+    - {key: 'WebUI\LocalHostAuth', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+  when: media_qbt_access_update | bool
+
+- name: Start qBittorrent with local/LAN WebUI access
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: started
+
+- name: Wait for local qBittorrent API after authentication setup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: 200
+    return_content: true
+  register: media_qbt_authenticated_prefs
+  retries: 15
+  delay: 2
+  until: media_qbt_authenticated_prefs.status == 200
+  changed_when: false
+
+- name: Verify local qBittorrent authentication bypass for server-side API integrations
+  ansible.builtin.assert:
+    that:
+      - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
+      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+
+- name: Create separate writable download and staging roots on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: media_group
+    mode: '2775'
+  loop:
+    - {path: 'complete', owner: 'qbittorrent'}
+    - {path: 'complete/movies', owner: 'qbittorrent'}
+    - {path: 'complete/series', owner: 'qbittorrent'}
+    - {path: 'complete/prowlarr', owner: 'qbittorrent'}
+    - {path: 'library', owner: 'root'}
+    - {path: 'library/movies', owner: 'radarr'}
+    - {path: 'library/tvshows', owner: 'sonarr'}
+
+- name: Install native idempotent Arr API integration helper
+  ansible.builtin.copy:
+    src: dh-media-arr-wire.py
+    dest: /usr/local/sbin/dh-media-arr-wire
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-wire
+      - --library-root
+      - "/{{ media_vm.storage.media_dataset }}"
+      - --downloads
+      - "{{ media_vm.downloads.path }}"
+  register: media_arr_wiring
+  changed_when: "'=CREATED' in media_arr_wiring.stdout"
+
+- name: Check staging-only automation outcome
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
+      - "'ZFS_LIBRARY=UNTOUCHED' in media_arr_wiring.stdout_lines"
+    fail_msg: "MEDIA_INTEGRATION_MISSING"
+
+- name: Report installed Plex service and existing ZFS media
+  ansible.builtin.debug:
+    msg:
+      result: PLEX_READY
+      media: "{{ '/' ~ media_vm.storage.media_dataset }}"
+      plex: "http://{{ ansible_host }}:32400/web"
+      pool_mode: "{{ media_vm.storage.mode }}"
+      agent: active
+
+- name: Provision Filestash Sambee and Jellyfin
+  ansible.builtin.import_tasks: apps.yml
+)
+      - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
+      - media_storage_action in ['create', 'import']
+      - media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}$')
+      - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
+      - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
+      - media_vm.os.distribution == 'debian'
+      - media_vm.os.major_version | int == 13
+      - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
+
+- name: Enable Debian contrib for supported ZFS packages
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^(Components:\s*)main$'
+    replace: '\1main contrib non-free-firmware'
+  register: media_debian_sources
+
+- name: Install QEMU Guest Agent, supported OpenZFS and Plex dependencies
+  ansible.builtin.apt:
+    name:
+      - qemu-guest-agent
+      - smartmontools
+      - linux-headers-amd64
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-zed
+      - gdisk
+      - util-linux
+      - firmware-intel-graphics
+      - intel-media-va-driver
+      - vainfo
+      - curl
+      - gnupg
+      - samba
+      - wsdd2
+      - smbclient
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verify SMART monitoring binary available for dh_pve_agent
+  ansible.builtin.command:
+    argv:
+      - smartctl
+      - --version
+  changed_when: false
+
+- name: Start QEMU Guest Agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent.service
+    state: started
+
+- name: Ensure APT signing-key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download official Plex repository signing key
+  ansible.builtin.get_url:
+    url: https://downloads.plex.tv/plex-keys/PlexSign.v2.key
+    dest: /etc/apt/keyrings/plex_signing.asc
+    mode: '0644'
+
+- name: Convert official Plex signing key for APT
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --dearmor
+      - -o
+      - /etc/apt/keyrings/plexmediaserver.v2.gpg
+      - /etc/apt/keyrings/plex_signing.asc
+    creates: /etc/apt/keyrings/plexmediaserver.v2.gpg
+
+- name: Configure official Plex APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/plex.list
+    content: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] https://repo.plex.tv/deb/ public main\n"
+    mode: '0644'
+
+- name: Install Plex Media Server
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create canonical POSIX file groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - doc_group
+    - backup_group
+    - media_group
+    - admin_group
+    - download_group
+
+- name: Give Plex Intel GPU render access
+  ansible.builtin.user:
+    name: plex
+    groups:
+      - video
+      - render
+      - media_group
+    append: true
+  register: media_plex_groups
+
+- name: Create site storage configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    mode: '0750'
+
+- name: Install generic ZFS create/import reconciler
+  ansible.builtin.copy:
+    src: dh-media-storage.py
+    dest: /usr/local/sbin/dh-media-storage
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render exact declarative ZFS configuration
+  ansible.builtin.copy:
+    content: "{{ media_vm.storage | to_nice_json }}"
+    dest: /etc/digitalhouses/media-storage.json
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Reconcile physical ZFS pool and declared datasets
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-storage
+      - --config
+      - /etc/digitalhouses/media-storage.json
+      - --action
+      - "{{ media_storage_action }}"
+  register: media_zfs_reconcile
+  changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
+
+- name: Verify site ZFS reconciler succeeded
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_STORAGE_RECONCILED=PASS' in media_zfs_reconcile.stdout_lines"
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+
+- name: Install persistent declarative ZFS media importer
+  ansible.builtin.template:
+    src: dh-media-zfs-mount.sh.j2
+    dest: /usr/local/sbin/dh-media-zfs-mount
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install systemd unit to mount only media dataset
+  ansible.builtin.copy:
+    src: dh-media-zfs.service
+    dest: /etc/systemd/system/dh-media-zfs.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start existing media dataset mount
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Reconcile shared permanent media library directories
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}/{{ item }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  loop:
+    - movies
+    - tvshows
+    - music
+
+- name: Advertise existing media library over SMB
+  ansible.builtin.template:
+    src: media-smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'testparm -s %s'
+  register: media_smb_configuration
+
+- name: Start Samba and Windows WS-Discovery services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if media_smb_configuration.changed else 'started' }}"
+  loop:
+    - smbd.service
+    - nmbd.service
+    - wsdd2.service
+
+- name: Confirm readonly guest SMB share is reachable
+  ansible.builtin.command:
+    argv:
+      - smbclient
+      - -N
+      - //127.0.0.1/Media
+      - -c
+      - ls
+  changed_when: false
+
+- name: Start Plex with Intel video/render permissions
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_groups.changed else 'started' }}"
+
+- name: Validate existing library paths readable by Plex
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - test
+      - -r
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item }}"
+  loop:
+    - movies
+    - tvshows
+    - music
+  changed_when: false
+
+- name: Inspect existing Plex library paths without changing its database
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - python3
+      - -c
+      - |
+        import sqlite3
+        db = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+        with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
+            for (path,) in connection.execute("SELECT root_path FROM section_locations"):
+                print(path)
+  register: media_existing_plex_paths
+  changed_when: false
+
+- name: Create missing Plex libraries using the installed Plex scanner
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --add-section
+      - "{{ item.title }}"
+      - --type
+      - "{{ item.type }}"
+      - --agent
+      - "{{ item.agent }}"
+      - --location
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
+      - --lang
+      - ru
+  loop:
+    - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
+    - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
+    - {title: 'Музыка', folder: music, type: '8', agent: 'tv.plex.agents.music'}
+  when: ('/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder) not in media_existing_plex_paths.stdout_lines
+  register: media_new_plex_sections
+
+- name: Scan only newly created Plex libraries
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --scan
+      - --section
+      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
+  loop: "{{ media_new_plex_sections.results }}"
+  when: item.changed | default(false)
+
+- name: Validate Plex local HTTP service
+  ansible.builtin.uri:
+    url: http://127.0.0.1:32400/identity
+    status_code: 200
+    return_content: false
+  register: media_plex_http
+  changed_when: false
+
+- name: Validate declared ZFS import mode and pool GUID
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - get
+      - -H
+      - -o
+      - value
+      - "{{ item }}"
+      - "{{ media_vm.storage.pool_name }}"
+  loop:
+    - readonly
+    - guid
+  register: media_zfs_properties
+  changed_when: false
+
+- name: Verify final media service state
+  ansible.builtin.assert:
+    that:
+      - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
+      - media_zfs_properties.results[1].stdout is match('^[0-9]{8,24}$')
+      - media_plex_http.status == 200
+
+- name: Require declarative selection of media management applications
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - media_vm.applications.radarr is boolean
+      - media_vm.applications.sonarr is boolean
+      - media_vm.applications.prowlarr is boolean
+      - media_vm.applications.qbittorrent is boolean
+      - media_vm.downloads is mapping
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path is match('^/srv/[a-z][a-z0-9_-]+$')
+      - not media_vm.downloads.path.startswith('/' ~ media_vm.storage.pool_name)
+
+- name: Create shared media application group
+  ansible.builtin.group:
+    name: media_group
+    system: true
+    state: present
+
+- name: Create native application users
+  ansible.builtin.user:
+    name: "{{ item.slug }}"
+    group: media_group
+    system: true
+    home: "/var/lib/{{ item.slug }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create application data directories on Debian system disk
+  ansible.builtin.file:
+    path: "/var/lib/{{ item.slug }}"
+    state: directory
+    owner: "{{ item.slug }}"
+    group: media_group
+    mode: '0775'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create artifact cache on Debian system disk
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned upstream Radarr/Sonarr release archives
+  ansible.builtin.get_url:
+    url: "{{ item.source }}"
+    dest: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: '0644'
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Extract native media management binaries
+  ansible.builtin.unarchive:
+    src: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/{{ item.name }}/{{ item.name }}"
+    owner: root
+    group: root
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Install native Radarr/Sonarr service definitions
+  ansible.builtin.template:
+    src: media-arr.service.j2
+    dest: "/etc/systemd/system/{{ item.slug }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Enable and start native media management services
+  ansible.builtin.systemd_service:
+    name: "{{ item.slug }}.service"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Wait until native media applications listen on their ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item.port }}"
+    state: started
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Check HTTP access to native media application UI
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/"
+    status_code: [200, 302, 401, 403]
+    return_content: false
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+  changed_when: false
+
+- name: Install Debian qBittorrent headless client
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: present
+    update_cache: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create qBittorrent native service user
+  ansible.builtin.user:
+    name: qbittorrent
+    group: media_group
+    home: /var/lib/qbittorrent
+    shell: /usr/sbin/nologin
+    create_home: true
+    system: true
+    state: present
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Check temporary download directory is not a symlink
+  ansible.builtin.stat:
+    path: "{{ media_vm.downloads.path }}"
+    follow: false
+  register: media_downloads_stat
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Reject symbolic link download root
+  ansible.builtin.assert:
+    that:
+      - not media_downloads_stat.stat.islnk | default(false)
+    fail_msg: "DOWNLOAD_ROOT_SYMLINK_NOT_ALLOWED"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create temporary media download directory on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Ensure temporary download directory is not on ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ media_vm.downloads.path }}"]
+  register: media_downloads_fs
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Require separate writable staging filesystem
+  ansible.builtin.assert:
+    that:
+      - media_downloads_fs.stdout != 'zfs'
+    fail_msg: "DOWNLOAD_ROOT_MUST_NOT_BE_ZFS"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create incomplete download directory
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/incomplete"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create initial qBittorrent preferences directory
+  ansible.builtin.file:
+    path: /var/lib/qbittorrent/.config/qBittorrent
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '0750'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Set staging-only qBittorrent defaults on first installation
+  ansible.builtin.template:
+    src: media-qbittorrent.conf.j2
+    dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+    force: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Install native headless qBittorrent service
+  ansible.builtin.template:
+    src: media-qbittorrent.service.j2
+    dest: /etc/systemd/system/qbittorrent.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Enable and start qBittorrent WebUI
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Wait for qBittorrent WebUI to respond
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8080
+    state: started
+    timeout: 90
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Verify qBittorrent WebUI startup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/
+    status_code: [200, 302]
+    return_content: false
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Validate LAN boundary for qBittorrent initial configuration
+  ansible.builtin.assert:
+    that:
+      - media_vm.network.lan_cidr is match('^[0-9.]+/[0-9]{1,2}$')
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path == '/srv/downloads'
+      - media_vm.applications.radarr | bool
+      - media_vm.applications.sonarr | bool
+      - media_vm.applications.prowlarr | bool
+      - media_vm.applications.qbittorrent | bool
+
+- name: Check if qBittorrent's local/LAN API access is already configured
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: [200, 403]
+    return_content: true
+  register: media_qbt_web_prefs
+  changed_when: false
+
+- name: Decide if initial qBittorrent access requires reconciliation
+  ansible.builtin.set_fact:
+    media_qbt_access_update: >-
+      {{
+        media_qbt_web_prefs.status != 200
+        or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
+        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+      }}
+  changed_when: false
+
+- name: Stop qBittorrent only if the first-run local API access needs change
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: stopped
+  when: media_qbt_access_update | bool
+
+- name: Ensure qBittorrent local API can be used without copying passwords
+  ansible.builtin.lineinfile:
+    path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    regexp: "^{{ item.key | regex_escape }}="
+    insertafter: '^\[Preferences\]$'
+    line: "{{ item.key }}={{ item.value }}"
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+  loop:
+    - {key: 'WebUI\LocalHostAuth', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+  when: media_qbt_access_update | bool
+
+- name: Start qBittorrent with local/LAN WebUI access
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: started
+
+- name: Wait for local qBittorrent API after authentication setup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: 200
+    return_content: true
+  register: media_qbt_authenticated_prefs
+  retries: 15
+  delay: 2
+  until: media_qbt_authenticated_prefs.status == 200
+  changed_when: false
+
+- name: Verify local qBittorrent authentication bypass for server-side API integrations
+  ansible.builtin.assert:
+    that:
+      - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
+      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+
+- name: Create separate writable download and staging roots on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: media_group
+    mode: '2775'
+  loop:
+    - {path: 'complete', owner: 'qbittorrent'}
+    - {path: 'complete/movies', owner: 'qbittorrent'}
+    - {path: 'complete/series', owner: 'qbittorrent'}
+    - {path: 'complete/prowlarr', owner: 'qbittorrent'}
+    - {path: 'library', owner: 'root'}
+    - {path: 'library/movies', owner: 'radarr'}
+    - {path: 'library/tvshows', owner: 'sonarr'}
+
+- name: Install native idempotent Arr API integration helper
+  ansible.builtin.copy:
+    src: dh-media-arr-wire.py
+    dest: /usr/local/sbin/dh-media-arr-wire
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-wire
+      - --library-root
+      - "/{{ media_vm.storage.media_dataset }}"
+      - --downloads
+      - "{{ media_vm.downloads.path }}"
+  register: media_arr_wiring
+  changed_when: "'=CREATED' in media_arr_wiring.stdout"
+
+- name: Check staging-only automation outcome
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
+      - "'ZFS_LIBRARY=UNTOUCHED' in media_arr_wiring.stdout_lines"
+    fail_msg: "MEDIA_INTEGRATION_MISSING"
+
+- name: Report installed Plex service and existing ZFS media
+  ansible.builtin.debug:
+    msg:
+      result: PLEX_READY
+      media: "{{ '/' ~ media_vm.storage.media_dataset }}"
+      plex: "http://{{ ansible_host }}:32400/web"
+      pool_mode: "{{ media_vm.storage.mode }}"
+      agent: active
+
+- name: Provision Filestash Sambee and Jellyfin
+  ansible.builtin.import_tasks: apps.yml
+)
+      - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
+      - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
+      - media_vm.os.distribution == 'debian'
+      - media_vm.os.major_version | int == 13
+      - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
+
+- name: Enable Debian contrib for supported ZFS packages
+  ansible.builtin.replace:
+    path: /etc/apt/sources.list.d/debian.sources
+    regexp: '^(Components:\s*)main$'
+    replace: '\1main contrib non-free-firmware'
+  register: media_debian_sources
+
+- name: Install QEMU Guest Agent, supported OpenZFS and Plex dependencies
+  ansible.builtin.apt:
+    name:
+      - qemu-guest-agent
+      - smartmontools
+      - linux-headers-amd64
+      - zfs-dkms
+      - zfsutils-linux
+      - zfs-zed
+      - gdisk
+      - util-linux
+      - firmware-intel-graphics
+      - intel-media-va-driver
+      - vainfo
+      - curl
+      - gnupg
+      - samba
+      - wsdd2
+      - smbclient
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Verify SMART monitoring binary available for dh_pve_agent
+  ansible.builtin.command:
+    argv:
+      - smartctl
+      - --version
+  changed_when: false
+
+- name: Start QEMU Guest Agent
+  ansible.builtin.systemd_service:
+    name: qemu-guest-agent.service
+    state: started
+
+- name: Ensure APT signing-key directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download official Plex repository signing key
+  ansible.builtin.get_url:
+    url: https://downloads.plex.tv/plex-keys/PlexSign.v2.key
+    dest: /etc/apt/keyrings/plex_signing.asc
+    mode: '0644'
+
+- name: Convert official Plex signing key for APT
+  ansible.builtin.command:
+    argv:
+      - gpg
+      - --batch
+      - --dearmor
+      - -o
+      - /etc/apt/keyrings/plexmediaserver.v2.gpg
+      - /etc/apt/keyrings/plex_signing.asc
+    creates: /etc/apt/keyrings/plexmediaserver.v2.gpg
+
+- name: Configure official Plex APT repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/plex.list
+    content: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] https://repo.plex.tv/deb/ public main\n"
+    mode: '0644'
+
+- name: Install Plex Media Server
+  ansible.builtin.apt:
+    name: plexmediaserver
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create canonical POSIX file groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - doc_group
+    - backup_group
+    - media_group
+    - admin_group
+    - download_group
+
+- name: Give Plex Intel GPU render access
+  ansible.builtin.user:
+    name: plex
+    groups:
+      - video
+      - render
+      - media_group
+    append: true
+  register: media_plex_groups
+
+- name: Create site storage configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    mode: '0750'
+
+- name: Install generic ZFS create/import reconciler
+  ansible.builtin.copy:
+    src: dh-media-storage.py
+    dest: /usr/local/sbin/dh-media-storage
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render exact declarative ZFS configuration
+  ansible.builtin.copy:
+    content: "{{ media_vm.storage | to_nice_json }}"
+    dest: /etc/digitalhouses/media-storage.json
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Reconcile physical ZFS pool and declared datasets
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-storage
+      - --config
+      - /etc/digitalhouses/media-storage.json
+      - --action
+      - "{{ media_storage_action }}"
+  register: media_zfs_reconcile
+  changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
+
+- name: Verify site ZFS reconciler succeeded
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_STORAGE_RECONCILED=PASS' in media_zfs_reconcile.stdout_lines"
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+
+- name: Install persistent declarative ZFS media importer
+  ansible.builtin.template:
+    src: dh-media-zfs-mount.sh.j2
+    dest: /usr/local/sbin/dh-media-zfs-mount
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Install systemd unit to mount only media dataset
+  ansible.builtin.copy:
+    src: dh-media-zfs.service
+    dest: /etc/systemd/system/dh-media-zfs.service
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable and start existing media dataset mount
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    daemon_reload: true
+    enabled: true
+    state: started
+
+- name: Reconcile shared permanent media library directories
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}/{{ item }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  loop:
+    - movies
+    - tvshows
+    - music
+
+- name: Advertise existing media library over SMB
+  ansible.builtin.template:
+    src: media-smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'testparm -s %s'
+  register: media_smb_configuration
+
+- name: Start Samba and Windows WS-Discovery services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if media_smb_configuration.changed else 'started' }}"
+  loop:
+    - smbd.service
+    - nmbd.service
+    - wsdd2.service
+
+- name: Confirm readonly guest SMB share is reachable
+  ansible.builtin.command:
+    argv:
+      - smbclient
+      - -N
+      - //127.0.0.1/Media
+      - -c
+      - ls
+  changed_when: false
+
+- name: Start Plex with Intel video/render permissions
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_groups.changed else 'started' }}"
+
+- name: Validate existing library paths readable by Plex
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - test
+      - -r
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item }}"
+  loop:
+    - movies
+    - tvshows
+    - music
+  changed_when: false
+
+- name: Inspect existing Plex library paths without changing its database
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - python3
+      - -c
+      - |
+        import sqlite3
+        db = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
+        with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
+            for (path,) in connection.execute("SELECT root_path FROM section_locations"):
+                print(path)
+  register: media_existing_plex_paths
+  changed_when: false
+
+- name: Create missing Plex libraries using the installed Plex scanner
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --add-section
+      - "{{ item.title }}"
+      - --type
+      - "{{ item.type }}"
+      - --agent
+      - "{{ item.agent }}"
+      - --location
+      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
+      - --lang
+      - ru
+  loop:
+    - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
+    - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
+    - {title: 'Музыка', folder: music, type: '8', agent: 'tv.plex.agents.music'}
+  when: ('/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder) not in media_existing_plex_paths.stdout_lines
+  register: media_new_plex_sections
+
+- name: Scan only newly created Plex libraries
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - plex
+      - --
+      - /usr/lib/plexmediaserver/Plex Media Scanner
+      - --scan
+      - --section
+      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
+  loop: "{{ media_new_plex_sections.results }}"
+  when: item.changed | default(false)
+
+- name: Validate Plex local HTTP service
+  ansible.builtin.uri:
+    url: http://127.0.0.1:32400/identity
+    status_code: 200
+    return_content: false
+  register: media_plex_http
+  changed_when: false
+
+- name: Validate declared ZFS import mode and pool GUID
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - get
+      - -H
+      - -o
+      - value
+      - "{{ item }}"
+      - "{{ media_vm.storage.pool_name }}"
+  loop:
+    - readonly
+    - guid
+  register: media_zfs_properties
+  changed_when: false
+
+- name: Verify final media service state
+  ansible.builtin.assert:
+    that:
+      - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
+      - media_zfs_properties.results[1].stdout is match('^[0-9]{8,24}$')
+      - media_plex_http.status == 200
+
+- name: Require declarative selection of media management applications
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - media_vm.applications.radarr is boolean
+      - media_vm.applications.sonarr is boolean
+      - media_vm.applications.prowlarr is boolean
+      - media_vm.applications.qbittorrent is boolean
+      - media_vm.downloads is mapping
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path is match('^/srv/[a-z][a-z0-9_-]+$')
+      - not media_vm.downloads.path.startswith('/' ~ media_vm.storage.pool_name)
+
+- name: Create shared media application group
+  ansible.builtin.group:
+    name: media_group
+    system: true
+    state: present
+
+- name: Create native application users
+  ansible.builtin.user:
+    name: "{{ item.slug }}"
+    group: media_group
+    system: true
+    home: "/var/lib/{{ item.slug }}"
+    create_home: false
+    shell: /usr/sbin/nologin
+    state: present
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create application data directories on Debian system disk
+  ansible.builtin.file:
+    path: "/var/lib/{{ item.slug }}"
+    state: directory
+    owner: "{{ item.slug }}"
+    group: media_group
+    mode: '0775'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Create artifact cache on Debian system disk
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Download pinned upstream Radarr/Sonarr release archives
+  ansible.builtin.get_url:
+    url: "{{ item.source }}"
+    dest: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    checksum: "sha256:{{ item.sha256 }}"
+    mode: '0644'
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Extract native media management binaries
+  ansible.builtin.unarchive:
+    src: "/var/cache/digitalhouses/media/{{ item.archive }}"
+    dest: /opt
+    remote_src: true
+    creates: "/opt/{{ item.name }}/{{ item.name }}"
+    owner: root
+    group: root
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Install native Radarr/Sonarr service definitions
+  ansible.builtin.template:
+    src: media-arr.service.j2
+    dest: "/etc/systemd/system/{{ item.slug }}.service"
+    owner: root
+    group: root
+    mode: '0644'
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Enable and start native media management services
+  ansible.builtin.systemd_service:
+    name: "{{ item.slug }}.service"
+    daemon_reload: true
+    enabled: true
+    state: started
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Wait until native media applications listen on their ports
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ item.port }}"
+    state: started
+    timeout: 120
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+- name: Check HTTP access to native media application UI
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ item.port }}/"
+    status_code: [200, 302, 401, 403]
+    return_content: false
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+  changed_when: false
+
+- name: Install Debian qBittorrent headless client
+  ansible.builtin.apt:
+    name: qbittorrent-nox
+    state: present
+    update_cache: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create qBittorrent native service user
+  ansible.builtin.user:
+    name: qbittorrent
+    group: media_group
+    home: /var/lib/qbittorrent
+    shell: /usr/sbin/nologin
+    create_home: true
+    system: true
+    state: present
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Check temporary download directory is not a symlink
+  ansible.builtin.stat:
+    path: "{{ media_vm.downloads.path }}"
+    follow: false
+  register: media_downloads_stat
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Reject symbolic link download root
+  ansible.builtin.assert:
+    that:
+      - not media_downloads_stat.stat.islnk | default(false)
+    fail_msg: "DOWNLOAD_ROOT_SYMLINK_NOT_ALLOWED"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create temporary media download directory on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Ensure temporary download directory is not on ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ media_vm.downloads.path }}"]
+  register: media_downloads_fs
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Require separate writable staging filesystem
+  ansible.builtin.assert:
+    that:
+      - media_downloads_fs.stdout != 'zfs'
+    fail_msg: "DOWNLOAD_ROOT_MUST_NOT_BE_ZFS"
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create incomplete download directory
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/incomplete"
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '2775'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Create initial qBittorrent preferences directory
+  ansible.builtin.file:
+    path: /var/lib/qbittorrent/.config/qBittorrent
+    state: directory
+    owner: qbittorrent
+    group: media_group
+    mode: '0750'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Set staging-only qBittorrent defaults on first installation
+  ansible.builtin.template:
+    src: media-qbittorrent.conf.j2
+    dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+    force: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Install native headless qBittorrent service
+  ansible.builtin.template:
+    src: media-qbittorrent.service.j2
+    dest: /etc/systemd/system/qbittorrent.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Enable and start qBittorrent WebUI
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Wait for qBittorrent WebUI to respond
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8080
+    state: started
+    timeout: 90
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Verify qBittorrent WebUI startup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/
+    status_code: [200, 302]
+    return_content: false
+  changed_when: false
+  when: media_vm.applications.qbittorrent | bool
+
+- name: Validate LAN boundary for qBittorrent initial configuration
+  ansible.builtin.assert:
+    that:
+      - media_vm.network.lan_cidr is match('^[0-9.]+/[0-9]{1,2}$')
+      - media_vm.downloads.mode == 'staging-only'
+      - media_vm.downloads.path == '/srv/downloads'
+      - media_vm.applications.radarr | bool
+      - media_vm.applications.sonarr | bool
+      - media_vm.applications.prowlarr | bool
+      - media_vm.applications.qbittorrent | bool
+
+- name: Check if qBittorrent's local/LAN API access is already configured
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: [200, 403]
+    return_content: true
+  register: media_qbt_web_prefs
+  changed_when: false
+
+- name: Decide if initial qBittorrent access requires reconciliation
+  ansible.builtin.set_fact:
+    media_qbt_access_update: >-
+      {{
+        media_qbt_web_prefs.status != 200
+        or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
+        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+      }}
+  changed_when: false
+
+- name: Stop qBittorrent only if the first-run local API access needs change
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: stopped
+  when: media_qbt_access_update | bool
+
+- name: Ensure qBittorrent local API can be used without copying passwords
+  ansible.builtin.lineinfile:
+    path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
+    regexp: "^{{ item.key | regex_escape }}="
+    insertafter: '^\[Preferences\]$'
+    line: "{{ item.key }}={{ item.value }}"
+    owner: qbittorrent
+    group: media_group
+    mode: '0640'
+  loop:
+    - {key: 'WebUI\LocalHostAuth', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+  when: media_qbt_access_update | bool
+
+- name: Start qBittorrent with local/LAN WebUI access
+  ansible.builtin.systemd_service:
+    name: qbittorrent.service
+    state: started
+
+- name: Wait for local qBittorrent API after authentication setup
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8080/api/v2/app/preferences
+    status_code: 200
+    return_content: true
+  register: media_qbt_authenticated_prefs
+  retries: 15
+  delay: 2
+  until: media_qbt_authenticated_prefs.status == 200
+  changed_when: false
+
+- name: Verify local qBittorrent authentication bypass for server-side API integrations
+  ansible.builtin.assert:
+    that:
+      - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
+      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+
+- name: Create separate writable download and staging roots on system disk
+  ansible.builtin.file:
+    path: "{{ media_vm.downloads.path }}/{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: media_group
+    mode: '2775'
+  loop:
+    - {path: 'complete', owner: 'qbittorrent'}
+    - {path: 'complete/movies', owner: 'qbittorrent'}
+    - {path: 'complete/series', owner: 'qbittorrent'}
+    - {path: 'complete/prowlarr', owner: 'qbittorrent'}
+    - {path: 'library', owner: 'root'}
+    - {path: 'library/movies', owner: 'radarr'}
+    - {path: 'library/tvshows', owner: 'sonarr'}
+
+- name: Install native idempotent Arr API integration helper
+  ansible.builtin.copy:
+    src: dh-media-arr-wire.py
+    dest: /usr/local/sbin/dh-media-arr-wire
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-wire
+      - --library-root
+      - "/{{ media_vm.storage.media_dataset }}"
+      - --downloads
+      - "{{ media_vm.downloads.path }}"
+  register: media_arr_wiring
+  changed_when: "'=CREATED' in media_arr_wiring.stdout"
+
+- name: Check staging-only automation outcome
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
+      - "'ZFS_LIBRARY=UNTOUCHED' in media_arr_wiring.stdout_lines"
+    fail_msg: "MEDIA_INTEGRATION_MISSING"
+
+- name: Report installed Plex service and existing ZFS media
+  ansible.builtin.debug:
+    msg:
+      result: PLEX_READY
+      media: "{{ '/' ~ media_vm.storage.media_dataset }}"
+      plex: "http://{{ ansible_host }}:32400/web"
+      pool_mode: "{{ media_vm.storage.mode }}"
+      agent: active
+
+- name: Provision Filestash Sambee and Jellyfin
+  ansible.builtin.import_tasks: apps.yml
+)
       - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
       - media_storage_action in ['create', 'import']
       - media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}$')
