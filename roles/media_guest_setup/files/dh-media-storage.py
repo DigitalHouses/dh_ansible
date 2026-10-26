@@ -125,10 +125,10 @@ def ensure_create(data, disk, physical):
         print("POOL=ALREADY_CANONICAL", flush=True)
         return guid, modified
     legacy = data["legacy_pool"]
-    require(data.get("destructive_without_backup") is True, "DESTRUCTIVE_APPROVAL_MISSING")
     legacy_active = get_pool(legacy["name"])
     legacy_importable = imported_guid_visible(legacy["name"])
     if legacy_active or legacy_importable:
+        require(data.get("destructive_without_backup") is True, "DESTRUCTIVE_APPROVAL_MISSING")
         observed = legacy_active or legacy_importable
         require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
         partitions = json.loads(command("/usr/bin/lsblk", "-J", "-o",
