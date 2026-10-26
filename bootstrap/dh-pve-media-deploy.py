@@ -191,6 +191,19 @@ def ensure_disk(vmid, image, disk_gb):
         qm("set", vmid, "--ide2", "local-lvm:cloudinit")
 
 
+def ensure_lifecycle(vmid, data):
+    """Reconcile requested autostart and console even for a running VM."""
+    lifecycle = data.get("lifecycle", {})
+    display = lifecycle.get("display", "serial0")
+    need(display in ("std", "serial0"), "DISPLAY_INVALID")
+    wanted_boot = "1" if lifecycle.get("onboot", False) else "0"
+    current = config(vmid)
+    if current.get("onboot", "0") != wanted_boot:
+        qm("set", vmid, "--onboot", wanted_boot)
+    if current.get("vga", "serial0") != display:
+        qm("set", vmid, "--vga", display)
+
+
 def ensure_config(vmid, site, data):
     state = config(vmid)
     need(state.get("name") == data["name"], "VM_NAME_DRIFT")
@@ -199,8 +212,6 @@ def ensure_config(vmid, site, data):
         qm("set", vmid, "--net0", "virtio,bridge=vmbr0")
     if "serial0" not in config(vmid):
         qm("set", vmid, "--serial0", "socket")
-    if "vga" not in config(vmid):
-        qm("set", vmid, "--vga", "serial0")
     qm("set", vmid, "--ciuser", "debian")
     gateway = data["network"].get("gateway")
     need(gateway and re.fullmatch(r"[0-9.]+", gateway), "GATEWAY_NOT_DECLARED")
@@ -226,7 +237,7 @@ def ensure_config(vmid, site, data):
             qm("set", vmid, "--" + key, value)
     qm("set", vmid, "--boot", "order=scsi0")
     qm("set", vmid, "--agent", "enabled=1")
-    qm("set", vmid, "--onboot", "0")
+    ensure_lifecycle(vmid, data)
     if data.get("lifecycle", {}).get("protection", True):
         qm("set", vmid, "--protection", "1")
     qm("cloudinit", "update", vmid)
@@ -239,6 +250,7 @@ def apply(site):
     if existing:
         need(config(vmid).get("name") == name, "EXISTING_VM_MISMATCH")
         if qm("status", vmid) == "status: running":
+            ensure_lifecycle(vmid, data)
             print("MEDIA_VM=ALREADY_RUNNING", flush=True)
             return
     print("TARGET_VMID=" + str(vmid), flush=True)
@@ -251,7 +263,8 @@ def apply(site):
            "--memory", str(data.get("resources", {}).get("memory_mb", 4096)),
            "--scsihw", "virtio-scsi-single",
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
-           "--vga", "serial0", "--onboot", "0")
+           "--vga", data.get("lifecycle", {}).get("display", "serial0"),
+           "--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0")
         print("VM_CREATED=YES", flush=True)
     ensure_disk(vmid, image, int(data.get("resources", {}).get("disk_gb", 64)))
     ensure_config(vmid, site, data)

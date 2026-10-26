@@ -11,6 +11,8 @@
       - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
       - media_vm.os.distribution == 'debian'
       - media_vm.os.major_version | int == 13
+      - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
+      - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
 
 - name: Enable Debian contrib for supported ZFS packages
   ansible.builtin.replace:
@@ -32,6 +34,9 @@
       - vainfo
       - curl
       - gnupg
+      - samba
+      - wsdd2
+      - smbclient
     state: present
     update_cache: true
     cache_valid_time: 3600
@@ -116,6 +121,36 @@
     daemon_reload: true
     enabled: true
     state: started
+
+- name: Advertise existing readonly media library over SMB
+  ansible.builtin.template:
+    src: media-smb.conf.j2
+    dest: /etc/samba/smb.conf
+    owner: root
+    group: root
+    mode: '0644'
+    validate: 'testparm -s %s'
+  register: media_smb_configuration
+
+- name: Start Samba and Windows WS-Discovery services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if media_smb_configuration.changed else 'started' }}"
+  loop:
+    - smbd.service
+    - nmbd.service
+    - wsdd2.service
+
+- name: Confirm readonly guest SMB share is reachable
+  ansible.builtin.command:
+    argv:
+      - smbclient
+      - -N
+      - //127.0.0.1/Media
+      - -c
+      - ls
+  changed_when: false
 
 - name: Start Plex with Intel video/render permissions
   ansible.builtin.systemd_service:
