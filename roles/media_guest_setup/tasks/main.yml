@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - media_vm.storage is mapping
-      - media_vm.storage.mode == 'readonly'
+      - media_vm.storage.mode in ['readonly', 'readwrite']
       - media_vm.storage.pool_name is match('^[a-zA-Z][a-zA-Z0-9_-]+$')
       - media_vm.storage.pool_guid is match('^[0-9]{8,24}$')
       - media_vm.storage.partition_partuuid is match('^[0-9a-f-]{36}$')
@@ -107,7 +107,7 @@
     - zfs-import-cache.service
     - zfs-mount.service
 
-- name: Install persistent readonly ZFS media importer
+- name: Install persistent declarative ZFS media importer
   ansible.builtin.template:
     src: dh-media-zfs-mount.sh.j2
     dest: /usr/local/sbin/dh-media-zfs-mount
@@ -123,7 +123,7 @@
     group: root
     mode: '0644'
 
-- name: Enable and start readonly media dataset mount
+- name: Enable and start existing media dataset mount
   ansible.builtin.systemd_service:
     name: dh-media-zfs.service
     daemon_reload: true
@@ -247,7 +247,7 @@
   register: media_plex_http
   changed_when: false
 
-- name: Validate readonly ZFS import and pool GUID
+- name: Validate declared ZFS import mode and pool GUID
   ansible.builtin.command:
     argv:
       - zpool
@@ -266,7 +266,7 @@
 - name: Verify final media service state
   ansible.builtin.assert:
     that:
-      - media_zfs_properties.results[0].stdout == 'on'
+      - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
       - media_zfs_properties.results[1].stdout == media_vm.storage.pool_guid
       - media_plex_http.status == 200
 
@@ -603,14 +603,14 @@
   ansible.builtin.assert:
     that:
       - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
-      - "'ZFS_LIBRARY=UNCHANGED_READONLY' in media_arr_wiring.stdout_lines"
+      - "'ZFS_LIBRARY=UNTOUCHED' in media_arr_wiring.stdout_lines"
     fail_msg: "MEDIA_INTEGRATION_MISSING"
 
-- name: Report installed Plex service and existing readonly ZFS media
+- name: Report installed Plex service and existing ZFS media
   ansible.builtin.debug:
     msg:
       result: PLEX_READY
       media: "{{ '/' ~ media_vm.storage.media_dataset }}"
       plex: "http://{{ ansible_host }}:32400/web"
-      pool_mode: readonly
+      pool_mode: "{{ media_vm.storage.mode }}"
       agent: active

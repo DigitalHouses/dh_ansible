@@ -1,5 +1,5 @@
 [Unit]
-Description=DigitalHouses existing ZFS media library (readonly)
+Description=DigitalHouses existing ZFS media library
 After=local-fs.target systemd-udev-settle.service
 Wants=systemd-udev-settle.service
 Before=plexmediaserver.service

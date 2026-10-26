@@ -27,8 +27,8 @@ def test_fixed_guest_playbook_and_role():
 
 def test_readonly_zfs_excludes_reformatting_and_backup_mounts():
     script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
-    for term in ("readonly=on", "pool_guid", "partition_partuuid",
-                 "media_dataset", "MEDIA_ZFS=READY_READONLY"):
+    for term in ("readwrite) READONLY=off", "pool_guid", "partition_partuuid",
+                 "media_dataset", "MEDIA_ZFS=READY_${MODE^^}"):
         assert term in script
     for forbidden in ("zpool create", "zpool destroy", "zpool export",
                       "zfs destroy", "zfs set", "wipefs", "mkfs", "parted",
@@ -145,7 +145,7 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
     code = path.read_text()
     for phrase in ("X-Api-Key", "applications/schema", "downloadclient/schema",
                    "rootfolder", "downloadclient/test", "applications/test",
-                   "torrents/createCategory", "ZFS_LIBRARY=UNCHANGED_READONLY"):
+                   "torrents/createCategory", "ZFS_LIBRARY=UNTOUCHED"):
         assert phrase in code
     assert "print(key)" not in code
     assert "print(api_key" not in code
@@ -158,3 +158,13 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
     assert "Create separate writable download and staging roots on system disk" in named
     assert named["Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys"]["ansible.builtin.command"]["argv"][0] == '/usr/local/sbin/dh-media-arr-wire'
     assert '("media_guest_setup", "files/dh-media-arr-wire.py")' in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+
+
+def test_zfs_declared_readwrite_requires_matching_import_mode():
+    script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
+    tasks = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
+    assert "readwrite) READONLY=off" in script
+    assert "readonly) READONLY=on" in script
+    assert "MEDIA_ZFS=IMPORT_MODE_MISMATCH" in script
+    assert "media_vm.storage.mode in ['readonly', 'readwrite']" in tasks
+    assert "media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')" in tasks

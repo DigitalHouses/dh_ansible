@@ -219,7 +219,7 @@ def main():
                 "PROWLARR_INTEGRATION_NOT_VERIFIED_" + app)
     print("MEDIA_APPLICATIONS_WIRING=PASS", flush=True)
     print("EXTERNAL_INDEXERS=OWNER_SELECTION_REQUIRED", flush=True)
-    print("ZFS_LIBRARY=UNCHANGED_READONLY", flush=True)
+    print("ZFS_LIBRARY=UNTOUCHED", flush=True)
 
 
 if __name__ == "__main__":
