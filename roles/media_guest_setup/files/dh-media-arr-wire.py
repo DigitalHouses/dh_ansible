@@ -98,7 +98,7 @@ def ensure_qbt_access():
     p = qbt("app/preferences")
     require(isinstance(p, dict), "QBT_AUTH_NOT_CONFIGURED")
     require(bool(p.get("bypass_local_auth")), "QBT_LOOPBACK_API_NOT_ALLOWED")
-    require(p.get("save_path", "").startswith("/srv/downloads/"),
+    require(p.get("save_path", "").rstrip("/") == "/srv/downloads",
             "QBT_DOWNLOAD_PATH_UNEXPECTED")
     print("QBT_LOCAL_API=PASS", flush=True)
 
