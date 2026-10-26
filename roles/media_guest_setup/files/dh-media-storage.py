@@ -209,10 +209,12 @@ def reconcile_layout(data):
                 "INVALID_DIRECTORY_PATH")
         require(directory.split("/")[0] in datasets, "UNDECLARED_DATASET_DIRECTORY")
     modified = False
+    readonly = data["mode"] == "readonly"
     for name in datasets:
         dataset = pool + "/" + name
         if command("/usr/sbin/zfs", "list", "-H", "-o", "name", dataset,
                    allow_failure=True) is None:
+            require(not readonly, "READONLY_IMPORT_DATASET_MISSING_" + name)
             command("/usr/sbin/zfs", "create", dataset)
             modified = True
         if command("/usr/sbin/zfs", "get", "-H", "-o", "value",
@@ -222,6 +224,7 @@ def reconcile_layout(data):
         dest = Path("/") / pool / path
         require(not dest.is_symlink(), "DIRECTORY_SYMLINK_BLOCKED")
         if not dest.exists():
+            require(not readonly, "READONLY_IMPORT_DIRECTORY_MISSING")
             dest.mkdir(parents=True, exist_ok=True)
             modified = True
     print("LAYOUT=" + ("CREATED" if modified else "UNCHANGED"), flush=True)
