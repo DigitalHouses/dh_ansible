@@ -1,0 +1,8 @@
+services:
+  sambee:
+    image: ghcr.io/helgeklein/sambee:stable
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
