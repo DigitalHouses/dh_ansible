@@ -1077,6 +1077,8 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "templates/media-smb.conf.j2"),
         ("media_guest_setup", "defaults/main.yml"),
         ("media_guest_setup", "templates/media-arr.service.j2"),
+        ("media_guest_setup", "templates/media-qbittorrent.service.j2"),
+        ("media_guest_setup", "templates/media-qbittorrent.conf.j2"),
     ):
         role_dir = folder + "/roles/" + role
         stage_guest_root_directory(folder + "/roles", stage="pve_access")
