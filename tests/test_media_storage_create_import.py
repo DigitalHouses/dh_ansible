@@ -154,8 +154,8 @@ class GuestLifecycle(unittest.TestCase):
             if args[0].endswith("/lsblk") and "-n" in args:
                 return "sdc"
             raise AssertionError("unexpected guest command")
-        with patch.object(m, "config", return_value=state), \\
-             patch.object(m, "guest_exec", side_effect=guest):
+        with (patch.object(m, "config", return_value=state),
+              patch.object(m, "guest_exec", side_effect=guest)):
             with self.assertRaisesRegex(m.Blocked, "LEGACY_ZFS_ON_FOREIGN_DISK"):
                 m.old_guest_matches(2238, "demo-home", data)
 
