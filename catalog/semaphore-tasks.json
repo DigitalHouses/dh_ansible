@@ -44,7 +44,26 @@
     {
       "title": "80-Медиасервер · Развёртывание",
       "playbook": "playbooks/plan-pve-media-vm.yml",
-      "view": "02 · Развёртывание"
+      "view": "02 · Развёртывание",
+      "survey_vars": [
+        {
+          "name": "media_storage_action",
+          "title": "Режим работы с хранилищем",
+          "description": "Создать новое ZFS-хранилище или импортировать существующее. При наличии старых данных режим create требует отдельного разрешения на уничтожение.",
+          "type": "enum",
+          "required": true,
+          "values": [
+            {
+              "name": "Создать новое хранилище (create)",
+              "value": "create"
+            },
+            {
+              "name": "Подключить существующее (import)",
+              "value": "import"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
