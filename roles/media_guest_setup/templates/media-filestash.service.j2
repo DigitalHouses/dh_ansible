@@ -1,0 +1,16 @@
+[Unit]
+Description=DigitalHouses Filestash
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=filestash
+Group=filestash
+WorkingDirectory=/var/lib/filestash
+ExecStart=/usr/local/bin/filestash
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
