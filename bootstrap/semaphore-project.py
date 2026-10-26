@@ -387,7 +387,9 @@ def read_public_catalog():
     seen = set()
     tasks = []
     for entry in entries:
-        if not isinstance(entry, dict) or set(entry) != {"title", "playbook", "view"}:
+        if (not isinstance(entry, dict)
+                or not {"title", "playbook", "view"}.issubset(entry)
+                or set(entry) - {"title", "playbook", "view", "survey_vars"}):
             raise Blocked("Unexpected public task catalog fields")
         title, playbook, view = (entry[k] for k in ("title", "playbook", "view"))
         if (not isinstance(title, str) or
@@ -400,6 +402,37 @@ def read_public_catalog():
             raise Blocked("Invalid public catalog playbook path")
         if view not in VIEWS:
             raise Blocked("Unknown public catalog view")
+        survey_vars = entry.get("survey_vars")
+        if survey_vars is not None:
+            if not isinstance(survey_vars, list) or not 1 <= len(survey_vars) <= 5:
+                raise Blocked("Invalid catalog survey variables")
+            names = set()
+            for variable in survey_vars:
+                if (not isinstance(variable, dict)
+                        or set(variable) != {"name", "title", "description", "type",
+                                            "required", "values"}
+                        or not isinstance(variable.get("name"), str)
+                        or re.fullmatch(r"[a-z][a-z0-9_]{2,63}", variable["name"]) is None
+                        or not isinstance(variable.get("title"), str)
+                        or not 1 <= len(variable["title"]) <= 100
+                        or not isinstance(variable.get("description"), str)
+                        or len(variable["description"]) > 500
+                        or variable.get("type") != "enum"
+                        or variable.get("required") is not True
+                        or not isinstance(variable.get("values"), list)
+                        or not 2 <= len(variable["values"]) <= 10):
+                    raise Blocked("Invalid catalog enum survey definition")
+                options = variable["values"]
+                if (any(not isinstance(option, dict) or set(option) != {"name", "value"}
+                        or not isinstance(option["name"], str)
+                        or not 1 <= len(option["name"]) <= 100
+                        or not isinstance(option["value"], str)
+                        or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", option["value"]) is None
+                        for option in options)
+                        or len({option["value"] for option in options}) != len(options)
+                        or variable["name"] in names):
+                    raise Blocked("Invalid catalog survey options")
+                names.add(variable["name"])
         seen.add(title)
         # Playbooks must exist in the same public immutable source revision.
         req = urllib.request.Request(raw + playbook, headers={
@@ -410,9 +443,10 @@ def read_public_catalog():
                     raise Blocked("Catalog playbook missing or oversized")
         except (OSError, urllib.error.URLError) as error:
             raise Blocked("Catalog playbook not available: " + playbook) from error
-        tasks.append((title, title, playbook, view))
+        tasks.append((title, title, playbook, view, survey_vars))
     bootstrap = BOOTSTRAP_TEMPLATES[0]
-    if tasks[0][:1] != bootstrap[:1] or tasks[0][2:] != bootstrap[2:]:
+    if (tasks[0][:1] != bootstrap[:1] or tasks[0][2:4] != bootstrap[2:4]
+            or tasks[0][4] is not None):
         raise Blocked("Catalog cannot change the bootstrap recovery task")
     print("CATALOG_SOURCE_SHA=" + sha, flush=True)
     return tasks
@@ -455,7 +489,15 @@ def sync_existing_template(api, path, desired, *, apply=False):
     if current.get("description") != MANAGED_DESCRIPTION:
         raise Blocked("Template is not catalog-owned: " + title)
     allowed_change = ("name", "playbook", "view_id")
-    changed = [k for k in allowed_change if current.get(k) != desired.get(k)]
+    if "survey_vars" in desired:
+        # Protect engineer-defined surveys: adopt only an empty or exact survey.
+        observed_survey = current.get("survey_vars") or []
+        if observed_survey not in ([], desired["survey_vars"]):
+            raise Blocked("Unexpected existing survey variables: " + title)
+        allowed_change += ("survey_vars",)
+    changed = [k for k in allowed_change
+               if (current.get(k) or [] if k == "survey_vars" else current.get(k))
+               != desired.get(k)]
     if not changed:
         if apply:
             print("CATALOG_UNCHANGED=" + title, flush=True)
@@ -471,8 +513,13 @@ def sync_existing_template(api, path, desired, *, apply=False):
     prefix = path.split("?")[0]
     details = api.request("GET", prefix + "/" + str(template_id))
     if details.get("id") != template_id or any(
-            not template_equal(k, details.get(k), current.get(k)) for k in immutable + allowed_change):
+            not template_equal(k, details.get(k), current.get(k))
+            for k in immutable + ("name", "playbook", "view_id")):
         raise Blocked("Catalog template changed concurrently")
+    if "survey_vars" in desired:
+        actual_survey = details.get("survey_vars") or []
+        if actual_survey not in ([], desired["survey_vars"]):
+            raise Blocked("Catalog survey modified concurrently")
     payload = dict(details)
     payload.update({k: desired[k] for k in allowed_change})
     api.request("PUT", prefix + "/" + str(template_id), payload)
@@ -603,22 +650,30 @@ def synchronize_catalog(api, site: str, project_title: str, *, apply: bool):
         api, path, named["id"],
         active_catalog=any(t[0] == OBSOLETE_CLOUDFLARE[0] for t in tasks))
     # Check the complete catalog first (fail closed before any writes).
-    for title, _, playbook, view in tasks:
+    for task in tasks:
+        title, _, playbook, view = task[:4]
+        survey_vars = task[4] if len(task) > 4 else None
         desired = {"name": title, "project_id": named["id"], "app": "ansible",
                    "description": MANAGED_DESCRIPTION, "playbook": playbook,
                    "arguments": "[]", "type": "",
                    "inventory_id": inv["id"], "repository_id": repo["id"],
                    "environment_id": env["id"], "view_id": view_ids[view],
                    "allow_override_args_in_task": False, "autorun": False}
+        if survey_vars is not None:
+            desired["survey_vars"] = survey_vars
         sync_existing_template(api, path, desired, apply=False)
     if apply:
-        for title, _, playbook, view in tasks:
+        for task in tasks:
+            title, _, playbook, view = task[:4]
+            survey_vars = task[4] if len(task) > 4 else None
             desired = {"name": title, "project_id": named["id"], "app": "ansible",
                        "description": MANAGED_DESCRIPTION, "playbook": playbook,
                        "arguments": "[]", "type": "",
                        "inventory_id": inv["id"], "repository_id": repo["id"],
                        "environment_id": env["id"], "view_id": view_ids[view],
                        "allow_override_args_in_task": False, "autorun": False}
+            if survey_vars is not None:
+                desired["survey_vars"] = survey_vars
             sync_existing_template(api, path, desired, apply=True)
         if legacy_11 is not None:
             archive_and_retire_cloudflare_11(api, prefix, legacy_11)
