@@ -150,7 +150,7 @@ class GuestLifecycle(unittest.TestCase):
             if args[0].endswith("/zpool") and "get" in args:
                 return "123456789012345"
             if args[0].endswith("/zpool") and "status" in args:
-                return "config:\\n    /dev/sdc1 ONLINE 0 0 0"
+                return "config:\n    /dev/sdc1 ONLINE 0 0 0"
             if args[0].endswith("/lsblk") and "-n" in args:
                 return "sdc"
             raise AssertionError("unexpected guest command")
