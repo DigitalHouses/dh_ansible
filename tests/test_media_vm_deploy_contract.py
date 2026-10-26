@@ -51,6 +51,7 @@ def test_metadata_validation_before_any_download(monkeypatch):
     monkeypatch.setattr(m.os, "geteuid", lambda: 0)
     monkeypatch.setattr(m.Path, "is_file", lambda *_: True)
     monkeypatch.setattr(m.Path, "exists", lambda *_: True)
+    monkeypatch.setattr(m, "run", lambda *a, **k: ("pve" if a[0] == "/usr/bin/hostname" else "vmbr0 inet 198.51.100.30/24"))
     monkeypatch.setattr(m, "pct", lambda *args: (
         "ansible-demo-home" if args[0] == "hostname"
         else "site:\n  id: demo-home\n  owner_slug: demo\n  type: home" if args[-1].endswith("all.yml")
