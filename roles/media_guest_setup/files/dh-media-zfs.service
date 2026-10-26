@@ -1,0 +1,14 @@
+[Unit]
+Description=DigitalHouses existing ZFS media library (readonly)
+After=local-fs.target systemd-udev-settle.service
+Wants=systemd-udev-settle.service
+Before=plexmediaserver.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/dh-media-zfs-mount
+TimeoutStartSec=120
+
+[Install]
+WantedBy=multi-user.target
