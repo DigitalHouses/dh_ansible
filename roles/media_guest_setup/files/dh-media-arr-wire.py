@@ -151,7 +151,7 @@ def ensure_client(app: str):
         field(item, "category", "prowlarr")
     # Required provider test: catches missing credentials/port/category.
     tests = api(app, "downloadclient/test", method="POST", data=item)
-    require(tests is None or (isinstance(tests, list) and not tests), "DOWNLOAD_CLIENT_TEST_FAILED_" + app)
+    require(tests is None or tests == [] or tests == {} or tests == "{}" or tests == "[]" or tests == "", "DOWNLOAD_CLIENT_TEST_FAILED_" + app)
     api(app, "downloadclient", method="POST", data=item)
     print("DOWNLOAD_CLIENT_" + app.upper() + "=CREATED", flush=True)
 
@@ -188,7 +188,7 @@ def ensure_application(app: str):
     field(item, "baseUrl", BASE + str(ARR[app][0]))
     field(item, "apiKey", api_key(app))
     tests = api("prowlarr", "applications/test", method="POST", data=item)
-    require(tests is None or (isinstance(tests, list) and not tests), "PROWLARR_APP_TEST_FAILED_" + app)
+    require(tests is None or tests == [] or tests == {} or tests == "{}" or tests == "[]" or tests == "", "PROWLARR_APP_TEST_FAILED_" + app)
     api("prowlarr", "applications", method="POST", data=item)
     print("PROWLARR_APP_" + app.upper() + "=CREATED", flush=True)
 
