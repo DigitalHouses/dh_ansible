@@ -83,9 +83,14 @@ def reconcile(path):
     else:
         first = True
     prefs = call("/api/v2/app/preferences")
-    require(prefs.get("bypass_local_auth") is True and
-            prefs.get("bypass_auth_subnet_whitelist_enabled") is False,
-            "QBT_LOCAL_API_OR_LAN_AUTH_INVALID")
+    # On first commissioning a legacy qBittorrent may still whitelist LAN.
+    # Correct it as part of the first credential write, then verify it is off.
+    # On a managed rerun, a re-enabled LAN bypass is unexpected auth drift.
+    require(prefs.get("bypass_local_auth") is True,
+            "QBT_LOCAL_API_POLICY_INVALID")
+    if not first:
+        require(prefs.get("bypass_auth_subnet_whitelist_enabled") is False,
+                "QBT_MANAGED_LAN_AUTH_BYPASS_DRIFT")
     if first:
         call("/api/v2/app/setPreferences", {
             "web_ui_username": username,
