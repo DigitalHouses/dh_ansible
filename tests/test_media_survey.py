@@ -56,14 +56,18 @@ class MediaSurveyTest(unittest.TestCase):
         return SurveyAPI(row.copy()), row.copy()
 
     def test_exact_engineer_choices(self):
-        self.assertEqual(len(self.survey), 1)
-        variable = self.survey[0]
-        self.assertEqual(variable["name"], "media_storage_action")
-        self.assertEqual(variable["type"], "enum")
-        self.assertIs(variable["required"], True)
-        self.assertNotIn("default", variable)
-        self.assertNotIn("default_value", variable)
-        self.assertEqual([o["value"] for o in variable["values"]], ["create", "import"])
+        self.assertEqual(len(self.survey), 3)
+        expected = {"media_storage_action": ["create", "import"],
+                    "media_vm_policy": ["keep", "recreate"],
+                    "media_disk_policy": ["preserve", "erase"]}
+        for variable in self.survey:
+            self.assertIn(variable["name"], expected)
+            self.assertEqual(variable["type"], "enum")
+            self.assertIs(variable["required"], True)
+            self.assertNotIn("default", variable)
+            self.assertNotIn("default_value", variable)
+            self.assertEqual([o["value"] for o in variable["values"]],
+                             expected[variable["name"]])
 
     def test_catalog_sync_retains_id_and_is_idempotent(self):
         m = self.module
@@ -93,11 +97,14 @@ class MediaSurveyTest(unittest.TestCase):
         worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
         guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
         assert "media_storage_action in ['create', 'import']" in play
-        assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}" in play
-        assert "MEDIA_DEPLOY_CREATE" in worker
-        assert "MEDIA_DEPLOY_IMPORT" in worker
+        assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}_" in play
+        assert "MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)" in worker
         assert "--storage-action" in worker
+        assert "--vm-policy" in worker
+        assert "--disk-policy" in worker
         assert "media_storage_action=$STORAGE_ACTION" in worker
+        assert "media_vm_policy=$VM_POLICY" in worker
+        assert "media_disk_policy=$DISK_POLICY" in worker
         assert "media_vm.yml" in guest
 
 
