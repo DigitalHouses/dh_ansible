@@ -39,7 +39,7 @@ def test_qbittorrent_sets_password_only_once_and_requires_local_only_api():
         root.mkdir(parents=True)
         secret = root / "qbittorrent.txt"
         secret.write_text("username=serzhan_admin\npassword=" + "B" * 24 + "\n")
-        secret.chmod(0o600)
+        secret.chmod(0o640)
         state = {"bypass_local_auth": True, "bypass_auth_subnet_whitelist_enabled": False,
                  "web_ui_username": "admin"}
         changes = []
@@ -185,3 +185,26 @@ def test_jellyfin_default_libraries_created_once():
             jellyfin.reconcile_libraries(root, "TEST_TOKEN")
             jellyfin.reconcile_libraries(root, "TEST_TOKEN")
         assert created == ["Movies", "TV Shows", "Music"]
+
+
+def test_admin_can_read_credentials_without_root_only_directory():
+    accounts = module("roles/media_guest_setup/files/dh-media-app-accounts.py", "apps_visible")
+    samba = module("roles/media_guest_setup/files/dh-media-accounts.py", "samba_visible")
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch) / "credentials"
+        root.mkdir()
+        group = os.getgid()
+        accounts.safe_dir(root, group)
+        apps = root / "apps"
+        accounts.safe_dir(apps, group)
+        password, created = accounts.account(apps, "jellyfin", group)
+        assert created and len(password) == 24
+        assert apps.stat().st_mode & 0o777 == 0o750
+        assert (apps / "jellyfin.txt").stat().st_mode & 0o777 == 0o640
+        saved, reused = accounts.account(apps, "jellyfin", group)
+        assert not reused and saved == password
+        owner, created = samba.read_or_create(root / "owner.txt", "serzhan", group)
+        assert created and len(owner) == 8
+        assert (root / "owner.txt").stat().st_mode & 0o777 == 0o640
+        another, created = samba.read_or_create(root / "owner.txt", "serzhan", group)
+        assert not created and another == owner
