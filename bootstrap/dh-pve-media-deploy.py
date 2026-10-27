@@ -405,17 +405,67 @@ def apply(site, vm_action, disk_action):
     print("LEGACY_VMS=UNTOUCHED", flush=True)
 
 
+
+def ensure_backup_storage(site, data, pve):
+    """Map only a site-verified media guest NFS export as PVE backup storage."""
+    vmid = int(data["vmid"])
+    backup = data.get("backup_export", {})
+    storage_id = backup.get("storage_id", "")
+    nfs_server = data["network"]["ipv4"].split("/")[0]
+    nfs_export = "/" + data["storage"]["pool_name"] + "/backups/pve"
+    need(storage_id == "dh_media_backups" and
+         backup.get("path") == nfs_export and
+         backup.get("pve_host") == pve["host"],
+         "MEDIA_BACKUP_STORAGE_FLEET_MISMATCH")
+    need(qm("status", vmid) == "status: running",
+         "MEDIA_NFS_BACKUP_SERVER_VM_NOT_RUNNING")
+    need(config(vmid).get("name") == data["name"],
+         "MEDIA_BACKUP_SERVER_VM_IDENTITY_MISMATCH")
+    storage_cfg = Path("/etc/pve/storage.cfg")
+    need(storage_cfg.is_file(), "PVE_STORAGE_CONFIG_ABSENT")
+    contents = storage_cfg.read_text()
+    headers = re.findall(r"(?m)^[a-z][a-z0-9]*:\\s+([^\\s]+)", contents)
+    if storage_id in headers:
+        block = re.search(r"(?m)^nfs:\\s+" + re.escape(storage_id) +
+                          r"\\s*\\n((?:[ \\t]+[^\\n]*\\n)*)", contents)
+        need(block is not None, "BACKUP_STORAGE_ID_COLLISION")
+        fields = dict(line.strip().split(None, 1)
+                      for line in block.group(1).splitlines() if line.strip())
+        need(fields.get("server") == nfs_server and
+             fields.get("export") == nfs_export and
+             fields.get("content") == "backup",
+             "BACKUP_STORAGE_CONFIG_DRIFT")
+        print("MEDIA_PVE_NFS_BACKUP=UNCHANGED", flush=True)
+        return
+    scan = run("/usr/sbin/pvesm", "scan", "nfs", nfs_server, timeout=50)
+    need(any(line.split() and line.split()[0] == nfs_export
+             for line in scan.splitlines()),
+         "MEDIA_NFS_BACKUP_EXPORT_NOT_VISIBLE")
+    run("/usr/sbin/pvesm", "add", "nfs", storage_id,
+        "--server", nfs_server, "--export", nfs_export,
+        "--content", "backup", "--options", "vers=4.1",
+        timeout=90)
+    print("MEDIA_PVE_NFS_BACKUP=CREATED", flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--site", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--vm-action", choices=("create", "recreate", "keep"), required=True)
     parser.add_argument("--raw-disk-action", choices=("import", "erase"), required=True)
+    parser.add_argument("--map-backups", action="store_true",
+                        help="Register only this approved NFS backup storage after guest setup")
     parser.add_argument("--verify-recreate", action="store_true",
                         help="Read-only PVE/QGA/ZFS identity gate; never changes VM or disks")
     args = parser.parse_args()
     data, pve = site_data(args.site)
     vmid, name, ip = check(args.site, data, pve)
+    if args.map_backups:
+        need(args.apply and not args.verify_recreate,
+             "BACKUP_STORAGE_APPLY_REQUIRED")
+        ensure_backup_storage(args.site, data, pve)
+        return
     exists = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists()
     if args.vm_action == "create":
         need(not exists, "VM_CREATE_REQUIRES_ABSENT_VM")
