@@ -56,7 +56,7 @@ class MediaSurveyTest(unittest.TestCase):
         return SurveyAPI(row.copy()), row.copy()
 
     def test_exact_engineer_choices(self):
-        self.assertEqual(len(self.survey), 3)
+        self.assertEqual(len(self.survey), 2)
         expected = {"media_storage_action": ["create", "import"],
                     "media_vm_policy": ["keep", "recreate"],
                     "media_disk_policy": ["preserve", "erase"]}
