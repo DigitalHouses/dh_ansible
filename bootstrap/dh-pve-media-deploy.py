@@ -86,7 +86,7 @@ def check(site, data, pve):
     vmid = int(data["vmid"])
     name = data["name"]
     need(2200 <= vmid <= 2254, "VMID_INVALID")
-    need(name == "media-server-" + site, "VM_NAME_INVALID")
+    need(name == "mediaserver-" + site.rsplit("-", 1)[0], "VM_NAME_INVALID")
     need(data["os"]["distribution"] == "debian"
          and int(data["os"]["major_version"]) == 13, "OS_INVALID")
     need(data["network"]["bridge"] == "vmbr0", "BRIDGE_INVALID")
@@ -110,8 +110,16 @@ def check(site, data, pve):
     need(approval.get("provision") is True, "PROVISION_NOT_APPROVED")
     need(approval.get("gpu_cutover") is True
          and approval.get("sata_cutover") is True, "PCI_NOT_APPROVED")
-    need(Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists() is False
-         or config(vmid).get("name") == name, "FOREIGN_VMID_OCCUPIED")
+    existing_config = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf")
+    if existing_config.exists():
+        current = config(vmid)
+        legacy_name = "media-server-" + site
+        need(current.get("name") == name or
+             (current.get("name") == legacy_name and
+              current.get("description") == MANAGED_MEDIA_DESCRIPTION and
+              current.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1" and
+              current.get("hostpci1") == data["pci"]["sata_controller"] + ",pcie=1"),
+             "FOREIGN_VMID_OCCUPIED")
     for path in Path("/etc/pve/qemu-server").glob("*.conf"):
         if path.name == str(vmid) + ".conf":
             continue
@@ -257,7 +265,8 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     """Read-only, exact disk and pool identity check before VM deletion."""
     storage = data["storage"]
     state = config(vmid)
-    need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
+    need(state.get("name") in ("media-server-" + site, data["name"]),
+         "FOREIGN_VM_BLOCKED")
     need(state.get("scsi0", "").startswith(
         "local-lvm:vm-" + str(vmid) + "-disk-"), "FOREIGN_BOOT_VOLUME")
     need(state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1",
@@ -320,8 +329,17 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
         return
     need(exists, "VM_" + vm_action.upper() + "_REQUIRES_EXISTING_VM")
     state = config(vmid)
-    need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
+    legacy_name = "media-server-" + site
+    need(state.get("name") in (legacy_name, data["name"]), "FOREIGN_VM_BLOCKED")
     if vm_action == "keep":
+        if state.get("name") == legacy_name:
+            need(state.get("description") == MANAGED_MEDIA_DESCRIPTION,
+                 "LEGACY_MEDIA_VM_UNMANAGED")
+            old_guest_matches(vmid, site, data, managed=True)
+            qm("set", vmid, "--name", data["name"])
+            need(config(vmid).get("name") == data["name"],
+                 "MEDIA_VM_RENAME_UNCONFIRMED")
+            print("MEDIA_VM=RENAMED_VERIFIED_LEGACY", flush=True)
         print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
     need(qm("status", vmid) == "status: running",
