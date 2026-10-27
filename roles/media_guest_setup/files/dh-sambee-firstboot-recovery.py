@@ -24,7 +24,6 @@ CONFIG = BASE / "config.toml"
 COMPOSE = BASE / "docker-compose.yml"
 SNAPSHOTS = BASE / "protected-recovery"
 MARKER = BASE / ".owner-firstboot-recovery.json"
-PASSPORT_BASE = Path("/serzhan-home-pool/digitalhouses/credentials")
 OWNER_RE = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
 ALLOWED = {"sambee.db", "sambee.db-wal", "sambee.db-shm", "mobile_logs"}
 EMPTY_TABLES = (
@@ -59,7 +58,7 @@ def regular(path, uid=None):
     return st
 
 
-def owner():
+def owner(passport):
     directory(BASE, 0)
     regular(CONFIG, 0)
     regular(COMPOSE, 0)
@@ -67,11 +66,19 @@ def owner():
     username = cfg.get("admin", {}).get("username")
     require(isinstance(username, str) and OWNER_RE.fullmatch(username) is not None,
             "SAMBEE_RECOVERY_OWNER_CONFIG_INVALID")
-    passport = PASSPORT_BASE / (username + ".txt")
+    require(passport.is_absolute() and passport.parent.name == "credentials"
+            and passport.parent.parent.name == "digitalhouses"
+            and passport.parent.parent.parent.parent == Path("/")
+            and re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_-]{2,62}",
+                             passport.parent.parent.parent.name)
+            and passport.stem == username,
+            "SAMBEE_RECOVERY_PASSPORT_SCOPE")
     info = regular(passport, 0)
     require(stat.S_IMODE(info.st_mode) == 0o640,
             "SAMBEE_RECOVERY_OWNER_PASSPORT_UNSAFE")
-    require(passport.read_text("ascii").splitlines()[0] == "username=" + username,
+    lines = passport.read_text("ascii").splitlines()
+    require(len(lines) == 2 and lines[0] == "username=" + username
+            and lines[1].startswith("password=") and 6 <= len(lines[1][9:]) <= 8,
             "SAMBEE_RECOVERY_PASSPORT_MISMATCH")
     return username
 
@@ -199,9 +206,10 @@ def main():
     mode.add_argument("--check", action="store_true")
     mode.add_argument("--apply", action="store_true")
     mode.add_argument("--verify-new-owner", action="store_true")
+    parser.add_argument("--credentials-file", type=Path, required=True)
     args = parser.parse_args()
     require(os.geteuid() == 0, "SAMBEE_RECOVERY_REQUIRES_ROOT")
-    username = owner()
+    username = owner(args.credentials_file)
     state = inspect(username)
     if args.check:
         if state == "LEGACY_EMPTY_ADMIN":
