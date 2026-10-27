@@ -18,8 +18,8 @@
     path: "{{ media_vm.backup_export.path }}"
     state: directory
     owner: nobody
-    group: nogroup
-    mode: '0700'
+    group: backup_group
+    mode: '2770'
 
 - name: Create exports directory if absent
   ansible.builtin.file:
