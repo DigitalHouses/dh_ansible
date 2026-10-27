@@ -195,3 +195,25 @@ def test_native_filestash_state_follows_binary_directory_and_is_writable():
     assert "WorkingDirectory=/opt/dh-filestash" in unit
     assert "/usr/local/bin/filestash" not in unit
     assert "restarted" in start_task["ansible.builtin.systemd_service"]["state"]
+
+
+def test_media_deploy_cannot_ignore_read_only_plan_blockers():
+    import yaml
+    source = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
+    assert len(source) == 1
+    steps = source[0]["tasks"]
+    gate = next(step for step in steps if step.get("name") ==
+                "Provision only when canonical Fleet authorizes media server")
+    submit = next(index for index, step in enumerate(steps)
+                  if step.get("name") ==
+                  "Submit fixed-purpose media deploy to existing PVE root worker")
+    gate_index = steps.index(gate)
+    assert gate_index < submit, "The blocker gate must precede the root-worker request"
+    conditions = gate["ansible.builtin.assert"]["that"]
+    assert "media_plan_summary.blockers | length == 0" in conditions
+    assert "media_plan_summary.blockers is not string" in conditions
+    assert "MEDIA_DEPLOY_BLOCKED_BY_PREFLIGHT" in gate["ansible.builtin.assert"]["fail_msg"]
+    # Our existing Fleet explicitly has not verified DHCP exclusion. This
+    # prevents deployment even if hardware and PVE ownership are healthy.
+    safety = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
+    assert "STATIC_IP_NOT_VERIFIED" in safety

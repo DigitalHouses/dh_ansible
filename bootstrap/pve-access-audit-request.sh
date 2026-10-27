@@ -16,7 +16,14 @@ ACTION="${BASH_REMATCH[1]}"
 NONCE="${BASH_REMATCH[4]}"
 rm -f -- "$REQUEST"
 report() { printf '%s:%s\n' "$1" "$NONCE" > "$STATUS"; chmod 0644 "$STATUS"; }
-on_exit() { rc=$?; if (( rc != 0 )); then report FAILED; fi; }
+MEDIA_RUNTIME_FILE=
+on_exit() {
+  rc=$?
+  if [[ -n "$MEDIA_RUNTIME_FILE" && -f "$MEDIA_RUNTIME_FILE" ]]; then
+    rm -f -- "$MEDIA_RUNTIME_FILE"
+  fi
+  if (( rc != 0 )); then report FAILED; fi
+}
 trap on_exit EXIT
 HOST="$(hostname)"
 [[ "$HOST" =~ ^ansible-([a-z][a-z0-9]*(-[a-z0-9]+)+)$ ]] || exit 2
@@ -40,6 +47,19 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   [[ -f "$PVE_FILE" && ! -L "$PVE_FILE" ]] || exit 2
   PVE_IP="$(/opt/ansible/venv/bin/python -c 'import sys,yaml,ipaddress; d=yaml.safe_load(open(sys.argv[1]))["pve"]; host=d["host"]; ipaddress.IPv4Address(host); print(host)' "$PVE_FILE")"
   [[ "$PVE_IP" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || exit 2
+  # Before any VM/PVE write, require site-scoped MQTT from existing
+  # root-only PVE runtime. stdout is captured directly in a 0600 file.
+  MEDIA_RUNTIME_FILE="$(mktemp /run/dh-media-runtime-XXXXXXXX.yml)"
+  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
+    -o ConnectTimeout=8 \
+    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
+    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-runtime \
+    --site "$SITE" > "$MEDIA_RUNTIME_FILE" 2>> "$LOG"
+  [[ "$(stat -c '%U:%G:%a' "$MEDIA_RUNTIME_FILE")" == 'root:root:600' ]] || exit 2
+  [[ -s "$MEDIA_RUNTIME_FILE" ]] || exit 2
+
   /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
     -o StrictHostKeyChecking=yes \
     -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
@@ -65,7 +85,18 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   export ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles
   /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$GUEST_PLAY" \
     -e "media_vm_action=$VM_ACTION" \
-    -e "media_raw_disk_action=$RAW_DISK_ACTION" >> "$LOG" 2>&1
+    -e "media_raw_disk_action=$RAW_DISK_ACTION" \
+    -e "dh_media_runtime_secret_file=$MEDIA_RUNTIME_FILE" >> "$LOG" 2>&1
+  # Backup mapping is performed only after the guest successfully exports NFS.
+  # The PVE root script revalidates VMID, name, export path and storage ID.
+  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
+    -o ConnectTimeout=8 \
+    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
+    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
+    --site "$SITE" --vm-action "$VM_ACTION" \
+    --raw-disk-action "$RAW_DISK_ACTION" --map-backups --apply >> "$LOG" 2>&1
   report PASS
   exit 0
 fi

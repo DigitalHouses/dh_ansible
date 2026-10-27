@@ -17,6 +17,38 @@
       - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
       - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
 
+- name: Require explicit enablement booleans for every customer-facing app
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - item in media_vm.applications
+      - media_vm.applications[item] is boolean
+    fail_msg: MEDIA_APPLICATION_ENABLEMENT_MUST_BE_EXPLICIT
+  loop:
+    - jellyfin
+    - sambee
+    - filestash
+    - radarr
+    - sonarr
+    - prowlarr
+    - qbittorrent
+
+- name: Refuse ordinary Ansible apply during unfinished customer password rotation
+  ansible.builtin.stat:
+    path: "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/.dh-media-password-rotation.json"
+    follow: false
+  register: media_owner_rotation_pending
+
+- name: Protect application logins from incomplete password change
+  ansible.builtin.assert:
+    that:
+      - not (media_owner_rotation_pending.stat.exists | default(false))
+    fail_msg: MEDIA_PASSWORD_ROTATION_PENDING_RECOVERY
+
+- name: Set canonical Debian media server hostname without recreating VM
+  ansible.builtin.hostname:
+    name: "{{ media_vm.name }}"
+
 - name: Enable Debian contrib for supported ZFS packages
   ansible.builtin.replace:
     path: /etc/apt/sources.list.d/debian.sources
@@ -157,6 +189,8 @@
       - /etc/digitalhouses/media-storage.json
       - --action
       - "{{ media_raw_disk_action }}"
+      - --owner
+      - "{{ media_owner_slug }}"
   register: media_zfs_reconcile
   changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
 
@@ -208,6 +242,12 @@
     - tvshows
     - music
 
+- name: Require Fleet identities and provision authenticated SMB access
+  ansible.builtin.import_tasks: file_access.yml
+
+- name: Commission persistent media application administrator passwords
+  ansible.builtin.import_tasks: app_accounts.yml
+
 - name: Advertise existing media library over SMB
   ansible.builtin.template:
     src: media-smb.conf.j2
@@ -228,15 +268,18 @@
     - nmbd.service
     - wsdd2.service
 
-- name: Confirm readonly guest SMB share is reachable
+- name: Reject anonymous access to authenticated Media share
   ansible.builtin.command:
-    argv:
-      - smbclient
-      - -N
-      - //127.0.0.1/Media
-      - -c
-      - ls
+    argv: [smbclient, -N, //127.0.0.1/Media, -c, ls]
+  register: media_smb_anonymous
   changed_when: false
+  failed_when: false
+
+- name: Require anonymous Media access to be denied
+  ansible.builtin.assert:
+    that:
+      - media_smb_anonymous.rc != 0
+    fail_msg: MEDIA_SMB_ANONYMOUS_ACCESS_NOT_DENIED
 
 - name: Start Plex with Intel video/render permissions
   ansible.builtin.systemd_service:
@@ -582,7 +625,7 @@
       - media_vm.applications.prowlarr | bool
       - media_vm.applications.qbittorrent | bool
 
-- name: Check if qBittorrent's local/LAN API access is already configured
+- name: Check qBittorrent local API and LAN authentication policy
   ansible.builtin.uri:
     url: http://127.0.0.1:8080/api/v2/app/preferences
     status_code: [200, 403]
@@ -596,8 +639,8 @@
       {{
         media_qbt_web_prefs.status != 200
         or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
-        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
-        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+        or (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or ((media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')) | length > 0)
       }}
   changed_when: false
 
@@ -607,7 +650,7 @@
     state: stopped
   when: media_qbt_access_update | bool
 
-- name: Ensure qBittorrent local API can be used without copying passwords
+- name: Disable qBittorrent LAN-wide bypass while preserving loopback API
   ansible.builtin.lineinfile:
     path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     regexp: "^{{ item.key | regex_escape }}="
@@ -618,11 +661,11 @@
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
-    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
-    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: ''}
   when: media_qbt_access_update | bool
 
-- name: Start qBittorrent with local/LAN WebUI access
+- name: Start qBittorrent with authenticated LAN WebUI and loopback-only API
   ansible.builtin.systemd_service:
     name: qbittorrent.service
     state: started
@@ -638,11 +681,29 @@
   until: media_qbt_authenticated_prefs.status == 200
   changed_when: false
 
-- name: Verify local qBittorrent authentication bypass for server-side API integrations
+- name: Verify LAN authentication is mandatory while loopback API remains available
   ansible.builtin.assert:
     that:
       - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
-      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+      - not (media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool)
+
+- name: Install local-only qBittorrent admin credential reconciler
+  ansible.builtin.copy:
+    src: dh-qbt-admin.py
+    dest: /usr/local/sbin/dh-qbt-admin
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Apply persistent qBittorrent LAN administrator from ZFS credential file
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-qbt-admin
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
+  register: media_qbt_admin
+  changed_when: "'QBT_ADMIN=COMMISSIONED' in media_qbt_admin.stdout"
+  no_log: true
 
 - name: Create separate writable download and staging roots on system disk
   ansible.builtin.file:
@@ -659,6 +720,24 @@
     - {path: 'library', owner: 'root'}
     - {path: 'library/movies', owner: 'radarr'}
     - {path: 'library/tvshows', owner: 'sonarr'}
+
+- name: Install root-only native media application authentication helper
+  ansible.builtin.copy:
+    src: dh-media-arr-auth.py
+    dest: /usr/local/sbin/dh-media-arr-auth
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Commission Radarr Sonarr and Prowlarr Forms authentication from shared owner
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-auth
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
+  register: media_arr_auth
+  changed_when: "'=COMMISSIONED' in media_arr_auth.stdout"
+  no_log: true
 
 - name: Install native idempotent Arr API integration helper
   ansible.builtin.copy:
@@ -697,3 +776,26 @@
 
 - name: Provision Filestash Sambee and Jellyfin
   ansible.builtin.import_tasks: apps.yml
+
+- name: Deploy DigitalHouses Plex Agent with private MQTT settings
+  ansible.builtin.import_tasks: plex_agent.yml
+
+- name: Commission shared Bonjour baseline after guest identity and service setup
+  ansible.builtin.import_role:
+    name: guest_network_discovery
+  vars:
+    guest_network_discovery_approved: true
+    guest_network_discovery_hostname: "{{ media_vm.name }}"
+    guest_network_discovery_ip: "{{ media_vm.network.ipv4.split('/')[0] }}"
+    guest_network_discovery_cidr: "{{ media_vm.network.ipv4 }}"
+    guest_network_discovery_provider: avahi
+    guest_network_discovery_delegate: runner
+
+- name: Publish local media portal and LAN discovery
+  ansible.builtin.import_tasks: discovery_portal.yml
+
+- name: Export backup dataset to the approved PVE host over NFS
+  ansible.builtin.import_tasks: nfs_backups.yml
+
+- name: Stage local root-only customer password recovery tools
+  ansible.builtin.import_tasks: password_rotation.yml

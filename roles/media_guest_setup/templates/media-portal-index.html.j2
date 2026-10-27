@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>{{ media_vm.discovery.friendly_name | default(media_vm.name) | e }} — сервисы</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;background:#101823;color:#eef4fc}
+*{box-sizing:border-box}
+body{max-width:1080px;margin:0 auto;padding:30px 24px 70px}
+header{padding:14px 0 18px}
+.eyebrow{color:#91bce1;font-size:.85rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase}
+h1{font-size:clamp(2rem,5vw,3rem);margin:10px 0 12px;line-height:1.12}
+h2{font-size:1.4rem;margin:0 0 8px}
+p{color:#b5c4d5;line-height:1.65;margin:8px 0 18px}
+section{margin-top:36px}
+.section-note{font-size:.94rem;margin:0 0 16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:14px}
+.card{display:flex;flex-direction:column;gap:9px;padding:22px 24px;border:1px solid #344a62;border-radius:15px;background:#1b2b3e;color:inherit;text-decoration:none;min-height:154px}
+.card:hover,.card:focus-visible{outline:2px solid #90c7ee;outline-offset:2px;background:#223a51}
+.card strong{font-size:1.18rem}
+.card small{color:#bfd0df;line-height:1.55;font-size:.92rem}
+.card .action{margin-top:auto;color:#9acdf2;font-size:.83rem;font-weight:650}
+.tip{background:#162638;border-left:3px solid #669fc9;border-radius:0 10px 10px 0;padding:15px 19px;margin:20px 0;color:#d0deed}
+code{color:#e1f1ff;overflow-wrap:anywhere}
+a.inline{color:#a6d8ff}
+footer{margin-top:42px;padding-top:20px;border-top:1px solid #314358;color:#aebed0;font-size:.91rem;line-height:1.6}
+</style>
+</head>
+<body>
+{% set media_ip = media_vm.network.ipv4.split('/')[0] %}
+<header>
+<div class="eyebrow">DigitalHouses · медиасервер</div>
+<h1>{{ media_vm.discovery.friendly_name | default(media_vm.name) | e }}</h1>
+<p>Все приложения сервера собраны здесь. Нажмите на нужное приложение — откроется его собственная страница входа.</p>
+<div class="tip"><strong>Сохраните эту страницу в закладки.</strong> Адрес в вашей локальной сети: <code>http://{{ media_ip }}/</code>. Для входа в приложения используйте предоставленные вам учётные данные. Эта страница не хранит и не показывает пароли.</div>
+</header>
+
+<main>
+<section aria-labelledby="watching">
+<h2 id="watching">Смотреть фильмы и слушать музыку</h2>
+<p class="section-note">Медиатеки для телевизора, телефона и компьютера.</p>
+<div class="grid">
+<a class="card" href="http://{{ media_ip }}:32400/web/"><strong>Plex</strong><small>Основная медиатека: смотрите фильмы и сериалы, слушайте музыку, продолжайте просмотр на других устройствах. Для Plex может потребоваться отдельный аккаунт Plex.</small><span class="action">Открыть Plex</span></a>
+{% if media_vm.applications.jellyfin | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:8096/"><strong>Jellyfin</strong><small>Альтернативный проигрыватель вашей медиатеки: фильмы, сериалы и музыка через браузер или приложение Jellyfin.</small><span class="action">Открыть Jellyfin</span></a>
+{% endif %}
+</div>
+</section>
+
+<section aria-labelledby="files">
+<h2 id="files">Файлы и папки</h2>
+<p class="section-note">Загружайте на сервер и скачивайте с него файлы через браузер или сетевую папку.</p>
+<div class="grid">
+{% if media_vm.applications.filestash | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:8334/"><strong>Filestash</strong><small>Откройте папки сервера в браузере. Можно загружать, скачивать и упорядочивать файлы без подключения сетевого диска.</small><span class="action">Открыть Filestash</span></a>
+{% endif %}
+{% if media_vm.applications.sambee | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:8000/"><strong>Sambee</strong><small>Ещё один веб-файловый менеджер. Доступен для сравнения с Filestash — выберите более удобный.</small><span class="action">Открыть Sambee</span></a>
+{% endif %}
+</div>
+<div class="tip"><strong>Доступ из Windows:</strong> откройте Проводник → «Сеть» → <code>{{ media_vm.discovery.netbios_name | e }}</code> или введите <code>\\{{ media_ip }}\Media</code> в адресной строке. <strong>Из macOS:</strong> Finder → «Переход» → «Подключиться к серверу» → <code>smb://{{ media_ip }}/Media</code>. Здесь также можно передавать большие файлы.</div>
+</section>
+
+<section aria-labelledby="management">
+<h2 id="management">Управление загрузками и медиатекой</h2>
+<p class="section-note">Эти приложения нужны, чтобы искать, добавлять и отслеживать новый контент. Они могут потребовать входа с правами администратора.</p>
+<div class="grid">
+{% if media_vm.applications.radarr | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:7878/"><strong>Radarr</strong><small>Фильмы: добавьте нужный фильм, следите за его поиском и появлением в медиатеке.</small><span class="action">Управление фильмами</span></a>
+{% endif %}
+{% if media_vm.applications.sonarr | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:8989/"><strong>Sonarr</strong><small>Сериалы: добавляйте сериалы и отслеживайте новые серии и сезоны.</small><span class="action">Управление сериалами</span></a>
+{% endif %}
+{% if media_vm.applications.prowlarr | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:9696/"><strong>Prowlarr</strong><small>Источники поиска для Radarr и Sonarr. Обычно настройки здесь меняет администратор.</small><span class="action">Источники поиска</span></a>
+{% endif %}
+{% if media_vm.applications.qbittorrent | default(false) | bool %}
+<a class="card" href="http://{{ media_ip }}:8080/"><strong>qBittorrent</strong><small>Очередь загрузок: проверяйте скорость, прогресс, завершённые и ожидающие файлы.</small><span class="action">Открыть загрузки</span></a>
+{% endif %}
+</div>
+</section>
+
+{% if media_vm.portal is defined and media_vm.portal.links is defined and media_vm.portal.links | length > 0 %}
+<section aria-labelledby="other">
+<h2 id="other">Другие сервисы дома</h2>
+<div class="grid">
+{% for link in media_vm.portal.links %}
+{% if link.url.startswith('https://') or link.url.startswith('http://') %}
+<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Открыть сервис') | e }}</small><span class="action">Открыть</span></a>
+{% endif %}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+
+{% if media_vm.portal is defined and media_vm.portal.show_admin_links | default(false) | bool and media_vm.portal.admin_links is defined and media_vm.portal.admin_links | length > 0 %}
+<section aria-labelledby="system">
+<h2 id="system">Системное администрирование</h2>
+<p class="section-note">Инфраструктурные инструменты. Используются специалистом для обслуживания дома.</p>
+<div class="grid">
+{% for link in media_vm.portal.admin_links %}
+{% if link.url.startswith('https://') or link.url.startswith('http://') %}
+<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Системное управление') | e }}</small><span class="action">Открыть</span></a>
+{% endif %}
+{% endfor %}
+</div>
+</section>
+{% endif %}
+</main>
+<footer>Портал работает внутри вашей локальной сети. Он помогает находить приложения, но не заменяет их авторизацию. Если сервис не открывается, обратитесь к администратору DigitalHouses.</footer>
+</body>
+</html>

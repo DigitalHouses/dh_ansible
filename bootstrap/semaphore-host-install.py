@@ -50,6 +50,7 @@ CODE_FILES = (
     "roles/pve_media_vm_plan/tasks/main.yml",
     "bootstrap/dh-site-data-runner.py",
     "bootstrap/dh-site-data-pve-refresh.py",
+    "bootstrap/dh-pve-media-runtime.py",
     "bootstrap/dh-site-data.service",
     "bootstrap/dh-site-data.path",
     "bootstrap/fleet-master-gate.py",
@@ -67,6 +68,47 @@ CODE_FILES = (
     "bootstrap/remote-commander-install-request.sh",
     "bootstrap/dh-remote-commander-install.service",
     "bootstrap/dh-remote-commander-install.path",
+    "roles/guest_network_discovery/tasks/main.yml",
+    "roles/guest_network_discovery/files/dh-mdns-probe.py",
+    "roles/media_guest_setup/tasks/main.yml",
+    "roles/media_guest_setup/files/dh-media-zfs.service",
+    "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2",
+    "roles/media_guest_setup/templates/media-smb.conf.j2",
+    "roles/media_guest_setup/defaults/main.yml",
+    "roles/media_guest_setup/templates/media-arr.service.j2",
+    "roles/media_guest_setup/templates/media-qbittorrent.service.j2",
+    "roles/media_guest_setup/templates/media-qbittorrent.conf.j2",
+    "roles/media_guest_setup/files/dh-media-arr-wire.py",
+    "roles/media_guest_setup/files/dh-media-storage.py",
+    "roles/media_guest_setup/tasks/apps.yml",
+    "roles/media_guest_setup/templates/media-filestash.service.j2",
+    "roles/media_guest_setup/templates/media-sambee-compose.yml.j2",
+    "roles/media_guest_setup/templates/media-sambee-config.toml.j2",
+    "roles/media_guest_setup/files/dh-sambee-owner.py",
+    "roles/media_guest_setup/files/dh-media-arr-auth.py",
+    "roles/media_guest_setup/tasks/file_access.yml",
+    "roles/media_guest_setup/tasks/password_rotation.yml",
+    "roles/media_guest_setup/files/dh-media-password-transaction.py",
+    "roles/media_guest_setup/files/dh-media-password-adapters.py",
+    "roles/media_guest_setup/files/dh-media-password-rotate.py",
+    "roles/media_guest_setup/tasks/app_accounts.yml",
+    "roles/media_guest_setup/tasks/jellyfin_bootstrap.yml",
+    "roles/media_guest_setup/tasks/plex_agent.yml",
+    "roles/media_guest_setup/tasks/discovery_portal.yml",
+    "roles/media_guest_setup/tasks/nfs_backups.yml",
+    "roles/media_guest_setup/files/dh-media-accounts.py",
+    "roles/media_guest_setup/files/dh-media-app-accounts.py",
+    "roles/media_guest_setup/files/dh-qbt-admin.py",
+    "roles/media_guest_setup/files/dh-jellyfin-bootstrap.py",
+    "roles/media_guest_setup/files/dh-filestash-smb-config.py",
+    "roles/media_guest_setup/templates/digitalhouses-plex-agent.conf.j2",
+    "roles/media_guest_setup/templates/media-smb-avahi.service.j2",
+    "roles/media_guest_setup/templates/media-portal-nginx.conf.j2",
+    "roles/media_guest_setup/templates/media-portal-index.html.j2",
+    "roles/media_guest_setup/templates/media-pve-nfs.exports.j2",
+    "playbooks/setup-pve-media-guest.yml",
+    "playbooks/commission-new-runner-bonjour.yml",
+    "bootstrap/dh-pve-media-deploy.py",
 )
 REMOTE_INSTALL_FILES = tuple(item for item in CODE_FILES
                              if item.startswith(("playbooks/apply-runner-remote-commander.yml",
@@ -1071,6 +1113,8 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("pve_audit", "defaults/main.yml"),
         ("pve_audit", "tasks/main.yml"),
         ("pve_media_vm_plan", "tasks/main.yml"),
+        ("guest_network_discovery", "tasks/main.yml"),
+        ("guest_network_discovery", "files/dh-mdns-probe.py"),
         ("media_guest_setup", "tasks/main.yml"),
         ("media_guest_setup", "files/dh-media-zfs.service"),
         ("media_guest_setup", "templates/dh-media-zfs-mount.sh.j2"),
@@ -1084,6 +1128,29 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "tasks/apps.yml"),
         ("media_guest_setup", "templates/media-filestash.service.j2"),
         ("media_guest_setup", "templates/media-sambee-compose.yml.j2"),
+        ("media_guest_setup", "templates/media-sambee-config.toml.j2"),
+        ("media_guest_setup", "files/dh-sambee-owner.py"),
+        ("media_guest_setup", "files/dh-media-arr-auth.py"),
+        ("media_guest_setup", "tasks/file_access.yml"),
+        ("media_guest_setup", "tasks/password_rotation.yml"),
+        ("media_guest_setup", "files/dh-media-password-transaction.py"),
+        ("media_guest_setup", "files/dh-media-password-adapters.py"),
+        ("media_guest_setup", "files/dh-media-password-rotate.py"),
+        ("media_guest_setup", "tasks/app_accounts.yml"),
+        ("media_guest_setup", "tasks/jellyfin_bootstrap.yml"),
+        ("media_guest_setup", "tasks/plex_agent.yml"),
+        ("media_guest_setup", "tasks/discovery_portal.yml"),
+        ("media_guest_setup", "tasks/nfs_backups.yml"),
+        ("media_guest_setup", "files/dh-media-accounts.py"),
+        ("media_guest_setup", "files/dh-media-app-accounts.py"),
+        ("media_guest_setup", "files/dh-qbt-admin.py"),
+        ("media_guest_setup", "files/dh-jellyfin-bootstrap.py"),
+        ("media_guest_setup", "files/dh-filestash-smb-config.py"),
+        ("media_guest_setup", "templates/digitalhouses-plex-agent.conf.j2"),
+        ("media_guest_setup", "templates/media-smb-avahi.service.j2"),
+        ("media_guest_setup", "templates/media-portal-nginx.conf.j2"),
+        ("media_guest_setup", "templates/media-portal-index.html.j2"),
+        ("media_guest_setup", "templates/media-pve-nfs.exports.j2"),
     ):
         role_dir = folder + "/roles/" + role
         stage_guest_root_directory(folder + "/roles", stage="pve_access")
@@ -1095,7 +1162,8 @@ def stage_pve_access_audit(checkout: Path) -> None:
         destination = role_dir + "/" + relative
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
-    for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml"):
+    for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml",
+                     "commission-new-runner-bonjour.yml"):
         source = checkout / "playbooks" / playbook
         if not source.is_file() or source.is_symlink():
             raise Blocked("Pinned PVE/media playbook missing")
@@ -1124,6 +1192,23 @@ def stage_pve_access_audit(checkout: Path) -> None:
 
 
 
+def commission_new_runner_mdns(site: str, runner_cidr: str, pve_ip: str) -> None:
+    """Apply reusable Bonjour role ONLY to freshly commissioned Debian runner."""
+    play = "/opt/digitalhouses/bootstrap/pve-access/playbooks/commission-new-runner-bonjour.yml"
+    result = pct_guest(
+        "env", "ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles",
+        "/opt/ansible/venv/bin/ansible-playbook", "-i", "localhost,", play,
+        "-e", "dh_runner_mdns_first_boot=true",
+        "-e", "dh_runner_hostname=" + runner_hostname(site),
+        "-e", "dh_runner_cidr=" + runner_cidr,
+        "-e", "dh_pve_ip=" + pve_ip,
+        timeout=600,
+    )
+    if "NEW_RUNNER_BONJOUR=VERIFIED" not in result:
+        raise Blocked("NEW_RUNNER_BONJOUR_NOT_VERIFIED")
+    print("NEW_RUNNER_BONJOUR=VERIFIED", flush=True)
+
+
 def stage_site_data_provider(checkout: Path) -> None:
     """Commission fixed helpers; owner must separately provision scoped GitHub read credential."""
     host_helper = checkout / "bootstrap/dh-site-data-pve-refresh.py"
@@ -1136,6 +1221,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned media VM deploy helper missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(media_helper), "/usr/local/sbin/dh-pve-media-deploy")
+    runtime_helper = checkout / "bootstrap/dh-pve-media-runtime.py"
+    if runtime_helper.is_symlink() or not runtime_helper.is_file():
+        raise Blocked("Pinned PVE MQTT runtime helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(runtime_helper), "/usr/local/sbin/dh-pve-media-runtime")
     for source, target, mode in (
         ("bootstrap/dh-site-data-runner.py", "/usr/local/sbin/dh-site-data-runner", "0700"),
         ("bootstrap/dh-site-data.service", "/etc/systemd/system/dh-site-data.service", "0644"),
@@ -1498,6 +1588,9 @@ def apply(args, template):
                                          args.pve_ip, checkout,
                                          args.expected_fleet_commit, owner_master, env,
                                          restore_only=bool(args.resume_semaphore))
+        # Only brand-new CT or resume-fresh; no implicit mature runner retrofit.
+        if not (args.resume or args.resume_ansible or args.resume_semaphore):
+            commission_new_runner_mdns(args.site, args.runner_cidr, args.pve_ip)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")

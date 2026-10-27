@@ -71,6 +71,7 @@
         netalertx_native_approved: true
         netalertx_native_target_ctid: "{{ netalertx.vmid }}"
         netalertx_native_expected_hostname: "{{ netalertx.hostname }}"
+        netalertx_native_ipv4_cidr: "{{ netalertx.network.ipv4 }}"
         netalertx_native_expected_machine_id: "{{ netalertx_guest_machine_id.stdout }}"
         netalertx_native_protected_ctids: "{{ netalertx.security.protected_vmids }}"
         netalertx_native_release_tag: "{{ netalertx.application.release }}"

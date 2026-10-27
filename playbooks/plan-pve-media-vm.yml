@@ -37,10 +37,13 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/media_vm.yml"
 
+    - name: Validate Fleet-provided media identities before PVE worker
+      ansible.builtin.import_tasks: media-accounts-preflight.yml
     - name: Validate canonical storage inventory
       ansible.builtin.assert:
         that:
-          - media_vm.storage.pool_name == site.id ~ '-pool'
+          - media_vm.storage.pool_name is match('^[a-z][a-z0-9_-]{1,62}$')
+          - media_raw_disk_action != 'erase' or media_vm.storage.pool_name == site.owner_slug ~ '-pool'
           - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
           - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
           - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
@@ -134,11 +137,14 @@
     - name: Provision only when canonical Fleet authorizes media server
       ansible.builtin.assert:
         that:
+          - media_plan_summary.blockers is sequence
+          - media_plan_summary.blockers is not string
+          - media_plan_summary.blockers | length == 0
           - (media_plan_summary.gpu_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
           - (media_plan_summary.sata_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
           - media_vm.approvals.gpu_cutover | bool
           - media_vm.approvals.sata_cutover | bool
-        fail_msg: "MEDIA_PCI_ALREADY_OWNED_OR_NOT_APPROVED"
+        fail_msg: "MEDIA_DEPLOY_BLOCKED_BY_PREFLIGHT: resolve all plan blockers before any writes"
       when: media_vm.approvals.provision | default(false) | bool
 
     - name: Create deployment request ID

@@ -1,0 +1,85 @@
+---
+- name: Require only the commissioned initial identities
+  ansible.builtin.assert:
+    that:
+      - media_vm.storage.mode == 'readwrite'
+      - media_vm.file_access.accounts | length == 2
+      - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+      - "'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)"
+      - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan_admin') | map(attribute='role') | first) == 'administrator'
+    fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
+
+- name: Create approved media access groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - media_group
+    - doc_group
+    - backup_group
+    - download_group
+    - admin_group
+
+- name: Create approved POSIX owners and DigitalHouses admin
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    group: "{{ 'admin_group' if item.role == 'administrator' else 'media_group' }}"
+    groups: "{{ 'media_group,doc_group,backup_group,download_group,admin_group' if item.role == 'administrator' else 'media_group,doc_group' }}"
+    append: false
+    home: /nonexistent
+    create_home: false
+    shell: /usr/sbin/nologin
+    password_lock: true
+    state: present
+  loop: "{{ media_vm.file_access.accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Permit owners to write Media dataset without recursive chmod
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2770'
+
+- name: Create group-private Documents and DigitalHouses dataset roots
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.pool_name }}/{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: '2770'
+  loop:
+    - {path: doc, group: doc_group}
+    - {path: digitalhouses, group: admin_group}
+    - {path: backups, group: backup_group}
+
+- name: Install root-only idempotent Samba credential manager
+  ansible.builtin.copy:
+    src: dh-media-accounts.py
+    dest: /usr/local/sbin/dh-media-accounts
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Generate or reuse protected DigitalHouses credentials and provision Samba
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-accounts
+      - --digitalhouses-root
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses"
+      - --account
+      - "{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}"
+      - --account
+      - serzhan_admin
+  register: media_access_result
+  changed_when: "'SYNCHRONIZED' in media_access_result.stdout"
+  no_log: true
+
+- name: Require both Samba accounts ready
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_CREDENTIALS=READY' in media_access_result.stdout_lines"
+    fail_msg: MEDIA_ACCOUNTS_PROVISION_FAILED
+  no_log: true

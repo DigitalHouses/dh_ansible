@@ -1,0 +1,83 @@
+---
+- name: Install Bonjour and HTTP portal packages
+  ansible.builtin.apt:
+    name: nginx-light
+    state: present
+    update_cache: false
+
+- name: Create directory for Bonjour service announcements
+  ansible.builtin.file:
+    path: /etc/avahi/services
+    state: directory
+    mode: '0755'
+
+- name: Announce SMB share and portal through Bonjour service discovery
+  ansible.builtin.template:
+    src: media-smb-avahi.service.j2
+    dest: /etc/avahi/services/dh-media-smb.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_avahi_changed
+
+- name: Ensure Windows WS-Discovery service
+  ansible.builtin.systemd_service:
+    name: wsdd2.service
+    enabled: true
+    state: started
+
+- name: Create media welcome page directory
+  ansible.builtin.file:
+    path: /var/www/dh-media-portal
+    state: directory
+    mode: '0755'
+
+- name: Render links for enabled services
+  ansible.builtin.template:
+    src: media-portal-index.html.j2
+    dest: /var/www/dh-media-portal/index.html
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Set nginx default host to media portal
+  ansible.builtin.template:
+    src: media-portal-nginx.conf.j2
+    dest: /etc/nginx/sites-available/default
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_nginx_changed
+
+- name: Validate nginx configuration
+  ansible.builtin.command:
+    argv: [nginx, -t]
+  changed_when: false
+
+- name: Enable local home portal
+  ansible.builtin.systemd_service:
+    name: nginx.service
+    enabled: true
+    state: "{{ 'restarted' if media_nginx_changed.changed else 'started' }}"
+
+- name: Verify local portal is responding with the application directory
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    status_code: 200
+    return_content: true
+  register: media_portal_response
+  changed_when: false
+
+- name: Require landing page to list every enabled media application
+  ansible.builtin.assert:
+    that:
+      - "'DigitalHouses' in media_portal_response.content"
+      - "'Plex' in media_portal_response.content"
+      - "'Filestash' in media_portal_response.content or not (media_vm.applications.filestash | default(false) | bool)"
+      - "'Sambee' in media_portal_response.content or not (media_vm.applications.sambee | default(false) | bool)"
+      - "'Jellyfin' in media_portal_response.content or not (media_vm.applications.jellyfin | default(false) | bool)"
+      - "'Radarr' in media_portal_response.content or not (media_vm.applications.radarr | default(false) | bool)"
+      - "'Sonarr' in media_portal_response.content or not (media_vm.applications.sonarr | default(false) | bool)"
+      - "'Prowlarr' in media_portal_response.content or not (media_vm.applications.prowlarr | default(false) | bool)"
+      - "'qBittorrent' in media_portal_response.content or not (media_vm.applications.qbittorrent | default(false) | bool)"
+    fail_msg: MEDIA_PORTAL_MISSING_ENABLED_APPLICATION_LINKS
