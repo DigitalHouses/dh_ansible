@@ -1,0 +1,80 @@
+---
+# Authenticated SMB access. Account secrets live only in private Fleet site data.
+# This must run before rendering smb.conf or restarting smbd.
+- name: Require explicit Samba accounts and writable media pool
+  ansible.builtin.assert:
+    that:
+      - media_vm.storage.mode == 'readwrite'
+      - media_vm.file_access is mapping
+      - media_vm.file_access.accounts is sequence
+      - media_vm.file_access.accounts is not string
+      - media_vm.file_access.accounts | length > 0
+      - (media_vm.file_access.accounts | map(attribute='name') | list | unique | length) == (media_vm.file_access.accounts | length)
+    fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
+  no_log: true
+
+- name: Validate media account names roles and password strength
+  ansible.builtin.assert:
+    that:
+      - item.name is match('^[a-z][a-z0-9_-]{2,30}$')
+      - item.name not in ['root', 'debian', 'nobody', 'plex', 'jellyfin', 'radarr', 'sonarr', 'prowlarr', 'qbittorrent', 'filestash', 'samba']
+      - item.role in ['reader', 'writer']
+      - item.password is string
+      - item.password | length >= 16
+      - "'\n' not in item.password"
+      - "'\r' not in item.password"
+    fail_msg: MEDIA_FILE_ACCESS_ACCOUNT_INVALID
+  loop: "{{ media_vm.file_access.accounts }}"
+  loop_control:
+    label: "{{ item.name | default('INVALID') }}"
+  no_log: true
+
+- name: Create media SMB reader and writer authorization groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - dh_media_readers
+    - dh_media_writers
+
+- name: Create declared non-login SMB identities
+  ansible.builtin.user:
+    name: "{{ item.name }}"
+    group: media_group
+    groups: "{{ 'dh_media_writers' if item.role == 'writer' else 'dh_media_readers' }}"
+    append: true
+    home: /nonexistent
+    create_home: false
+    shell: /usr/sbin/nologin
+    password_lock: true
+    state: present
+  loop: "{{ media_vm.file_access.accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
+
+- name: Reconcile Samba passwords exclusively from private Fleet
+  ansible.builtin.command:
+    argv: [smbpasswd, -s, -a, "{{ item.name }}"]
+    stdin: "{{ item.password }}\n{{ item.password }}\n"
+    stdin_add_newline: false
+  loop: "{{ media_vm.file_access.accounts }}"
+  no_log: true
+
+- name: Permit authenticated writers at the media dataset root
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  # Never recurse: existing files and directories are preserved.
+
+- name: Verify per-account Samba membership without exposing credentials
+  ansible.builtin.command:
+    argv: [pdbedit, -L, "-u", "{{ item.name }}"]
+  changed_when: false
+  loop: "{{ media_vm.file_access.accounts }}"
+  loop_control:
+    label: "{{ item.name }}"
+  no_log: true
