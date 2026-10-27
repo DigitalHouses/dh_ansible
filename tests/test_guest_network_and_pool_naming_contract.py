@@ -75,6 +75,7 @@ def test_legacy_import_keeps_old_name_and_erase_requires_owner_pool():
             "mode": "readwrite",
             "layout": {"datasets": ["media"], "directories": []},
             "destructive_without_backup": True,
+            "disk": {"wwn": "0x1111222233334444", "serial": "TESTDISK0001", "size_bytes": 1000000},
         }
         config.write_text(json.dumps(data))
         with mock.patch.object(storage.os, "geteuid", return_value=0), \
