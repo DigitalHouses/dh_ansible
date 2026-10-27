@@ -78,7 +78,7 @@ def bootstrap(secret_file, media_root):
     require(secret_file.parent.name == 'apps' and secret_file.parent.parent.name == 'credentials' and secret_file.parent.parent.parent.name == 'digitalhouses', 'PASSPORT_LOCATION_INVALID')
     require(not secret_file.is_symlink() and secret_file.is_file(), "ADMIN_PASSPORT_MISSING")
     st = secret_file.stat()
-    require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600,
+    require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o640,
             "ADMIN_PASSPORT_UNSAFE")
     lines = secret_file.read_text("ascii").splitlines()
     require(len(lines) == 2 and lines[0] == "username=serzhan_admin" and
