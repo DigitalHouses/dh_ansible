@@ -89,3 +89,31 @@ Initial application adapters (in the public code PR only, **not production verif
 The new app owners use root-only synchronization stamps that prevent normal Ansible reruns from changing credentials. These stamps and service-specific API state need a dedicated controlled *rotation* workflow. **Password rotation from the web portal is not implemented yet**: it requires a protected HTTPS origin, authenticated old-password challenge, CSRF protection, rate limiting, serialized transaction with staged state/rollback or resume, and independent verification across all enabled services. Never expose a password-change form over the existing plain HTTP port 80.
 
 **Release blocker:** This branch is not yet ready for `80 keep + import` as a completed client experience. Automated native APIs for Radarr/Sonarr/Prowlarr and Sambee are currently validated by offline fake-response tests, **not real installed application responses**. They must be tested against the exact pinned upstream releases and fail closed on incompatible API shapes. No production VM/CT/password was modified by this update.
+
+ 
+## Unified new-guest Bonjour and owner-pool create-only enforcement
+
+The reusable role `guest_network_discovery` is now part of the pinned installer
+and applies to (1) the approved Media Server Debian VM, (2) a newly provisioned
+NetAlertX Debian LXC, and (3) a newly created Ansible runner Debian LXC.
+For each new guest it checks the exact hostname, installs Avahi only where the
+selected provider is `avahi`, and independently requests `<hostname>.local`
+from another same-LAN host using multicast, checking that the reply source
+and A record both match the declared actual guest IPv4 address. Duplicate
+application-specific Avahi installation was removed. Existing other VMs/CTs
+are not bulk modified. Native appliances retain their own responder support.
+Real multicast E2E has not yet passed; offline contracts and Ansible syntax
+checks are not a substitute.
+
+ZFS naming: on a newly CREATED pool (`raw disk action = erase`), the pool name
+must match `site.owner_slug + '-pool'` such as `serzhan-pool`. A verified
+`import` keeps the exact legacy name/GUID in the Fleet inventory such as
+`serzhan-home-pool`. The media storage reconciler and planner no longer
+mistake importing legacy pools for pool creation. Existing mounts/datasets,
+NFS/SMB exports and all media paths remain anchored to `storage.pool_name`;
+there is **no automatic pool rename**.
+
+Offline acceptance on the Ansible runner: 45 PASS, 0 FAIL, one fixture-specific
+test not run. Syntax checks PASS for media planning, media guest setup,
+NetAlertX installation, and new-runner commissioning. PVE VM2238 and live
+ZFS were never modified by this PR.
