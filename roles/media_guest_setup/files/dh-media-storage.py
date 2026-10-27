@@ -117,6 +117,38 @@ def ensure_import(pool, disk, physical, access):
     return guid, True
 
 
+def physical_partitions(physical):
+    """Read verified disk's partition tree; never guess from flat lsblk JSON.
+
+    Util-linux lsblk -J without --tree returns sibling disk/partition
+    records when NAME is not among selected columns. Force --tree and reject
+    any ambiguous/unexpected topology before modifying a disk.
+    """
+    topology = json.loads(command("/usr/bin/lsblk", "-J", "-T", "-o",
+                                  "PATH,PARTUUID,TYPE", physical))
+    roots = topology.get("blockdevices")
+    require(isinstance(roots, list) and len(roots) == 1,
+            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    root = roots[0]
+    require(isinstance(root, dict),
+            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    children = root.get("children", [])
+    require(isinstance(children, list),
+            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    if root.get("type") != "disk" or root.get("path") != physical:
+        # Unknown partitions on an incompletely described disk are still
+        # UNKNOWN_EXISTING_PARTITIONS, never treated as an empty disk.
+        require(not children, "UNKNOWN_EXISTING_PARTITIONS")
+        raise Blocked("DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    for part in children:
+        require(isinstance(part, dict)
+                and part.get("type") == "part"
+                and isinstance(part.get("path"), str)
+                and part["path"].startswith("/dev/"),
+                "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    return children
+
+
 def ensure_create(data, disk, physical, disk_policy="preserve"):
     """Create on an empty disk, or erase exact known pool only after approval."""
     require(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
@@ -146,11 +178,10 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
                     "DESTRUCTIVE_APPROVAL_MISSING")
             observed = legacy_active or legacy_importable
             require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
-            partitions = json.loads(command("/usr/bin/lsblk", "-J", "-o",
-                                             "PATH,PARTUUID,TYPE", physical))
-            children = partitions.get("blockdevices", [{}])[0].get("children", [])
+            children = physical_partitions(physical)
             require(len(children) == 1
-                    and children[0].get("partuuid", "").lower()
+                    and isinstance(children[0].get("partuuid"), str)
+                    and children[0]["partuuid"].lower()
                     == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
             if not legacy_active:
                 command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
@@ -162,8 +193,7 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
             print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
         else:
             # Never interpret arbitrary partitions as erase approval.
-            children = json.loads(command("/usr/bin/lsblk", "-J", "-o",
-                                          "PATH,TYPE", physical))["blockdevices"][0].get("children", [])
+            children = physical_partitions(physical)
             require(not children, "UNKNOWN_EXISTING_PARTITIONS")
             require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
                     "UNKNOWN_EXISTING_SIGNATURE")
