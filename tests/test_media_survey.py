@@ -107,6 +107,15 @@ class MediaSurveyTest(unittest.TestCase):
             m.sync_existing_template(api, "/project/1/templates", desired, apply=True)
         self.assertEqual(api.writes, 0)
 
+    def test_verified_fresh_creation_resets_old_ssh_key_and_waits_for_guest(self):
+        worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
+        guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
+        self.assertIn('grep -Fxq "VM_CREATED=YES" "$LOG"', worker)
+        self.assertIn('grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_MANAGED" "$LOG"', worker)
+        self.assertIn('ssh-keygen -R "$GUEST_IP"', worker)
+        self.assertIn("ansible.builtin.wait_for_connection:", guest)
+        self.assertIn("timeout: 420", guest)
+
     def test_engineer_action_reaches_exact_scoped_worker(self):
         play = (ROOT / self.media["playbook"]).read_text()
         worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
