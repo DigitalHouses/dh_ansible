@@ -286,6 +286,11 @@ def execute(path, current, requested, adapters, *, resume=False):
             finish()
             return "COMMITTED"
         except Exception:
+            # Once every adapter and the owner passport were committed,
+            # a temporary verification outage must NOT silently revert the
+            # customer's already-active new password.
+            if journal["phase"] == "commit":
+                raise Blocked("ROTATION_COMMIT_VERIFICATION_PENDING")
             rollback(journal, adapters, save)
             require(owner_password(path) == journal["old"],
                     "ROTATION_ROLLBACK_OWNER_DRIFT")
