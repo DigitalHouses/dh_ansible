@@ -66,3 +66,9 @@ qBittorrent no longer has automatic authentication bypass for the entire LAN in 
 Offline regression coverage currently includes application password persistence, qBittorrent authenticated LAN policy and idempotence, encrypted Vault MQTT extraction, per-site PVE runtime persistence, nonsecret Fleet preflight, installer staging completeness, and three Jellyfin media libraries.
 
 **No live E2E has been executed.** Both public and Fleet data-only PRs remain draft. Until code and Fleet are coordinated, PVE root helper is installed from the pinned source, local runtime is commissioned, and a read-only PVE acceptance passes, **Semaphore task #80 must not be applied**. Existing VMID 2238 and the live ZFS datasets have not been changed by this branch.
+
+## Administrative SMB access to credential handoff files
+
+The owner manually sends existing `/digitalhouses/credentials/*.txt` and `/digitalhouses/credentials/apps/*.txt` using WhatsApp. The root-owned ZFS records are readable over the *administrator-only* `[DigitalHouses]` Samba share by `serzhan_admin` (group `admin_group`) without logging into Debian as root. The `credentials` and `credentials/apps` directories use `root:admin_group 0750`; account TXT files use `root:admin_group 0640`. Ordinary owner `serzhan` is not a member of `admin_group` and is not permitted into the share. Internal synchronization stamps and service-facing hashes remain root-only. Existing root:root 0600 account TXT files are preserved and permissions reconciled without rotating their passwords.
+
+No passcodes are rendered on the anonymous HTTP portal, pushed into public Git, or logged by Semaphore. The user explicitly elected to forward credentials via WhatsApp without adding a separate delivery system.
