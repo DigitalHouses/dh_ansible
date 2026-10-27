@@ -144,7 +144,7 @@ def inspect(username):
 
 def stopped():
     check = subprocess.run(
-        ["docker", "compose", "-f", str(COMPOSE), "ps", "-q", "sambee"],
+        ["docker", "compose", "-f", str(COMPOSE), "ps", "--all", "-q", "sambee"],
         capture_output=True, timeout=15, check=True, text=True)
     container = check.stdout.strip()
     require(bool(re.fullmatch(r"[0-9a-f]{12,64}", container)),
