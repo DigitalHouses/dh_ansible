@@ -17,6 +17,12 @@
     name: [git, python3-venv]
     state: present
 
+- name: Ensure native Plex Agent service group before writing MQTT configuration
+  ansible.builtin.group:
+    name: digitalhouses_plex_agent
+    system: true
+    state: present
+
 - name: Create protected Plex Agent configuration directory
   ansible.builtin.file:
     path: /etc/digitalhouses_plex_agent
@@ -30,8 +36,8 @@
     src: digitalhouses-plex-agent.conf.j2
     dest: /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
     owner: root
-    group: root
-    mode: '0600'
+    group: digitalhouses_plex_agent
+    mode: '0640'
   register: media_plex_agent_config
   no_log: true
 
