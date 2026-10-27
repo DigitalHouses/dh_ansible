@@ -47,52 +47,39 @@
       "view": "02 · Развёртывание",
       "survey_vars": [
         {
-          "name": "media_storage_action",
-          "title": "Режим работы с хранилищем",
-          "description": "Создать новое ZFS-хранилище или импортировать существующее. При наличии старых данных режим create требует отдельного разрешения на уничтожение.",
+          "name": "media_vm_action",
+          "title": "Виртуальная машина (VM Action)",
+          "description": "create — создать новую, существующая VM = ошибка; recreate — удалить только проверенную VM объекта и создать новую; keep — сохранить существующую VM и Debian, отсутствующая VM = ошибка.",
           "type": "enum",
           "required": true,
           "values": [
             {
-              "name": "Создать новое хранилище (create)",
+              "name": "Создать только новую VM (create)",
               "value": "create"
             },
             {
-              "name": "Подключить существующее (import)",
-              "value": "import"
-            }
-          ]
-        },
-        {
-          "name": "media_vm_policy",
-          "title": "Если медиасервер уже существует — пересоздать VM?",
-          "description": "Нет: сохранить существующую VM и привести её к конфигурации Fleet Detail. Да: удалить только проверенную VM этого объекта и установить Debian заново.",
-          "type": "enum",
-          "required": true,
-          "values": [
-            {
-              "name": "Нет — сохранить существующую VM (keep)",
-              "value": "keep"
-            },
-            {
-              "name": "Да — пересоздать VM (recreate)",
+              "name": "Пересоздать проверенную VM (recreate)",
               "value": "recreate"
+            },
+            {
+              "name": "Оставить существующую VM (keep)",
+              "value": "keep"
             }
           ]
         },
         {
-          "name": "media_disk_policy",
-          "title": "Удалить содержимое переданных физических дисков?",
-          "description": "Сохранить: никаких ZFS destroy, wipefs или новой разметки на занятых дисках. Удалить: только при create и после проверки WWN, serial, размера и старого пула.",
+          "name": "media_raw_disk_action",
+          "title": "Физический диск (Raw Disk Action)",
+          "description": "import — подключить канонический ZFS-пул и дополнить недостающие датасеты/каталоги без удаления; erase — уничтожить утверждённое ZFS-хранилище и создать структуру заново. При erase все данные на утверждённом диске безвозвратно удаляются.",
           "type": "enum",
           "required": true,
           "values": [
             {
-              "name": "Сохранить данные (preserve)",
-              "value": "preserve"
+              "name": "Импортировать ZFS без удаления (import)",
+              "value": "import"
             },
             {
-              "name": "Удалить данные без backup (erase)",
+              "name": "Очистить диск и создать ZFS заново (erase)",
               "value": "erase"
             }
           ]
