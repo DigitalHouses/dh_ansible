@@ -50,6 +50,7 @@ CODE_FILES = (
     "roles/pve_media_vm_plan/tasks/main.yml",
     "bootstrap/dh-site-data-runner.py",
     "bootstrap/dh-site-data-pve-refresh.py",
+    "bootstrap/dh-pve-media-runtime.py",
     "bootstrap/dh-site-data.service",
     "bootstrap/dh-site-data.path",
     "bootstrap/fleet-master-gate.py",
@@ -1084,6 +1085,22 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "tasks/apps.yml"),
         ("media_guest_setup", "templates/media-filestash.service.j2"),
         ("media_guest_setup", "templates/media-sambee-compose.yml.j2"),
+        ("media_guest_setup", "tasks/file_access.yml"),
+        ("media_guest_setup", "tasks/app_accounts.yml"),
+        ("media_guest_setup", "tasks/jellyfin_bootstrap.yml"),
+        ("media_guest_setup", "tasks/plex_agent.yml"),
+        ("media_guest_setup", "tasks/discovery_portal.yml"),
+        ("media_guest_setup", "tasks/nfs_backups.yml"),
+        ("media_guest_setup", "files/dh-media-accounts.py"),
+        ("media_guest_setup", "files/dh-media-app-accounts.py"),
+        ("media_guest_setup", "files/dh-qbt-admin.py"),
+        ("media_guest_setup", "files/dh-jellyfin-bootstrap.py"),
+        ("media_guest_setup", "files/dh-filestash-smb-config.py"),
+        ("media_guest_setup", "templates/digitalhouses-plex-agent.conf.j2"),
+        ("media_guest_setup", "templates/media-smb-avahi.service.j2"),
+        ("media_guest_setup", "templates/media-portal-nginx.conf.j2"),
+        ("media_guest_setup", "templates/media-portal-index.html.j2"),
+        ("media_guest_setup", "templates/media-pve-nfs.exports.j2"),
     ):
         role_dir = folder + "/roles/" + role
         stage_guest_root_directory(folder + "/roles", stage="pve_access")
@@ -1136,6 +1153,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned media VM deploy helper missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(media_helper), "/usr/local/sbin/dh-pve-media-deploy")
+    runtime_helper = checkout / "bootstrap/dh-pve-media-runtime.py"
+    if runtime_helper.is_symlink() or not runtime_helper.is_file():
+        raise Blocked("Pinned PVE MQTT runtime helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(runtime_helper), "/usr/local/sbin/dh-pve-media-runtime")
     for source, target, mode in (
         ("bootstrap/dh-site-data-runner.py", "/usr/local/sbin/dh-site-data-runner", "0700"),
         ("bootstrap/dh-site-data.service", "/etc/systemd/system/dh-site-data.service", "0644"),
