@@ -48,7 +48,12 @@ def test_private_runtime_diagnostic_reports_code_not_password():
 def test_original_ansible_sensitive_jellyfin_task_remains_no_log():
     tasks=yaml.safe_load(
         (ROOT/"roles/media_guest_setup/tasks/jellyfin_bootstrap.yml").read_text())
-    step=next(x for x in tasks if x["name"]==
+    def nested(items):
+        for item in items:
+            yield item
+            for section in ("block", "rescue", "always"):
+                yield from nested(item.get(section, []))
+    step=next(x for x in nested(tasks) if x["name"]==
               "Complete and verify Jellyfin setup without disclosing owner password")
     assert step["no_log"] is True
     code=PATH.read_text()

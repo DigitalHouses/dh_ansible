@@ -172,17 +172,17 @@ class GuestLifecycle(unittest.TestCase):
         m = self.m
         for raw_action in ("erase", "import"):
             with (patch.object(m.Path, "exists", return_value=True),
-                  patch.object(m, "config", return_value={"name": "media-server-demo-home"}),
+                  patch.object(m, "config", return_value={"name": "mediaserver-demo-home"}),
                   patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
                 with redirect_stdout(io.StringIO()) as output:
                     m.reconcile_media_vm_lifecycle(
-                        2238, "demo-home", {}, "keep", raw_action)
+                        2238, "demo-home", {"name": "mediaserver-demo-home"}, "keep", raw_action)
                 self.assertIn("MEDIA_VM=EXISTS_PRESERVED", output.getvalue())
 
     def test_recreate_validated_for_both_raw_disk_choices(self):
         m = self.m
         for raw_action in ("import", "erase"):
-            data = {"storage": configuration()}
+            data = {"name": "mediaserver-demo-home", "storage": configuration()}
             state = {"name": "media-server-demo-home",
                      "description": m.MANAGED_MEDIA_DESCRIPTION}
             removed = [False]
@@ -208,7 +208,7 @@ class GuestLifecycle(unittest.TestCase):
 
     def test_unmanaged_vm_can_only_be_recreated_with_explicit_erase(self):
         m = self.m
-        data = {"storage": configuration()}
+        data = {"name": "mediaserver-demo-home", "storage": configuration()}
         state = {"name": "media-server-demo-home", "description": "legacy"}
         with (patch.object(m.Path, "exists", return_value=True),
               patch.object(m, "config", return_value=state),
@@ -232,6 +232,7 @@ class GuestLifecycle(unittest.TestCase):
     def test_legacy_vdev_must_be_on_approved_ssd(self):
         m = self.m
         data = {
+            "name": "mediaserver-demo-home",
             "pci": {"gpu": "0000:00:02.0", "sata_controller": "0000:00:17.0"},
             "storage": configuration(),
         }
