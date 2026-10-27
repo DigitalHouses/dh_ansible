@@ -47,7 +47,7 @@ def test_all_shares_authorized_and_anonymous_access_blocked():
     assert smb.count("guest ok = no") == 4
     assert smb.count("read only = no") == 4
     assert smb.count("valid users = serzhan serzhan_admin") == 2
-    assert smb.count("valid users = serzhan_admin") == 4
+    assert smb.count("valid users = serzhan_admin") == 2
     for forbidden in ("guest only = yes", "guest ok = yes", "force user = nobody"):
         assert forbidden not in smb
     tasks = yaml.safe_load((ROLE / "tasks/main.yml").read_text())
