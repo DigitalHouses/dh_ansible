@@ -45,10 +45,4 @@
       failed_when: false
     - name: Block commissioning on Jellyfin stage error
       ansible.builtin.fail:
-        msg: >-
-          MEDIA_JELLYFIN_BOOTSTRAP_BLOCKED
-          {{ media_jellyfin_stage_diagnostic.stdout
-             if (media_jellyfin_stage_diagnostic.rc == 0
-                 and media_jellyfin_stage_diagnostic.stdout is match('^JELLYFIN_STAGE=[A-Z0-9_]+ JELLYFIN_ERROR=[A-Z0-9_]+
-))
-             else 'JELLYFIN_STAGE_UNAVAILABLE' }}
+        msg: "MEDIA_JELLYFIN_BOOTSTRAP_BLOCKED {{ media_jellyfin_stage_diagnostic.stdout if media_jellyfin_stage_diagnostic.rc == 0 else 'JELLYFIN_STAGE_UNAVAILABLE' }}"
