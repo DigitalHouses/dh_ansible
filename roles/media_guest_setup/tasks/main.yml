@@ -161,6 +161,8 @@
       - /etc/digitalhouses/media-storage.json
       - --action
       - "{{ media_raw_disk_action }}"
+      - --owner
+      - "{{ media_owner_slug }}"
   register: media_zfs_reconcile
   changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
 
