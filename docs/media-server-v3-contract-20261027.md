@@ -72,3 +72,20 @@ Offline regression coverage currently includes application password persistence,
 The owner manually sends existing `/digitalhouses/credentials/*.txt` and `/digitalhouses/credentials/apps/*.txt` using WhatsApp. The root-owned ZFS records are readable over the *administrator-only* `[DigitalHouses]` Samba share by `serzhan_admin` (group `admin_group`) without logging into Debian as root. The `credentials` and `credentials/apps` directories use `root:admin_group 0750`; account TXT files use `root:admin_group 0640`. Ordinary owner `serzhan` is not a member of `admin_group` and is not permitted into the share. Internal synchronization stamps and service-facing hashes remain root-only. Existing root:root 0600 account TXT files are preserved and permissions reconciled without rotating their passwords.
 
 No passcodes are rendered on the anonymous HTTP portal, pushed into public Git, or logged by Semaphore. The user explicitly elected to forward credentials via WhatsApp without adding a separate delivery system.
+
+
+## Approved unified client login · implementation update (2026-10-27)
+
+The **single client-facing** username is the Fleet owner identity, for this site `serzhan`. The authoritative password is the existing protected ZFS file `/serzhan-home-pool/digitalhouses/credentials/serzhan.txt`, generated once as **eight alphanumeric characters**. No application-specific client password files are generated, and a rerun reads the current owner value rather than regenerating it. The separate `serzhan_admin` POSIX/Samba identity is a DigitalHouses operator identity, not a second password the household must use for its media applications.
+
+Initial application adapters (in the public code PR only, **not production verified**):
+- Windows/macOS SMB and Filestash's Samba passthrough use the owner Samba credential. Filestash's configuration-admin bcrypt hash is initially derived from the same owner value but never printed.
+- Jellyfin wizard uses the same owner username/password, verified by the native local authentication endpoint, with safe existing-library reconciliation.
+- qBittorrent WebUI uses that owner credential; Arr download API is intentionally permitted only over loopback.
+- Radarr/Sonarr/Prowlarr use native Forms authentication via their host-config APIs; owner credential is supplied only on first managed commissioning and an unrelated configured login blocks rather than being overwritten.
+- Sambee is configured with the owner name before first startup; the initial random upstream admin password is read only in-process from Docker startup logs and changed once via Sambee's native password API. Existing independently configured Sambee identities block rather than being overwritten. Sambee SQLite is never modified directly.
+- Plex maintains its independently authenticated Plex account. MQTT credentials and app-to-app API keys remain separate.
+
+The new app owners use root-only synchronization stamps that prevent normal Ansible reruns from changing credentials. These stamps and service-specific API state need a dedicated controlled *rotation* workflow. **Password rotation from the web portal is not implemented yet**: it requires a protected HTTPS origin, authenticated old-password challenge, CSRF protection, rate limiting, serialized transaction with staged state/rollback or resume, and independent verification across all enabled services. Never expose a password-change form over the existing plain HTTP port 80.
+
+**Release blocker:** This branch is not yet ready for `80 keep + import` as a completed client experience. Automated native APIs for Radarr/Sonarr/Prowlarr and Sambee are currently validated by offline fake-response tests, **not real installed application responses**. They must be tested against the exact pinned upstream releases and fail closed on incompatible API shapes. No production VM/CT/password was modified by this update.
