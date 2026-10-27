@@ -317,9 +317,7 @@ def reconcile_layout(data):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--action", choices=("create", "import"), required=True)
-    parser.add_argument("--disk-policy", choices=("preserve", "erase"),
-                        default="preserve")
+    parser.add_argument("--action", choices=("import", "erase"), required=True)
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROOT_REQUIRED")
     require(args.config.is_file() and not args.config.is_symlink(), "CONFIG_MISSING")
@@ -329,14 +327,12 @@ def main():
     require(data["media_dataset"] == data["pool_name"] + "/media",
             "CANONICAL_MEDIA_DATASET_MISMATCH")
     validate_layout(data)
-    require(args.action != "import" or args.disk_policy == "preserve",
-            "IMPORT_DISK_ERASE_CONFLICT")
-    require(args.action != "create" or data["mode"] == "readwrite",
-            "CREATE_REQUIRES_READWRITE")
+    require(args.action != "erase" or data["mode"] == "readwrite",
+            "ERASE_REQUIRES_READWRITE")
     disk, physical = find_disk(data["disk"])
     command("/usr/sbin/modprobe", "zfs")
-    if args.action == "create":
-        guid, changed = ensure_create(data, disk, physical, args.disk_policy)
+    if args.action == "erase":
+        guid, changed = ensure_create(data, disk, physical, "erase")
     else:
         guid, changed = ensure_import(data["pool_name"], disk, physical, data["mode"])
         print("POOL=IMPORTED", flush=True)
