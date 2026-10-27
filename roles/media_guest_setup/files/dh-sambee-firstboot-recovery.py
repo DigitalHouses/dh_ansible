@@ -78,7 +78,8 @@ def owner(passport):
             "SAMBEE_RECOVERY_OWNER_PASSPORT_UNSAFE")
     lines = passport.read_text("ascii").splitlines()
     require(len(lines) == 2 and lines[0] == "username=" + username
-            and lines[1].startswith("password=") and 6 <= len(lines[1][9:]) <= 8,
+            and lines[1].startswith("password=") and 6 <= len(lines[1][9:]) <= 8
+            and lines[1][9:].isascii() and lines[1][9:].isalnum(),
             "SAMBEE_RECOVERY_PASSPORT_MISMATCH")
     return username
 
@@ -112,6 +113,8 @@ def inspect(username):
         directory(DATA / "mobile_logs", 1000)
         require(not list((DATA / "mobile_logs").iterdir()),
                 "SAMBEE_RECOVERY_USER_LOGS_EXIST")
+    for filename in elements - {"mobile_logs"}:
+        regular(DATA / filename, 1000)
     if "sambee.db" not in elements:
         require(not already, "SAMBEE_RECOVERY_INCOMPLETE")
         require(not (elements - {"mobile_logs"}), "SAMBEE_RECOVERY_DB_MISSING")
