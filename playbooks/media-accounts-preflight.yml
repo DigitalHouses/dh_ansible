@@ -31,3 +31,24 @@
     that:
       - (media_vm.file_access.accounts | map(attribute='name') | list | unique | length) == 2
     fail_msg: MEDIA_FILE_ACCESS_DUPLICATE_IDENTITIES
+
+- name: Require complete media v3 site declaration before PVE worker
+  ansible.builtin.assert:
+    that:
+      - media_vm.name == 'mediaserver-' ~ site.owner_slug
+      - media_vm.backup_export is defined
+      - media_vm.backup_export is mapping
+      - media_vm.backup_export.storage_id == 'dh_media_backups'
+      - media_vm.backup_export.pve_host == pve.host
+      - media_vm.backup_export.path == '/' ~ media_vm.storage.pool_name ~ '/backups/pve'
+      - media_vm.plex_agent is defined
+      - media_vm.plex_agent is mapping
+      - media_vm.plex_agent.mqtt is defined
+      - media_vm.plex_agent.mqtt.host is match('^[0-9a-zA-Z.-]+$')
+      - media_vm.plex_agent.mqtt.port | int >= 1
+      - media_vm.plex_agent.mqtt.port | int <= 65535
+      - media_vm.plex_agent.mqtt.username | length > 0
+      - media_vm.plex_agent.mqtt.password | length > 0
+      - media_vm.discovery.netbios_name | length <= 15
+    fail_msg: MEDIA_V3_FLEET_INCOMPLETE
+  no_log: true
