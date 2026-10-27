@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Complete an unclaimed Jellyfin startup wizard using a protected local passport."""
+import argparse
 import json
 import os
 from pathlib import Path
@@ -8,7 +9,6 @@ import sys
 import urllib.request
 import urllib.error
 
-SECRET = Path("/etc/digitalhouses/jellyfin-admin.json")
 BASE = "http://127.0.0.1:8096"
 
 
@@ -30,13 +30,14 @@ def request(method, path, payload=None):
         raise RuntimeError("JELLYFIN_HTTP_" + str(error.code))
 
 
-def bootstrap():
+def bootstrap(secret_file):
     require(os.geteuid() == 0, "ROOT_ONLY")
-    require(not SECRET.is_symlink() and SECRET.is_file(), "ADMIN_PASSPORT_MISSING")
-    st = SECRET.stat()
+    require(secret_file.parent.name == 'apps' and secret_file.parent.parent.name == 'credentials' and secret_file.parent.parent.parent.name == 'digitalhouses', 'PASSPORT_LOCATION_INVALID')
+    require(not secret_file.is_symlink() and secret_file.is_file(), "ADMIN_PASSPORT_MISSING")
+    st = secret_file.stat()
     require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600,
             "ADMIN_PASSPORT_UNSAFE")
-    credentials = json.loads(SECRET.read_text("utf-8"))
+    credentials = json.loads(secret_file.read_text("utf-8"))
     require(isinstance(credentials, dict) and
             credentials.get("username") == "serzhan_admin" and
             isinstance(credentials.get("password"), str) and
@@ -63,7 +64,9 @@ def bootstrap():
 
 if __name__ == "__main__":
     try:
-        bootstrap()
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--credential-file', type=Path, required=True)
+        bootstrap(parser.parse_args().credential_file)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as e:
         print("JELLYFIN_SETUP=BLOCKED_" + type(e).__name__, file=sys.stderr)
         sys.exit(2)
