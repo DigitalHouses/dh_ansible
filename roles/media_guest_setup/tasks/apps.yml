@@ -119,12 +119,43 @@
   register: media_filestash_unit
   when: media_vm.applications.filestash | default(true) | bool
 
+- name: Install Filestash single-login SMB backend reconciler
+  ansible.builtin.copy:
+    src: dh-filestash-smb-config.py
+    dest: /usr/local/sbin/dh-filestash-smb-config
+    owner: root
+    group: root
+    mode: '0700'
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Reconcile Filestash SMB passthrough without creating web users
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-filestash-smb-config]
+  register: media_filestash_smb
+  changed_when: "'FILESTASH_SMB=RECONCILED' in media_filestash_smb.stdout"
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Inspect protected Filestash administrator environment
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/filestash.env
+  register: media_filestash_admin_env
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Refuse unclaimed Filestash admin setup on reachable HTTP port
+  ansible.builtin.assert:
+    that:
+      - media_filestash_admin_env.stat.isreg | default(false)
+      - media_filestash_admin_env.stat.pw_name == 'root'
+      - media_filestash_admin_env.stat.mode == '0600'
+    fail_msg: MEDIA_FILESTASH_ADMIN_CREDENTIALS_NOT_COMMISSIONED
+  when: media_vm.applications.filestash | default(true) | bool
+
 - name: Start Filestash
   ansible.builtin.systemd_service:
     name: filestash.service
     daemon_reload: true
     enabled: true
-    state: "{{ 'restarted' if media_filestash_unit.changed or media_filestash_binary.changed else 'started' }}"
+    state: "{{ 'restarted' if media_filestash_unit.changed or media_filestash_binary.changed or media_filestash_smb.changed else 'started' }}"
   when: media_vm.applications.filestash | default(true) | bool
 
 - name: Wait for Filestash HTTP UI
