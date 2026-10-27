@@ -218,6 +218,8 @@
           {{
             {
               'nonce': pve_media_plan_nonce,
+              'requested_vm_action': media_vm_action,
+              'requested_disk_action': media_raw_disk_action,
               'site': site.id,
               'name': media_vm.name,
               'vmid': media_vm.vmid,
