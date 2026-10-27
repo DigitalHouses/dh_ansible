@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import urllib.request
 
 PROGS = Path("/usr/local/sbin")
 MANIFEST = Path("/etc/digitalhouses/media-password-rotation.json")
@@ -101,6 +102,9 @@ def main():
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROTATION_ROOT_REQUIRED")
+    # Never allow ambient HTTP_PROXY/HTTPS_PROXY to receive local API credentials.
+    urllib.request.install_opener(
+        urllib.request.build_opener(urllib.request.ProxyHandler({})))
     data, path = configuration(args.manifest)
     engine = load("dh-media-password-transaction")
     adapters = load("dh-media-password-adapters")
