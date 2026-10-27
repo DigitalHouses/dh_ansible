@@ -88,6 +88,9 @@ def bootstrap(secret_file, media_root):
     public = request("GET", "/System/Info/Public")
     require(isinstance(public, dict), "JELLYFIN_PUBLIC_STATUS_INVALID")
     if not public.get("StartupWizardCompleted"):
+        initial = request("GET", "/Startup/Configuration")
+        require(isinstance(initial, dict), "JELLYFIN_STARTUP_CONFIG_INVALID")
+        request("POST", "/Startup/Configuration", initial)
         request("POST", "/Startup/User",
                 {"Name": "serzhan_admin", "Password": credentials["password"]})
         request("POST", "/Startup/RemoteAccess",
