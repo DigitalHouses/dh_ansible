@@ -51,7 +51,8 @@
   register: media_nginx_changed
 
 - name: Validate nginx configuration
-  ansible.builtin.command: [nginx, -t]
+  ansible.builtin.command:
+    argv: [nginx, -t]
   changed_when: false
 
 - name: Enable local home portal
