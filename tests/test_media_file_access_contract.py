@@ -7,13 +7,20 @@ ROLE = ROOT / "roles/media_guest_setup"
 
 
 def test_early_preflight_before_worker_deploy():
-    tasks = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())[0]["pre_tasks"]
-    names = [t["name"] for t in tasks]
-    assert names.index("Fail closed unless private Fleet declares SMB access identities") < names.index("Reject invalid SMB accounts before any destructive PVE action")
-    assert names.index("Reject invalid SMB accounts before any destructive PVE action") < names.index("Reject duplicated SMB account identities before PVE worker")
-    assert names.index("Reject duplicated SMB account identities before PVE worker") < names.index("Validate canonical storage inventory")
-    assert "MEDIA_FILE_ACCESS_FLEET_REQUIRED" in str(tasks)
-    assert "MEDIA_FILE_ACCESS_ACCOUNT_INVALID" in str(tasks)
+    play = yaml.safe_load((ROOT / 'playbooks/plan-pve-media-vm.yml').read_text())[0]
+    pre = play['pre_tasks']
+    names = [t['name'] for t in pre]
+    idx = names.index('Validate Fleet-provided media identities before PVE worker')
+    assert idx < names.index('Validate canonical storage inventory')
+    assert pre[idx]['ansible.builtin.import_tasks'] == 'media-accounts-preflight.yml'
+    guard = yaml.safe_load((ROOT / 'playbooks/media-accounts-preflight.yml').read_text())
+    assert [t['name'] for t in guard] == [
+        'Fail closed unless private Fleet declares SMB access identities',
+        'Reject invalid SMB accounts before any destructive PVE action',
+        'Reject duplicated SMB account identities before PVE worker',
+    ]
+    assert guard[1]['no_log'] is True
+    assert 'MEDIA_FILE_ACCESS_ACCOUNT_INVALID' in str(guard)
 
 
 def test_smb_accounts_provisioned_before_smb_conf():
