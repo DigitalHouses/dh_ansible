@@ -123,12 +123,17 @@
     mode: '0644'
   when: media_vm.applications.jellyfin | default(true) | bool
 
+- name: Refresh APT after adding or reconciling Jellyfin repository
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  when: media_vm.applications.jellyfin | default(true) | bool
+
 - name: Install Jellyfin native media server
   ansible.builtin.apt:
     name: jellyfin
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: false
   when: media_vm.applications.jellyfin | default(true) | bool
 
 - name: Give Jellyfin declared media library and GPU access
