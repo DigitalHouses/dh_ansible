@@ -1,4 +1,4 @@
-# DigitalHouses: authenticated SMB over POSIX media_group (no anonymous access).
+# DigitalHouses — authenticated shared storage; no guest permissions.
 [global]
     workgroup = {{ media_vm.discovery.workgroup }}
     netbios name = {{ media_vm.discovery.netbios_name }}
@@ -9,14 +9,49 @@
     disable spoolss = yes
 
 [Media]
-    comment = Media library (movies / tvshows / music)
+    comment = Media library
     path = /{{ media_vm.storage.media_dataset }}
     browseable = yes
-    read only = yes
+    read only = no
     guest ok = no
-    valid users = @dh_media_readers @dh_media_writers
-    write list = @dh_media_writers
+    valid users = serzhan serzhan_admin
     force group = media_group
-    create mask = 0664
-    directory mask = 2775
+    create mask = 0660
+    directory mask = 2770
+    force directory mode = 2000
+
+[Documents]
+    comment = Documents
+    path = /{{ media_vm.storage.pool_name }}/doc
+    browseable = yes
+    read only = no
+    guest ok = no
+    valid users = serzhan serzhan_admin
+    force group = doc_group
+    create mask = 0660
+    directory mask = 2770
+    force directory mode = 2000
+
+[DigitalHouses]
+    comment = DigitalHouses administrator data
+    path = /{{ media_vm.storage.pool_name }}/digitalhouses
+    browseable = yes
+    read only = no
+    guest ok = no
+    valid users = serzhan_admin
+    force group = admin_group
+    create mask = 0660
+    directory mask = 2770
+    force directory mode = 2000
+
+[Backups]
+    comment = Backup administration
+    path = /{{ media_vm.storage.pool_name }}/backups
+    browseable = yes
+    read only = no
+    guest ok = no
+    valid users = serzhan_admin
+    force group = backup_group
+    create mask = 0660
+    directory mask = 2770
     force directory mode = 2000
