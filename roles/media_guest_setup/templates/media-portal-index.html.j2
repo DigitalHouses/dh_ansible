@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DigitalHouses — {{ media_vm.discovery.friendly_name | default(media_vm.name) | e }}</title>
+<style>
+:root{color-scheme:dark;font-family:system-ui,Arial,sans-serif;background:#111a26;color:#f2f6fc}
+body{margin:auto;max-width:970px;padding:32px 24px 60px}
+h1{font-size:clamp(2rem,5vw,3rem);margin:0 0 16px}
+h2{margin-top:38px;font-size:1.3rem}
+p,small{color:#afc0d0;line-height:1.6}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px}
+a.card{display:block;text-decoration:none;color:inherit;background:#1c3043;border:1px solid #36526b;border-radius:14px;padding:24px}
+a.card:hover,a.card:focus-visible{outline:2px solid #91c7f1}
+strong{display:block;font-size:1.1rem;margin-bottom:8px}
+code{color:#e1f1ff;overflow-wrap:anywhere}
+</style>
+</head>
+<body>
+<p>DigitalHouses · сервисы дома</p>
+<h1>{{ media_vm.discovery.friendly_name | default(media_vm.name) | e }}</h1>
+<p>Здесь собраны ссылки на приложения вашего дома. Эта страница не содержит паролей.</p>
+<h2>Медиатека и файлы</h2>
+<div class="grid">
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:32400/web"><strong>Plex</strong><small>Фильмы, сериалы и музыка</small></a>
+{% if media_vm.applications.jellyfin | default(false) | bool %}
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8096"><strong>Jellyfin</strong><small>Альтернативная медиатека</small></a>
+{% endif %}
+{% if media_vm.applications.filestash | default(false) | bool %}
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8334"><strong>Filestash</strong><small>Файлы через браузер</small></a>
+{% endif %}
+{% if media_vm.applications.sambee | default(false) | bool %}
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8000"><strong>Sambee</strong><small>Веб-файловый менеджер</small></a>
+{% endif %}
+</div>
+{% if media_vm.portal is defined and media_vm.portal.links is defined %}
+<h2>Другие сервисы дома</h2>
+<div class="grid">
+{% for link in media_vm.portal.links %}
+<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Открыть приложение') | e }}</small></a>
+{% endfor %}
+</div>
+{% endif %}
+{% if media_vm.portal is defined and media_vm.portal.show_admin_links | default(false) | bool %}
+<h2>Администрирование</h2>
+<div class="grid">
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:7878"><strong>Radarr</strong><small>Фильмы</small></a>
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8989"><strong>Sonarr</strong><small>Сериалы</small></a>
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:9696"><strong>Prowlarr</strong><small>Источники поиска</small></a>
+<a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8080"><strong>qBittorrent</strong><small>Загрузки</small></a>
+</div>
+{% endif %}
+<p>Сетевой доступ: Windows — <code>{{ media_vm.discovery.netbios_name | e }}</code> в разделе «Сеть»; macOS — Finder → «Сеть» или <code>smb://{{ media_vm.network.ipv4.split('/')[0] }}/Media</code>.</p>
+</body>
+</html>
