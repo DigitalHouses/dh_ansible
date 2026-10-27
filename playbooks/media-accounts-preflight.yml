@@ -18,7 +18,7 @@
       - item.name not in ['root', 'debian', 'nobody', 'plex', 'jellyfin', 'radarr', 'sonarr', 'prowlarr', 'qbittorrent', 'filestash', 'samba']
       - item.role in ['reader', 'writer']
       - item.password is string
-      - item.password | length >= 16
+      - item.password | length == 8
       - item.password | regex_search('[\\r\\n]') is none
     fail_msg: MEDIA_FILE_ACCESS_ACCOUNT_INVALID
   loop: '{{ media_vm.file_access.accounts }}'
