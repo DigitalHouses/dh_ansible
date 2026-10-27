@@ -61,6 +61,19 @@ def record_diagnostic(error):
         pass
 
 
+def inspect_diagnostic():
+    require(DIAGNOSTIC.is_file() and not DIAGNOSTIC.is_symlink(),
+            "JELLYFIN_DIAGNOSTIC_UNAVAILABLE")
+    st = DIAGNOSTIC.lstat()
+    require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600
+            and st.st_nlink == 1 and st.st_size < 160,
+            "JELLYFIN_DIAGNOSTIC_UNSAFE")
+    content = DIAGNOSTIC.read_text("ascii")
+    require(re.fullmatch(r"JELLYFIN_STAGE=[A-Z0-9_]{3,76} JELLYFIN_ERROR=[A-Z0-9_]{3,76}\n",
+                         content) is not None, "JELLYFIN_DIAGNOSTIC_INVALID")
+    print(content.strip())
+
+
 def clear_diagnostic():
     if DIAGNOSTIC.exists() and not DIAGNOSTIC.is_symlink():
         st = DIAGNOSTIC.lstat()
@@ -77,15 +90,17 @@ def require(ok, msg):
 
 def request(method, path, payload=None, token=None):
     body = json.dumps(payload).encode() if payload is not None else None
-    headers = {"Content-Type": "application/json",
-               "Authorization": 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'}
+    auth = 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'
     if token:
-        headers["X-Emby-Token"] = token
+        require(isinstance(token, str) and re.fullmatch(r"[A-Za-z0-9._~-]{15,256}", token),
+                "JELLYFIN_ACCESS_TOKEN_INVALID")
+        auth += ', Token="' + token + '"'
+    headers = {"Content-Type": "application/json", "Authorization": auth}
     STAGE[0] = stage_name(method, path)
     req = urllib.request.Request(BASE + path, data=body,
                                  method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=12) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=12) as response:
             data = response.read(1024 * 1024)
             return json.loads(data) if data else {}
     except urllib.error.HTTPError as error:
@@ -176,10 +191,17 @@ def bootstrap(secret_file, media_root):
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
-        parser.add_argument('--credential-file', type=Path, required=True)
-        parser.add_argument('--media-root', type=Path, required=True)
+        parser.add_argument('--credential-file', type=Path)
+        parser.add_argument('--media-root', type=Path)
+        parser.add_argument('--inspect-stage', action='store_true')
         args = parser.parse_args()
-        bootstrap(args.credential_file, args.media_root)
+        if args.inspect_stage:
+            require(os.geteuid() == 0, "JELLYFIN_DIAGNOSTIC_ROOT_REQUIRED")
+            inspect_diagnostic()
+        else:
+            require(args.credential_file is not None and args.media_root is not None,
+                    "JELLYFIN_SETUP_ARGUMENTS_REQUIRED")
+            bootstrap(args.credential_file, args.media_root)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as e:
         record_diagnostic(e)
         print("JELLYFIN_SETUP=BLOCKED", file=sys.stderr)
