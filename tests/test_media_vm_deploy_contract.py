@@ -28,8 +28,8 @@ def test_deploy_reuses_existing_worker_no_extra_template():
     play = PLAY.read_text()
     tasks = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
     assert len([x for x in tasks if x["title"].startswith("80-Медиасервер")]) == 1
-    assert "MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)" in worker
-    assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}" in play
+    assert "MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
+    assert "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}" in play
     assert "dh-pve-access-audit.request" in play
     assert "dh-pve-media-deploy" in worker
     assert "--apply" in worker
@@ -43,6 +43,9 @@ def test_image_download_and_host_compatibility():
                  "local-lvm", "pct(\"ssh-keygen\"", "hostpci"):
         assert term in code
     assert 'old_guest_matches(vmid, site, data, managed=managed)' in code
+    assert 'reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action)' in code
+    assert '"VM_CREATE_REQUIRES_ABSENT_VM"' in code
+    assert 'VM_" + vm_action.upper() + "_REQUIRES_EXISTING_VM' in code
     assert 'LEGACY_ZFS_GUID_MISMATCH' in code
     assert 'LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH' in code
     assert 'qm("destroy", vmid' in code
@@ -141,3 +144,20 @@ def test_sambee_data_directory_writable_by_container_uid_before_launch():
     ).read_text()
     assert "./data:/app/data" in compose_text
     assert "ghcr.io/helgeklein/sambee:stable" in compose_text
+
+def test_two_select_contract_has_no_legacy_cli_flags():
+    deploy = DEPLOY.read_text()
+    worker = WORKER.read_text()
+    guest_tasks = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
+    disk_source = (ROOT / "roles/media_guest_setup/files/dh-media-storage.py").read_text()
+    assert 'parser.add_argument("--vm-action", choices=("create", "recreate", "keep"), required=True)' in deploy
+    assert 'parser.add_argument("--raw-disk-action", choices=("import", "erase"), required=True)' in deploy
+    assert 'parser.add_argument("--action", choices=("import", "erase"), required=True)' in disk_source
+    for stale in ('--storage-action', '--vm-policy', '--disk-policy',
+                  'media_storage_action', 'media_vm_policy', 'media_disk_policy'):
+        assert stale not in deploy
+        assert stale not in worker
+        assert stale not in guest_tasks
+    assert 'media_raw_disk_action' in guest_tasks
+    assert 'ensure_create(data, disk, physical, "erase")' in disk_source
+
