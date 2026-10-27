@@ -73,3 +73,19 @@ def test_media_vm_ownership_after_first_success_is_idempotent():
     role = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
     assert "rejectattr('vmid', 'equalto', media_vm.vmid | int)" in role
     assert "80-Медиасервер · Развёртывание" in (ROOT / "catalog/semaphore-tasks.json").read_text()
+
+
+def test_first_boot_debian_apt_refresh_precedes_zfs_package_install():
+    import yaml
+    tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
+    names = [task["name"] for task in tasks]
+    refresh = names.index("Refresh Debian APT indices after component reconciliation")
+    install = names.index("Install QEMU Guest Agent, supported OpenZFS and Plex dependencies")
+    components = names.index("Enable Debian contrib for supported ZFS packages")
+    assert components < refresh < install
+    assert tasks[refresh]["ansible.builtin.apt"]["update_cache"] is True
+    assert tasks[refresh]["ansible.builtin.apt"]["cache_valid_time"] == 0
+    assert tasks[install]["ansible.builtin.apt"]["update_cache"] is False
+    assert tasks[refresh].get("when") is None
+
+

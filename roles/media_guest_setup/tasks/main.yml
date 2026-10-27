@@ -26,6 +26,14 @@
     replace: '\1main contrib non-free-firmware'
   register: media_debian_sources
 
+# Debian cloud images may already carry a fresh main-only APT cache.
+# It must be rebuilt after enabling contrib, regardless of cache age;
+# otherwise Ansible package resolution fails even for available packages.
+- name: Refresh Debian APT indices after component reconciliation
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+
 - name: Install QEMU Guest Agent, supported OpenZFS and Plex dependencies
   ansible.builtin.apt:
     name:
@@ -46,8 +54,7 @@
       - wsdd2
       - smbclient
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: false
 
 - name: Verify SMART monitoring binary available for dh_pve_agent
   ansible.builtin.command:
