@@ -1,0 +1,67 @@
+---
+- name: Install Bonjour and HTTP portal packages
+  ansible.builtin.apt:
+    name: [avahi-daemon, nginx-light]
+    state: present
+    update_cache: false
+
+- name: Create directory for Bonjour service announcements
+  ansible.builtin.file:
+    path: /etc/avahi/services
+    state: directory
+    mode: '0755'
+
+- name: Announce Samba share to macOS Finder
+  ansible.builtin.template:
+    src: media-smb-avahi.service.j2
+    dest: /etc/avahi/services/dh-media-smb.service
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_avahi_changed
+
+- name: Enable Bonjour and Windows WS-Discovery services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [avahi-daemon.service, wsdd2.service]
+
+- name: Create media welcome page directory
+  ansible.builtin.file:
+    path: /var/www/dh-media-portal
+    state: directory
+    mode: '0755'
+
+- name: Render links for enabled services
+  ansible.builtin.template:
+    src: media-portal-index.html.j2
+    dest: /var/www/dh-media-portal/index.html
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Set nginx default host to media portal
+  ansible.builtin.template:
+    src: media-portal-nginx.conf.j2
+    dest: /etc/nginx/sites-available/default
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_nginx_changed
+
+- name: Validate nginx configuration
+  ansible.builtin.command: [nginx, -t]
+  changed_when: false
+
+- name: Enable local home portal
+  ansible.builtin.systemd_service:
+    name: nginx.service
+    enabled: true
+    state: "{{ 'restarted' if media_nginx_changed.changed else 'started' }}"
+
+- name: Verify local portal is responding
+  ansible.builtin.uri:
+    url: http://127.0.0.1/
+    status_code: 200
+  changed_when: false
