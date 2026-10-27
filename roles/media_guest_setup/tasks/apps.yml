@@ -150,6 +150,111 @@
     fail_msg: MEDIA_FILESTASH_ADMIN_CREDENTIALS_NOT_COMMISSIONED
   when: media_vm.applications.filestash | default(true) | bool
 
+- name: Read protected Filestash admin bcrypt hash without logging it
+  ansible.builtin.slurp:
+    src: /etc/digitalhouses/filestash.env
+  register: media_filestash_admin_credential
+  no_log: true
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Reject missing or invalid Filestash admin bcrypt hash
+  ansible.builtin.assert:
+    that:
+      - (media_filestash_admin_credential.content | b64decode) is match('^ADMIN_PASSWORD=[$]2[aby][$][0-9]{2}[$][./A-Za-z0-9]{53}\\n?
+  ansible.builtin.systemd_service:
+    name: filestash.service
+    daemon_reload: true
+    enabled: true
+    state: "{{ 'restarted' if media_filestash_unit.changed or media_filestash_binary.changed or media_filestash_smb.changed else 'started' }}"
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Wait for Filestash HTTP UI
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8334/
+    status_code: [200, 301, 302, 307, 401]
+  retries: 20
+  delay: 4
+  register: media_filestash_http
+  until: media_filestash_http.status in [200, 301, 302, 307, 401]
+  changed_when: false
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Download official Jellyfin APT signing key
+  ansible.builtin.get_url:
+    url: https://repo.jellyfin.org/jellyfin_team.gpg.key
+    dest: /etc/apt/keyrings/jellyfin.asc
+    mode: '0644'
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Convert Jellyfin signing key for APT
+  ansible.builtin.command:
+    argv: [gpg, --batch, --dearmor, -o, /etc/apt/keyrings/jellyfin.gpg, /etc/apt/keyrings/jellyfin.asc]
+    creates: /etc/apt/keyrings/jellyfin.gpg
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Configure official Debian 13 Jellyfin package repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/jellyfin.sources
+    content: |
+      Types: deb
+      URIs: https://repo.jellyfin.org/debian
+      Suites: trixie
+      Components: main
+      Architectures: amd64
+      Signed-By: /etc/apt/keyrings/jellyfin.gpg
+    mode: '0644'
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Refresh APT after adding or reconciling Jellyfin repository
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Install Jellyfin native media server
+  ansible.builtin.apt:
+    name: jellyfin
+    state: present
+    update_cache: false
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Give Jellyfin declared media library and GPU access
+  ansible.builtin.user:
+    name: jellyfin
+    groups:
+      - media_group
+      - render
+      - video
+    append: true
+  register: media_jellyfin_groups
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Start Jellyfin
+  ansible.builtin.systemd_service:
+    name: jellyfin.service
+    enabled: true
+    state: "{{ 'restarted' if media_jellyfin_groups.changed else 'started' }}"
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Verify Jellyfin HTTP service
+  ansible.builtin.uri:
+    url: http://127.0.0.1:8096/
+    status_code: [200, 301, 302, 307]
+  retries: 25
+  delay: 4
+  register: media_jellyfin_http
+  until: media_jellyfin_http.status in [200, 301, 302, 307]
+  changed_when: false
+  when: media_vm.applications.jellyfin | default(true) | bool
+
+- name: Commission Jellyfin administrator through the protected site passport
+  ansible.builtin.import_tasks: jellyfin_bootstrap.yml
+  when: media_vm.applications.jellyfin | default(true) | bool
+)
+    fail_msg: MEDIA_FILESTASH_ADMIN_HASH_INVALID
+  no_log: true
+  when: media_vm.applications.filestash | default(true) | bool
+
 - name: Start Filestash
   ansible.builtin.systemd_service:
     name: filestash.service
