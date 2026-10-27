@@ -1,6 +1,8 @@
 ---
 - name: Check exact guest identity and approved install
   ansible.builtin.import_tasks: preflight.yml
+- name: Install official dependencies
+  ansible.builtin.import_tasks: packages.yml
 - name: Apply shared Bonjour baseline to this verified new CT
   ansible.builtin.import_role:
     name: guest_network_discovery
@@ -11,8 +13,6 @@
     guest_network_discovery_cidr: "{{ netalertx_native_ipv4_cidr }}"
     guest_network_discovery_provider: avahi
     guest_network_discovery_delegate: runner
-- name: Install official dependencies
-  ansible.builtin.import_tasks: packages.yml
 - name: Enforce GraphQL loopback-only firewall before installation
   ansible.builtin.import_tasks: firewall.yml
 - name: Install pinned code, preserve persistent data
