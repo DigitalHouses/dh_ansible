@@ -37,6 +37,17 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/media_vm.yml"
 
+    - name: Fail closed unless private Fleet declares SMB access identities
+      ansible.builtin.assert:
+        that:
+          - media_vm.file_access is defined
+          - media_vm.file_access is mapping
+          - media_vm.file_access.accounts is defined
+          - media_vm.file_access.accounts is sequence
+          - media_vm.file_access.accounts is not string
+          - media_vm.file_access.accounts | length > 0
+        fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
+
     - name: Validate canonical storage inventory
       ansible.builtin.assert:
         that:
