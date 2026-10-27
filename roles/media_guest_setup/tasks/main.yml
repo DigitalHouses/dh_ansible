@@ -17,6 +17,22 @@
       - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
       - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
 
+- name: Require explicit enablement booleans for every customer-facing app
+  ansible.builtin.assert:
+    that:
+      - media_vm.applications is mapping
+      - item in media_vm.applications
+      - media_vm.applications[item] is boolean
+    fail_msg: MEDIA_APPLICATION_ENABLEMENT_MUST_BE_EXPLICIT
+  loop:
+    - jellyfin
+    - sambee
+    - filestash
+    - radarr
+    - sonarr
+    - prowlarr
+    - qbittorrent
+
 - name: Refuse ordinary Ansible apply during unfinished customer password rotation
   ansible.builtin.stat:
     path: "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/.dh-media-password-rotation.json"
