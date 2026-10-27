@@ -38,11 +38,11 @@ def bootstrap(secret_file):
     st = secret_file.stat()
     require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600,
             "ADMIN_PASSPORT_UNSAFE")
-    credentials = json.loads(secret_file.read_text("utf-8"))
-    require(isinstance(credentials, dict) and
-            credentials.get("username") == "serzhan_admin" and
-            isinstance(credentials.get("password"), str) and
-            len(credentials["password"]) >= 16, "ADMIN_PASSPORT_INVALID")
+    lines = secret_file.read_text("ascii").splitlines()
+    require(len(lines) == 2 and lines[0] == "username=serzhan_admin" and
+            lines[1].startswith("password=") and
+            len(lines[1][9:]) == 24, "ADMIN_PASSPORT_INVALID")
+    credentials = {"username": "serzhan_admin", "password": lines[1][9:]}
     public = request("GET", "/System/Info/Public")
     require(isinstance(public, dict), "JELLYFIN_PUBLIC_STATUS_INVALID")
     if not public.get("StartupWizardCompleted"):
