@@ -9,7 +9,8 @@
       - media_vm.file_access.accounts is not string
       - media_vm.storage.mode == 'readwrite'
       - media_vm.file_access.accounts | length == 2
-      - (media_vm.file_access.accounts | map(attribute='name') | sort | list) == ['serzhan', 'serzhan_admin']
+      - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+      - 'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)
     fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
 
 - name: Validate approved account roles without reading any passwords
@@ -17,8 +18,8 @@
     that:
       - item.name is match('^[a-z][a-z0-9_]{2,30}$')
       - item.role in ['owner', 'administrator']
-      - (item.name != 'serzhan' or item.role == 'owner')
-      - (item.name != 'serzhan_admin' or item.role == 'administrator')
+      - item.name not in ['root', 'debian', 'nobody', 'plex', 'jellyfin', 'radarr', 'sonarr', 'prowlarr', 'qbittorrent', 'filestash']
+      - (item.name == 'serzhan_admin') == (item.role == 'administrator')
       - item.password is not defined
     fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
   loop: "{{ media_vm.file_access.accounts }}"
