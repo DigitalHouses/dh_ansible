@@ -205,8 +205,8 @@
           - item.role in ['reader', 'writer']
           - item.password is string
           - item.password | length >= 16
-          - "'\\n' not in item.password"
-          - "'\\r' not in item.password"
+          - "'\n' not in item.password"
+          - "'\r' not in item.password"
         fail_msg: MEDIA_FILE_ACCESS_ACCOUNT_INVALID
       loop: "{{ media_vm.file_access.accounts }}"
       no_log: true
