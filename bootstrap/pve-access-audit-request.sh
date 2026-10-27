@@ -66,6 +66,16 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$GUEST_PLAY" \
     -e "media_vm_action=$VM_ACTION" \
     -e "media_raw_disk_action=$RAW_DISK_ACTION" >> "$LOG" 2>&1
+  # Backup mapping is performed only after the guest successfully exports NFS.
+  # The PVE root script revalidates VMID, name, export path and storage ID.
+  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
+    -o ConnectTimeout=8 \
+    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
+    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
+    --site "$SITE" --vm-action "$VM_ACTION" \
+    --raw-disk-action "$RAW_DISK_ACTION" --map-backups --apply >> "$LOG" 2>&1
   report PASS
   exit 0
 fi
