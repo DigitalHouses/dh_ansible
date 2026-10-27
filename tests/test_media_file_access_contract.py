@@ -9,8 +9,11 @@ ROLE = ROOT / "roles/media_guest_setup"
 def test_early_preflight_before_worker_deploy():
     tasks = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())[0]["pre_tasks"]
     names = [t["name"] for t in tasks]
-    assert names.index("Fail closed unless private Fleet declares SMB access identities") < names.index("Validate canonical storage inventory")
+    assert names.index("Fail closed unless private Fleet declares SMB access identities") < names.index("Reject invalid SMB accounts before any destructive PVE action")
+    assert names.index("Reject invalid SMB accounts before any destructive PVE action") < names.index("Reject duplicated SMB account identities before PVE worker")
+    assert names.index("Reject duplicated SMB account identities before PVE worker") < names.index("Validate canonical storage inventory")
     assert "MEDIA_FILE_ACCESS_FLEET_REQUIRED" in str(tasks)
+    assert "MEDIA_FILE_ACCESS_ACCOUNT_INVALID" in str(tasks)
 
 
 def test_smb_accounts_provisioned_before_smb_conf():
