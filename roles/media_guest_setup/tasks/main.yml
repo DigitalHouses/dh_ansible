@@ -215,6 +215,9 @@
 - name: Require Fleet identities and provision authenticated SMB access
   ansible.builtin.import_tasks: file_access.yml
 
+- name: Commission persistent media application administrator passwords
+  ansible.builtin.import_tasks: app_accounts.yml
+
 - name: Advertise existing media library over SMB
   ansible.builtin.template:
     src: media-smb.conf.j2
