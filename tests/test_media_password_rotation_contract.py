@@ -168,3 +168,29 @@ def test_broken_rollback_keeps_recovery_journal_and_blocks_second_request():
         assert rot.execute(owner, None, None, steps, resume=True) == "ROLLED_BACK"
         assert a.password == b.password == "Original"
         assert not (root / rot.JOURNAL).exists()
+
+
+def test_committed_password_is_not_reverted_when_one_application_temporarily_unavailable():
+    rot = transaction()
+    with tempfile.TemporaryDirectory() as d:
+        root, owner, stamps = rig(Path(d), rot)
+        a, b = LocalApp("Original"), LocalApp("Original")
+        steps = adapters(rot, owner, stamps, a, b)
+        assert rot.execute(owner, "Original", "Newpass8", steps) == "COMMITTED"
+        journal = {"schema": 1, "username": "owner",
+                   "old": "Original", "new": "Newpass8", "phase": "commit",
+                   "steps": list(steps), "applied": list(steps),
+                   "inflight": None}
+        rot.durable_json(root / rot.JOURNAL, journal)
+        with mock.patch.object(a, "verify", return_value=False):
+            try:
+                rot.execute(owner, None, None, steps, resume=True)
+            except rot.Blocked as err:
+                assert str(err) == "ROTATION_COMMIT_VERIFICATION_PENDING"
+            else:
+                assert False, "Unknown verified state after commit must remain pending"
+        assert rot.owner_password(owner) == "Newpass8"
+        assert a.password == b.password == "Newpass8"
+        assert (root / rot.JOURNAL).exists()
+        assert rot.execute(owner, None, None, steps, resume=True) == "COMMITTED"
+        assert not (root / rot.JOURNAL).exists()
