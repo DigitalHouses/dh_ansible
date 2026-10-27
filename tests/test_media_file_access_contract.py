@@ -14,7 +14,7 @@ def test_fleet_identity_preflight_precedes_pve_worker():
     guard = yaml.safe_load((ROOT / "playbooks/media-accounts-preflight.yml").read_text())
     assert len(guard) == 3
     content = str(guard)
-    assert "serzhan" in content and "serzhan_admin" in content
+    assert "serzhan_admin" in content and "administrator" in content
     assert "item.password is not defined" in content
     assert "MEDIA_FILE_ACCESS_FLEET_REQUIRED" in content
 
@@ -30,7 +30,9 @@ def test_two_privileged_identities_and_protected_credential_store():
     assert "media_group,doc_group" in create["groups"]
     pwd = tasks[names.index("Generate or reuse protected DigitalHouses credentials and provision Samba")]
     assert pwd["no_log"] is True
-    assert pwd["ansible.builtin.command"]["argv"][-4:] == ["--account", "serzhan", "--account", "serzhan_admin"]
+    assert pwd["ansible.builtin.command"]["argv"][-4] == "--account"
+    assert "selectattr" in pwd["ansible.builtin.command"]["argv"][-3]
+    assert pwd["ansible.builtin.command"]["argv"][-2:] == ["--account", "serzhan_admin"]
     script = (ROLE / "files/dh-media-accounts.py").read_text()
     ast.parse(script)
     assert "secrets.choice(ALPHABET)" in script
@@ -46,7 +48,7 @@ def test_all_shares_authorized_and_anonymous_access_blocked():
         assert share in smb
     assert smb.count("guest ok = no") == 4
     assert smb.count("read only = no") == 4
-    assert smb.count("valid users = serzhan serzhan_admin") == 2
+    assert smb.count("map(attribute='name') | first }} serzhan_admin") == 2
     assert smb.count("valid users = serzhan_admin") == 2
     for forbidden in ("guest only = yes", "guest ok = yes", "force user = nobody"):
         assert forbidden not in smb
