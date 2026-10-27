@@ -318,12 +318,20 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--action", choices=("import", "erase"), required=True)
+    parser.add_argument("--owner", required=True)
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROOT_REQUIRED")
     require(args.config.is_file() and not args.config.is_symlink(), "CONFIG_MISSING")
     data = json.loads(args.config.read_text())
     require(re.fullmatch("[a-z][a-z0-9-]{3,60}-pool", data["pool_name"]) is not None,
             "POOL_NAMING_INVALID")
+    require(re.fullmatch(r"[a-z][a-z0-9-]{1,30}", args.owner) is not None,
+            "OWNER_SLUG_INVALID")
+    # Only actual pool creation/destruction uses the canonical owner name.
+    # Import of a legacy pool must retain its exact Fleet-declared identity.
+    if args.action == "erase":
+        require(data["pool_name"] == args.owner + "-pool",
+                "NEW_POOL_OWNER_NAMING_REQUIRED")
     require(data["media_dataset"] == data["pool_name"] + "/media",
             "CANONICAL_MEDIA_DATASET_MISMATCH")
     validate_layout(data)
