@@ -30,7 +30,7 @@ def test_create_rejects_unrecognized_legacy_guid():
          patch.object(m, "imported_guid_visible", return_value=None), \
          patch.object(m, "command", side_effect=AssertionError("unexpected disk operation")):
         with pytest.raises(m.Blocked, match="LEGACY_POOL_GUID_MISMATCH"):
-            m.ensure_create(data, "/dev/disk/by-id/wwn-example", "/dev/sdb")
+            m.ensure_create(data, "/dev/disk/by-id/wwn-example", "/dev/sdb", "erase")
 
 def test_import_handler_contains_no_wipe():
     import inspect
@@ -41,7 +41,7 @@ def test_import_handler_contains_no_wipe():
 
 def test_vm_recreation_checks_exact_wwn_serial_guid_before_destroy():
     text = (ROOT / "bootstrap/dh-pve-media-deploy.py").read_text()
-    for phrase in ("old_guest_matches(vmid, site, data)",
+    for phrase in ("old_guest_matches(vmid, site, data, managed=managed)",
                    "LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH",
                    "LEGACY_ZFS_GUID_MISMATCH", "UNEXPECTED_VM_DISK_"):
         assert phrase in text
