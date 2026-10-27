@@ -130,13 +130,16 @@ def physical_partitions(physical):
     require(isinstance(roots, list) and len(roots) == 1,
             "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
     root = roots[0]
-    require(isinstance(root, dict)
-            and root.get("type") == "disk"
-            and root.get("path") == physical,
+    require(isinstance(root, dict),
             "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
     children = root.get("children", [])
     require(isinstance(children, list),
             "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
+    if root.get("type") != "disk" or root.get("path") != physical:
+        # Unknown partitions on an incompletely described disk are still
+        # UNKNOWN_EXISTING_PARTITIONS, never treated as an empty disk.
+        require(not children, "UNKNOWN_EXISTING_PARTITIONS")
+        raise Blocked("DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
     for part in children:
         require(isinstance(part, dict)
                 and part.get("type") == "part"
