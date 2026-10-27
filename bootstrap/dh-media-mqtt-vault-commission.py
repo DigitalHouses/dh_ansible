@@ -89,6 +89,9 @@ def run(argv, *, stdin=None):
     p = subprocess.run(argv, input=stdin, text=True, capture_output=True,
                        timeout=120, check=False)
     if p.returncode:
+        remote = re.search(r"(?m)^BLOCKED:([A-Z_]{3,80})$", p.stderr)
+        if remote:
+            raise RuntimeError("VAULT_WORKER_" + remote.group(1))
         raise RuntimeError("COMMAND_FAILED_" + os.path.basename(argv[0]))
     return p.stdout.strip()
 
@@ -99,7 +102,11 @@ def require(value, message):
 
 
 def prompt_from_tty():
-    with open("/dev/tty", "r+", encoding="utf-8") as tty:
+    try:
+        tty = open("/dev/tty", "r+", encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError("INTERACTIVE_TTY_UNAVAILABLE") from exc
+    with tty:
         tty.write("MQTT username: ")
         tty.flush()
         username = tty.readline().rstrip("\r\n")
@@ -131,7 +138,9 @@ def main():
                        source).hexdigest()
     require(document.get("sha") == sha, "SOURCE_GIT_SHA_MISMATCH")
     print("SOURCE_ENCRYPTED_FLEET_VAULT=VERIFIED")
+    print("MQTT_INPUT=REQUESTED", flush=True)
     username, password, master = prompt_from_tty()
+    print("MQTT_INPUT=RECEIVED", flush=True)
     payload = json.dumps({
         "cipher": base64.b64encode(source).decode("ascii"),
         "username": username, "password": password, "master": master,
@@ -167,7 +176,11 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (RuntimeError, OSError, ValueError, KeyError, subprocess.TimeoutExpired):
-        print("MQTT_VAULT_COMMISSION=BLOCKED; NO_PLAINTEXT_FILES_WRITTEN",
+    except (RuntimeError, OSError, ValueError, KeyError,
+            EOFError, subprocess.TimeoutExpired) as exc:
+        reason = str(exc) if isinstance(exc, RuntimeError) else type(exc).__name__
+        if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,99}", reason):
+            reason = "UNCLASSIFIED_ERROR"
+        print("MQTT_VAULT_COMMISSION=BLOCKED_" + reason,
               file=sys.stderr)
         sys.exit(2)
