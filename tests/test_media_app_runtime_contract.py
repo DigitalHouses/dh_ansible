@@ -19,26 +19,30 @@ def module(relative, name):
     return item
 
 
-def test_app_passwords_created_once_and_reused():
-    accounts = module("roles/media_guest_setup/files/dh-media-app-accounts.py", "app_accounts")
+def test_owner_password_is_only_application_bootstrap_source():
+    apps = module("roles/media_guest_setup/files/dh-media-app-accounts.py",
+                  "app_accounts")
     with tempfile.TemporaryDirectory() as scratch:
-        folder = Path(scratch) / "apps"
-        folder.mkdir()
-        password, created = accounts.account(folder, "jellyfin")
-        assert created and len(password) == 24
-        second, created = accounts.account(folder, "jellyfin")
-        assert not created and password == second
-        assert (folder / "jellyfin.txt").stat().st_mode & 0o777 == 0o600
-        assert "username=serzhan_admin" in (folder / "jellyfin.txt").read_text()
+        root = Path(scratch) / "serzhan-home-pool" / "digitalhouses"
+        directory = root / "credentials"
+        directory.mkdir(parents=True)
+        owner = directory / "serzhan.txt"
+        owner.write_text("username=serzhan\\npassword=8CharsAA\\n".replace("\\\\n", "\\n"))
+        owner.chmod(0o640)
+        with mock.patch.object(apps.grp, "getgrnam", return_value=type(
+                "G", (), {"gr_gid": os.getgid()})()):
+            password = apps.read_owner(root, "serzhan")
+            assert password == "8CharsAA"
+            assert list(directory.iterdir()) == [owner]
 
 
 def test_qbittorrent_sets_password_only_once_and_requires_local_only_api():
     item = module("roles/media_guest_setup/files/dh-qbt-admin.py", "qbt")
     with tempfile.TemporaryDirectory() as scratch:
-        root = Path(scratch) / "digitalhouses" / "credentials" / "apps"
+        root = Path(scratch) / "digitalhouses" / "credentials"
         root.mkdir(parents=True)
-        secret = root / "qbittorrent.txt"
-        secret.write_text("username=serzhan_admin\npassword=" + "B" * 24 + "\n")
+        secret = root / "serzhan.txt"
+        secret.write_text("username=serzhan\npassword=" + "B" * 8 + "\n")
         secret.chmod(0o640)
         state = {"bypass_local_auth": True, "bypass_auth_subnet_whitelist_enabled": False,
                  "web_ui_username": "admin"}
@@ -56,8 +60,8 @@ def test_qbittorrent_sets_password_only_once_and_requires_local_only_api():
             item.reconcile(secret)
             item.reconcile(secret)
         assert len(changes) == 1
-        assert changes[0]["web_ui_username"] == "serzhan_admin"
-        assert changes[0]["web_ui_password"] == "B" * 24
+        assert changes[0]["web_ui_username"] == "serzhan"
+        assert changes[0]["web_ui_password"] == "B" * 8
         assert changes[0]["bypass_auth_subnet_whitelist_enabled"] is False
 
 
@@ -188,23 +192,14 @@ def test_jellyfin_default_libraries_created_once():
 
 
 def test_admin_can_read_credentials_without_root_only_directory():
-    accounts = module("roles/media_guest_setup/files/dh-media-app-accounts.py", "apps_visible")
     samba = module("roles/media_guest_setup/files/dh-media-accounts.py", "samba_visible")
     with tempfile.TemporaryDirectory() as scratch:
         root = Path(scratch) / "credentials"
         root.mkdir()
         group = os.getgid()
-        accounts.safe_dir(root, group)
-        apps = root / "apps"
-        accounts.safe_dir(apps, group)
-        password, created = accounts.account(apps, "jellyfin", group)
-        assert created and len(password) == 24
-        assert apps.stat().st_mode & 0o777 == 0o750
-        assert (apps / "jellyfin.txt").stat().st_mode & 0o777 == 0o640
-        saved, reused = accounts.account(apps, "jellyfin", group)
-        assert not reused and saved == password
-        owner, created = samba.read_or_create(root / "owner.txt", "serzhan", group)
+        samba.protected_directory(root, group)
+        owner, created = samba.read_or_create(root / "serzhan.txt", "serzhan", group)
         assert created and len(owner) == 8
-        assert (root / "owner.txt").stat().st_mode & 0o777 == 0o640
-        another, created = samba.read_or_create(root / "owner.txt", "serzhan", group)
+        assert (root / "serzhan.txt").stat().st_mode & 0o777 == 0o640
+        another, created = samba.read_or_create(root / "serzhan.txt", "serzhan", group)
         assert not created and another == owner
