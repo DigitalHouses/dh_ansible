@@ -35,7 +35,7 @@ def credential(path):
     data = path.read_text("ascii").splitlines()
     require(len(data) == 2 and data[0] == "username=" + path.stem and
             data[1].startswith("password=") and
-            len(data[1][9:]) == 8 and
+            6 <= len(data[1][9:]) <= 8 and
             all(c in CHARS for c in data[1][9:]), "SAM_BEE_OWNER_FILE_INVALID")
     return path.stem, data[1][9:]
 
