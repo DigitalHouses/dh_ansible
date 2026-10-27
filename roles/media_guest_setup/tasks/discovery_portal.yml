@@ -1,7 +1,7 @@
 ---
 - name: Install Bonjour and HTTP portal packages
   ansible.builtin.apt:
-    name: [avahi-daemon, nginx-light]
+    name: nginx-light
     state: present
     update_cache: false
 
