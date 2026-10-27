@@ -323,7 +323,7 @@ def main():
     require(os.geteuid() == 0, "ROOT_REQUIRED")
     require(args.config.is_file() and not args.config.is_symlink(), "CONFIG_MISSING")
     data = json.loads(args.config.read_text())
-    require(re.fullmatch("[a-z][a-z0-9-]{3,60}-pool", data["pool_name"]) is not None,
+    require(re.fullmatch(r"[a-z][a-z0-9_-]{1,62}", data["pool_name"]) is not None,
             "POOL_NAMING_INVALID")
     require(re.fullmatch(r"[a-z][a-z0-9-]{1,30}", args.owner) is not None,
             "OWNER_SLUG_INVALID")
