@@ -97,12 +97,16 @@
     content: "deb [signed-by=/etc/apt/keyrings/plexmediaserver.v2.gpg] https://repo.plex.tv/deb/ public main\n"
     mode: '0644'
 
+- name: Refresh APT after adding or reconciling Plex repository
+  ansible.builtin.apt:
+    update_cache: true
+    cache_valid_time: 0
+
 - name: Install Plex Media Server
   ansible.builtin.apt:
     name: plexmediaserver
     state: present
-    update_cache: true
-    cache_valid_time: 3600
+    update_cache: false
 
 - name: Create canonical POSIX file groups
   ansible.builtin.group:
