@@ -110,23 +110,23 @@ def allow_force_import_of_sole_verified_vdev(pool, disk):
     """
     report = command("/usr/sbin/zpool", "import", "-d", "/dev/disk/by-id",
                      allow_failure=True) or ""
-    sections = re.split(r"(?=^\\s*pool:\\s*)", report, flags=re.MULTILINE)
+    sections = re.split(r"(?=^\s*pool:\s*)", report, flags=re.MULTILINE)
     matches = [section for section in sections
-               if re.search(r"^\\s*pool:\\s*" + re.escape(pool) + r"\\s*$",
+               if re.search(r"^\s*pool:\s*" + re.escape(pool) + r"\s*$",
                             section, flags=re.MULTILINE)]
     require(len(matches) == 1, "FORCE_IMPORT_POOL_NOT_UNIQUE")
     section = matches[0]
-    require(re.search(r"^\\s*id:\\s*\\d+\\s*$", section,
+    require(re.search(r"^\s*id:\s*\d+\s*$", section,
                       flags=re.MULTILINE) is not None,
             "FORCE_IMPORT_GUID_NOT_VISIBLE")
     require("The pool was last accessed by another system." in section,
             "FORCE_IMPORT_REQUIRES_PREVIOUS_HOSTID_WARNING")
-    require(re.search(r"^\\s*state:\\s*ONLINE\\s*$", section,
+    require(re.search(r"^\s*state:\s*ONLINE\s*$", section,
                       flags=re.MULTILINE) is not None,
             "FORCE_IMPORT_POOL_NOT_ONLINE")
     leaves = re.findall(
-        r"^\\s*(wwn-0x[0-9a-f]{16}(?:-part[0-9]+)?)\\s+"
-        r"(?:ONLINE|DEGRADED|FAULTED|UNAVAIL|OFFLINE)\\b",
+        r"^\s*(wwn-0x[0-9a-f]{16}(?:-part[0-9]+)?)\s+"
+        r"(?:ONLINE|DEGRADED|FAULTED|UNAVAIL|OFFLINE)\b",
         section, flags=re.MULTILINE | re.IGNORECASE)
     require(len(leaves) == 1 and leaves[0].lower() == Path(disk).name.lower(),
             "FORCE_IMPORT_VDEV_NOT_EXACT_DECLARED_WWN")
