@@ -21,16 +21,28 @@
     fail_msg: MEDIA_JELLYFIN_ADMIN_CREDENTIALS_NOT_COMMISSIONED
   no_log: true
 
-- name: Complete and verify Jellyfin setup without disclosing owner password
-  ansible.builtin.command:
-    argv:
-      - /usr/local/sbin/dh-jellyfin-bootstrap
-      - --credential-file
-      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
-      - --media-root
-      - "/{{ media_vm.storage.media_dataset }}"
-  register: media_jellyfin_bootstrap
-  changed_when: >-
-    'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout
-    or '=CREATED' in media_jellyfin_bootstrap.stdout
-  no_log: true
+- name: Run Jellyfin setup with protected failure-stage reporting
+  block:
+    - name: Complete and verify Jellyfin setup without disclosing owner password
+      ansible.builtin.command:
+        argv:
+          - /usr/local/sbin/dh-jellyfin-bootstrap
+          - --credential-file
+          - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
+          - --media-root
+          - "/{{ media_vm.storage.media_dataset }}"
+      register: media_jellyfin_bootstrap
+      changed_when: >-
+        'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout
+        or '=CREATED' in media_jellyfin_bootstrap.stdout
+      no_log: true
+  rescue:
+    - name: Read strictly whitelisted Jellyfin failure stage without credentials
+      ansible.builtin.command:
+        argv: [/usr/local/sbin/dh-jellyfin-bootstrap, --inspect-stage]
+      register: media_jellyfin_stage_diagnostic
+      changed_when: false
+      failed_when: false
+    - name: Block commissioning on Jellyfin stage error
+      ansible.builtin.fail:
+        msg: "MEDIA_JELLYFIN_BOOTSTRAP_BLOCKED {{ media_jellyfin_stage_diagnostic.stdout if media_jellyfin_stage_diagnostic.rc == 0 else 'JELLYFIN_STAGE_UNAVAILABLE' }}"

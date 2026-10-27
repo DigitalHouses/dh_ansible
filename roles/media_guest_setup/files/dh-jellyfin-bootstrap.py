@@ -7,10 +7,80 @@ from pathlib import Path
 import stat
 import urllib.parse
 import sys
+import re
 import urllib.request
 import urllib.error
 
 BASE = "http://127.0.0.1:8096"
+DIAGNOSTIC = Path("/run/dh-jellyfin-bootstrap.status")
+STAGE = ["NOT_STARTED"]
+
+
+def stage_name(method, path):
+    route = path.split("?", 1)[0]
+    names = {
+        "/System/Info/Public": "PUBLIC_STATUS",
+        "/Startup/Configuration": "STARTUP_CONFIG",
+        "/Startup/User": "STARTUP_USER",
+        "/Startup/RemoteAccess": "STARTUP_REMOTE_ACCESS",
+        "/Startup/Complete": "STARTUP_COMPLETE",
+        "/Users/AuthenticateByName": "OWNER_AUTH",
+        "/Library/VirtualFolders": "LIBRARY",
+    }
+    return method + "_" + names.get(route, "OTHER_FIXED_ENDPOINT")
+
+
+def sanitized_diagnostic(error):
+    stage = STAGE[0]
+    code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,75}", code):
+        code = "UNCLASSIFIED"
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,75}", stage):
+        stage = "UNKNOWN_STAGE"
+    return "JELLYFIN_STAGE=" + stage + " JELLYFIN_ERROR=" + code + "\n"
+
+
+def record_diagnostic(error):
+    if os.geteuid() != 0:
+        return
+    if DIAGNOSTIC.exists() or DIAGNOSTIC.is_symlink():
+        st = DIAGNOSTIC.lstat()
+        if (not stat.S_ISREG(st.st_mode) or st.st_uid != 0 or
+                stat.S_IMODE(st.st_mode) != 0o600 or st.st_nlink != 1):
+            return
+    fd = os.open(DIAGNOSTIC,
+                 os.O_WRONLY | os.O_CREAT | os.O_TRUNC |
+                 getattr(os, "O_NOFOLLOW", 0), 0o600)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as log:
+            log.write(sanitized_diagnostic(error))
+            log.flush()
+            os.fsync(log.fileno())
+    finally:
+        pass
+
+
+def inspect_diagnostic():
+    require(DIAGNOSTIC.is_file() and not DIAGNOSTIC.is_symlink(),
+            "JELLYFIN_DIAGNOSTIC_UNAVAILABLE")
+    st = DIAGNOSTIC.lstat()
+    require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600
+            and st.st_nlink == 1 and st.st_size < 160,
+            "JELLYFIN_DIAGNOSTIC_UNSAFE")
+    content = DIAGNOSTIC.read_text("ascii")
+    require(re.fullmatch(r"JELLYFIN_STAGE=[A-Z0-9_]{3,76} JELLYFIN_ERROR=[A-Z0-9_]{3,76}\n",
+                         content) is not None, "JELLYFIN_DIAGNOSTIC_INVALID")
+    print(content.strip())
+
+
+def clear_diagnostic():
+    if DIAGNOSTIC.exists() and not DIAGNOSTIC.is_symlink():
+        st = DIAGNOSTIC.lstat()
+        if stat.S_ISREG(st.st_mode) and st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o600:
+            DIAGNOSTIC.unlink()
+
+
 
 
 def require(ok, msg):
@@ -20,14 +90,17 @@ def require(ok, msg):
 
 def request(method, path, payload=None, token=None):
     body = json.dumps(payload).encode() if payload is not None else None
-    headers = {"Content-Type": "application/json",
-               "Authorization": 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'}
+    auth = 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'
     if token:
-        headers["X-Emby-Token"] = token
+        require(isinstance(token, str) and re.fullmatch(r"[A-Za-z0-9._~-]{15,256}", token),
+                "JELLYFIN_ACCESS_TOKEN_INVALID")
+        auth += ', Token="' + token + '"'
+    headers = {"Content-Type": "application/json", "Authorization": auth}
+    STAGE[0] = stage_name(method, path)
     req = urllib.request.Request(BASE + path, data=body,
                                  method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=12) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=12) as response:
             data = response.read(1024 * 1024)
             return json.loads(data) if data else {}
     except urllib.error.HTTPError as error:
@@ -112,15 +185,24 @@ def bootstrap(secret_file, media_root):
             "JELLYFIN_MANAGED_LOGIN_FAILED")
     print("JELLYFIN_ADMIN_AUTH=PASS")
     reconcile_libraries(media_root, auth['AccessToken'])
+    clear_diagnostic()
 
 
 if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
-        parser.add_argument('--credential-file', type=Path, required=True)
-        parser.add_argument('--media-root', type=Path, required=True)
+        parser.add_argument('--credential-file', type=Path)
+        parser.add_argument('--media-root', type=Path)
+        parser.add_argument('--inspect-stage', action='store_true')
         args = parser.parse_args()
-        bootstrap(args.credential_file, args.media_root)
+        if args.inspect_stage:
+            require(os.geteuid() == 0, "JELLYFIN_DIAGNOSTIC_ROOT_REQUIRED")
+            inspect_diagnostic()
+        else:
+            require(args.credential_file is not None and args.media_root is not None,
+                    "JELLYFIN_SETUP_ARGUMENTS_REQUIRED")
+            bootstrap(args.credential_file, args.media_root)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as e:
-        print("JELLYFIN_SETUP=BLOCKED_" + type(e).__name__, file=sys.stderr)
+        record_diagnostic(e)
+        print("JELLYFIN_SETUP=BLOCKED", file=sys.stderr)
         sys.exit(2)
