@@ -62,6 +62,7 @@
         ansible_ssh_private_key_file: /var/lib/ansible/.ssh/pve_host_write_ed25519
         ansible_ssh_common_args: -o StrictHostKeyChecking=accept-new -o IdentitiesOnly=yes
         ansible_become: true
+        media_owner_slug: "{{ site.owner_slug }}"
         ansible_python_interpreter: /usr/bin/python3
         media_vm: "{{ media_vm | combine({'plex_agent': {'mqtt': {'username': dh_media_runtime.runtime_secrets.site_secrets.plex_agent.mqtt.username, 'password': dh_media_runtime.runtime_secrets.site_secrets.plex_agent.mqtt.password}}}, recursive=True) }}"
       changed_when: false
