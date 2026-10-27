@@ -33,6 +33,15 @@
     recurse: true
   when: media_vm.applications.sambee | default(true) | bool
 
+- name: Declare the initial Sambee owner without storing a password
+  ansible.builtin.template:
+    src: media-sambee-config.toml.j2
+    dest: /opt/dh-sambee/config.toml
+    owner: root
+    group: root
+    mode: '0644'
+  when: media_vm.applications.sambee | default(true) | bool
+
 - name: Install Sambee container definition
   ansible.builtin.template:
     src: media-sambee-compose.yml.j2
@@ -56,6 +65,28 @@
   register: media_sambee_http
   until: media_sambee_http.status in [200, 302, 307, 401]
   changed_when: false
+  when: media_vm.applications.sambee | default(true) | bool
+
+- name: Install protected Sambee local-owner commissioning helper
+  ansible.builtin.copy:
+    src: dh-sambee-owner.py
+    dest: /usr/local/sbin/dh-sambee-owner
+    owner: root
+    group: root
+    mode: '0700'
+  when: media_vm.applications.sambee | default(true) | bool
+
+- name: Commission Sambee using the shared eight-character owner password
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-sambee-owner
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
+      - --compose-file
+      - /opt/dh-sambee/docker-compose.yml
+  register: media_sambee_owner
+  changed_when: "'SAM_BEE_OWNER=COMMISSIONED' in media_sambee_owner.stdout"
+  no_log: true
   when: media_vm.applications.sambee | default(true) | bool
 
 - name: Create Filestash service identity
