@@ -113,8 +113,7 @@ def main():
         old = new = None
     else:
         line = sys.stdin.buffer.readline(513)
-        require(0 < len(line) <= 512 and line.endswith(b"\n")
-                and not sys.stdin.buffer.peek(1),
+        require(0 < len(line) <= 512 and line.endswith(b"\n"),
                 "ROTATION_STDIN_INVALID")
         credentials = json.loads(line.decode("ascii"))
         require(isinstance(credentials, dict)
