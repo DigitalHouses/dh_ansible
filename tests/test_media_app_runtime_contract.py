@@ -153,7 +153,7 @@ def test_bootstrap_installer_stages_every_file_in_media_guest_role():
             if role == "media_guest_setup":
                 relative_files.add(path)
     for path in (ROOT / "roles/media_guest_setup").rglob("*"):
-        if path.is_file() and "__pycache__" not in str(path) and
-                path.suffix != ".pyc":
+        if (path.is_file() and "__pycache__" not in str(path)
+                and path.suffix != ".pyc"):
             rel = str(path.relative_to(ROOT / "roles/media_guest_setup"))
             assert rel in relative_files, "Installer does not stage " + rel
