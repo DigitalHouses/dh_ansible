@@ -125,3 +125,28 @@ def test_arr_does_not_overwrite_a_preconfigured_foreign_login():
                 assert str(err) == "ARR_PREEXISTING_LOGIN_UNMANAGED"
             else:
                 assert False, "Must never overwrite arbitrary existing Arr login"
+
+
+def test_shared_login_length_policy_for_optional_customer_change():
+    apps = load("roles/media_guest_setup/files/dh-media-app-accounts.py", "lenpolicy")
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch) / "demo-home-pool" / "digitalhouses"
+        cred = root / "credentials"
+        cred.mkdir(parents=True)
+        f = cred / "demo.txt"
+        f.chmod(0o640) if f.exists() else None
+        with mock.patch.object(apps.grp, "getgrnam", return_value=type(
+                "G", (), {"gr_gid": os.getgid()})()):
+            for length in (6, 7, 8):
+                f.write_text("username=demo\npassword=" + "B" * length + "\n")
+                f.chmod(0o640)
+                assert apps.read_owner(root, "demo") == "B" * length
+            for length in (1, 5, 9):
+                f.write_text("username=demo\npassword=" + "B" * length + "\n")
+                f.chmod(0o640)
+                try:
+                    apps.read_owner(root, "demo")
+                except RuntimeError as err:
+                    assert str(err) == "OWNER_PASSWORD_POLICY_INVALID"
+                else:
+                    assert False, "Password outside supported range must be rejected"
