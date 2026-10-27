@@ -750,6 +750,17 @@
 - name: Deploy DigitalHouses Plex Agent with private MQTT settings
   ansible.builtin.import_tasks: plex_agent.yml
 
+- name: Commission shared Bonjour baseline after guest identity and service setup
+  ansible.builtin.import_role:
+    name: guest_network_discovery
+  vars:
+    guest_network_discovery_approved: true
+    guest_network_discovery_hostname: "{{ media_vm.name }}"
+    guest_network_discovery_ip: "{{ media_vm.network.ipv4.split('/')[0] }}"
+    guest_network_discovery_cidr: "{{ media_vm.network.ipv4 }}"
+    guest_network_discovery_provider: avahi
+    guest_network_discovery_delegate: runner
+
 - name: Publish local media portal and LAN discovery
   ansible.builtin.import_tasks: discovery_portal.yml
 
