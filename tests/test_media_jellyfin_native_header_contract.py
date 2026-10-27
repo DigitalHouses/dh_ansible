@@ -64,4 +64,4 @@ def test_ansible_exception_path_only_exposes_whitelisted_safe_diagnostic():
     assert task["rescue"][0]["changed_when"] is False
     fail = task["rescue"][1]["ansible.builtin.fail"]["msg"]
     assert "MEDIA_JELLYFIN_BOOTSTRAP_BLOCKED" in fail
-    assert "media_jellyfin_stage_diagnostic.stdout is match" in fail
+    assert "media_jellyfin_stage_diagnostic.rc == 0" in fail
