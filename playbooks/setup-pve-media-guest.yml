@@ -26,5 +26,13 @@
   hosts: dh_media_guest
   gather_facts: false
   become: true
+  pre_tasks:
+    - name: Wait for freshly booted Debian SSH, cloud-init user and Python
+      ansible.builtin.wait_for_connection:
+        delay: 3
+        sleep: 5
+        connect_timeout: 8
+        timeout: 420
+      changed_when: false
   roles:
     - media_guest_setup
