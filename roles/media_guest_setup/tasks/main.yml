@@ -691,6 +691,24 @@
     - {path: 'library/movies', owner: 'radarr'}
     - {path: 'library/tvshows', owner: 'sonarr'}
 
+- name: Install root-only native media application authentication helper
+  ansible.builtin.copy:
+    src: dh-media-arr-auth.py
+    dest: /usr/local/sbin/dh-media-arr-auth
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Commission Radarr Sonarr and Prowlarr Forms authentication from shared owner
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-arr-auth
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
+  register: media_arr_auth
+  changed_when: "'=COMMISSIONED' in media_arr_auth.stdout"
+  no_log: true
+
 - name: Install native idempotent Arr API integration helper
   ansible.builtin.copy:
     src: dh-media-arr-wire.py
