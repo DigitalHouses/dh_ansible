@@ -13,7 +13,7 @@ INV_ROOT=/var/lib/ansible/site-data
 REQUEST_DATA="$(cat "$REQUEST")"
 [[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN|MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
 ACTION="${BASH_REMATCH[1]}"
-NONCE="${BASH_REMATCH[2]}"
+NONCE="${BASH_REMATCH[5]}"
 rm -f -- "$REQUEST"
 report() { printf '%s:%s\n' "$1" "$NONCE" > "$STATUS"; chmod 0644 "$STATUS"; }
 on_exit() { rc=$?; if (( rc != 0 )); then report FAILED; fi; }
