@@ -58,7 +58,7 @@ def read_or_create(path, username, group=None):
         require(len(parts) == 2 and parts[0] == "username=" + username and
                 parts[1].startswith("password="), "CREDENTIAL_FILE_INVALID")
         password = parts[1][9:]
-        require(len(password) == 8 and all(c in ALPHABET for c in password),
+        require(6 <= len(password) <= 8 and all(c in ALPHABET for c in password),
                 "CREDENTIAL_PASSWORD_INVALID")
         return password, False
     password = "".join(secrets.choice(ALPHABET) for _ in range(8))
