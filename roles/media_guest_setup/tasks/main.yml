@@ -670,7 +670,7 @@
     argv:
       - /usr/local/sbin/dh-qbt-admin
       - --credentials-file
-      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/qbittorrent.txt"
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
   register: media_qbt_admin
   changed_when: "'QBT_ADMIN=COMMISSIONED' in media_qbt_admin.stdout"
   no_log: true
