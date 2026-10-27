@@ -132,79 +132,89 @@ class GuestLifecycle(unittest.TestCase):
     def setUpClass(cls):
         cls.m = load(ROOT / "bootstrap/dh-pve-media-deploy.py")
 
-    def test_managed_vm_is_never_recreated_on_repeat_create(self):
+    def test_create_only_when_vm_does_not_exist(self):
         m = self.m
-        site = "demo-home"
-        storage = configuration()
-        data = {"storage": storage}
-        target = {"name": "media-server-demo-home",
-                  "description": m.MANAGED_MEDIA_DESCRIPTION}
-        with patch.object(m.Path, "exists", return_value=True), \
-             patch.object(m, "config", return_value=target), \
-             patch.object(m, "qm", side_effect=AssertionError("guest modified")):
-            with redirect_stdout(io.StringIO()):
-                m.recreate_legacy_guest_if_needed(2238, site, data, "create")
-
-    def test_import_does_not_attempt_vm_recreation(self):
-        m = self.m
-        with patch.object(m, "qm", side_effect=AssertionError("guest modified")):
-            m.recreate_legacy_guest_if_needed(2238, "demo-home", {}, "import")
-
-
-    def test_existing_vm_preserved_by_default(self):
-        m = self.m
-        data = {"storage": configuration()}
-        with (patch.object(m.Path, "exists", return_value=True),
-              patch.object(m, "config", return_value={"name": "media-server-demo-home"}),
-              patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
-            with redirect_stdout(io.StringIO()):
-                m.recreate_legacy_guest_if_needed(2238, "demo-home", data,
-                                                    "create", "keep", "preserve")
-
-    def test_partial_first_install_vm_is_preserved_with_explicit_erase(self):
-        m = self.m
-        with (patch.object(m.Path, "exists", return_value=True),
-              patch.object(m, "config", return_value={"name": "media-server-demo-home",
-                                                       "description": m.MANAGED_MEDIA_DESCRIPTION}),
-              patch.object(m, "qm", side_effect=AssertionError("VM modified"))):
+        with patch.object(m.Path, "exists", return_value=False), patch.object(
+                m, "qm", side_effect=AssertionError("PVE touched")):
             with redirect_stdout(io.StringIO()) as output:
                 m.recreate_legacy_guest_if_needed(
-                    2238, "demo-home", {"storage": configuration()},
-                    "create", "keep", "erase")
-            self.assertIn("MEDIA_VM=EXISTS_PRESERVED", output.getvalue())
+                    2238, "demo-home", {}, "create", "import")
+        self.assertIn("MEDIA_VM=ABSENT_CREATE_FRESH", output.getvalue())
 
-    def test_import_with_erase_is_blocked(self):
+    def test_create_existing_vm_fails_before_changes_for_both_disk_choices(self):
         m = self.m
-        with self.assertRaisesRegex(m.Blocked, "IMPORT_DISK_ERASE_CONFLICT"):
-            m.recreate_legacy_guest_if_needed(2238, "demo-home", {},
-                                                "import", "recreate", "erase")
+        for disk_action in ("import", "erase"):
+            with self.subTest(disk_action=disk_action):
+                with patch.object(m.Path, "exists", return_value=True), patch.object(
+                        m, "qm", side_effect=AssertionError("guest modified")):
+                    with self.assertRaisesRegex(m.Blocked, "VM_CREATE_ALREADY_EXISTS"):
+                        m.recreate_legacy_guest_if_needed(
+                            2238, "demo-home", {}, "create", disk_action)
 
+    def test_keep_existing_vm_for_both_disk_choices(self):
+        m = self.m
+        for disk_action in ("import", "erase"):
+            with self.subTest(disk_action=disk_action):
+                with patch.object(m.Path, "exists", return_value=True), patch.object(
+                        m, "config", return_value={"name": "media-server-demo-home"}), patch.object(
+                        m, "qm", side_effect=AssertionError("guest modified")):
+                    with redirect_stdout(io.StringIO()) as output:
+                        m.recreate_legacy_guest_if_needed(
+                            2238, "demo-home", {}, "keep", disk_action)
+                    self.assertIn("MEDIA_VM=EXISTS_PRESERVED", output.getvalue())
 
-    def test_managed_vm_recreated_only_after_explicit_answer(self):
+    def test_keep_missing_vm_rejected_for_both_disk_choices(self):
+        m = self.m
+        for disk_action in ("import", "erase"):
+            with patch.object(m.Path, "exists", return_value=False):
+                with self.assertRaisesRegex(m.Blocked, "VM_KEEP_REQUIRES_EXISTING_VM"):
+                    m.recreate_legacy_guest_if_needed(
+                        2238, "demo-home", {}, "keep", disk_action)
+
+    def test_recreate_missing_vm_rejected_for_both_disk_choices(self):
+        m = self.m
+        for disk_action in ("import", "erase"):
+            with patch.object(m.Path, "exists", return_value=False):
+                with self.assertRaisesRegex(m.Blocked, "VM_RECREATE_REQUIRES_EXISTING_VM"):
+                    m.recreate_legacy_guest_if_needed(
+                        2238, "demo-home", {}, "recreate", disk_action)
+
+    def test_recreate_verified_managed_vm_for_both_disk_choices(self):
         m = self.m
         data = {"storage": configuration(), "pci": {
             "gpu": "0000:00:02.0", "sata_controller": "0000:00:17.0"}}
-        state = {"name": "media-server-demo-home",
-                 "description": m.MANAGED_MEDIA_DESCRIPTION}
-        removed = [False]
-        calls = []
-        def qm(cmd, *_args, **_kwargs):
-            calls.append(cmd)
-            if cmd == "status":
-                return "status: stopped" if "shutdown" in calls else "status: running"
-            if cmd == "destroy":
-                removed[0] = True
-            return ""
-        with (patch.object(m.Path, "exists", side_effect=lambda: not removed[0]),
-              patch.object(m, "config", return_value=state),
-              patch.object(m, "old_guest_matches") as preflight,
-              patch.object(m, "qm", side_effect=qm)):
-            with redirect_stdout(io.StringIO()):
+        for disk_action in ("import", "erase"):
+            exists = [True]
+            calls = []
+            def qm(cmd, *_args, **_kwargs):
+                calls.append(cmd)
+                if cmd == "status":
+                    return "status: stopped" if "shutdown" in calls else "status: running"
+                if cmd == "destroy":
+                    exists[0] = False
+                return ""
+            with (patch.object(m.Path, "exists", side_effect=lambda: exists[0]),
+                  patch.object(m, "config", return_value={
+                      "name": "media-server-demo-home",
+                      "description": m.MANAGED_MEDIA_DESCRIPTION}),
+                  patch.object(m, "old_guest_matches") as preflight,
+                  patch.object(m, "qm", side_effect=qm)):
+                with redirect_stdout(io.StringIO()):
+                    m.recreate_legacy_guest_if_needed(
+                        2238, "demo-home", data, "recreate", disk_action)
+            preflight.assert_called_once_with(
+                2238, "demo-home", data, managed=True)
+            self.assertIn("shutdown", calls)
+            self.assertIn("destroy", calls)
+
+    def test_invalid_actions_fail_closed(self):
+        m = self.m
+        for vm_action, disk_action in (
+                ("unknown", "import"), ("keep", "unknown")):
+            with self.assertRaises(m.Blocked):
                 m.recreate_legacy_guest_if_needed(
-                    2238, "demo-home", data, "create", "recreate", "preserve")
-        preflight.assert_called_once_with(2238, "demo-home", data, managed=True)
-        self.assertIn("shutdown", calls)
-        self.assertIn("destroy", calls)
+                    2238, "demo-home", {}, vm_action, disk_action)
+
 
     def test_legacy_vdev_must_be_on_approved_ssd(self):
         m = self.m

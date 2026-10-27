@@ -82,11 +82,19 @@ class MediaSurveyTest(unittest.TestCase):
         m.sync_existing_template(api, route, desired, apply=True)
         self.assertEqual(api.writes, 1)
 
-    def test_existing_single_field_survey_is_extended_in_place(self):
+    def test_known_legacy_three_field_survey_is_migrated_in_place(self):
         m = self.module
         api, desired = self.make_api()
         desired["survey_vars"] = self.survey
-        api.row["survey_vars"] = self.survey[:1]
+        api.row["survey_vars"] = [
+            {"name": name, "type": "enum", "required": True,
+             "values": [{"name": v, "value": v} for v in choices]}
+            for name, choices in [
+                ("media_storage_action", ["create", "import"]),
+                ("media_vm_policy", ["keep", "recreate"]),
+                ("media_disk_policy", ["preserve", "erase"]),
+            ]
+        ]
         route = "/project/1/templates?sort=name&order=asc"
         m.sync_existing_template(api, route, desired, apply=False)
         self.assertEqual(api.writes, 0)
@@ -119,15 +127,14 @@ class MediaSurveyTest(unittest.TestCase):
         play = (ROOT / self.media["playbook"]).read_text()
         worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
         guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
-        assert "media_storage_action in ['create', 'import']" in play
-        assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}_" in play
-        assert "MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)" in worker
-        assert "--storage-action" in worker
-        assert "--vm-policy" in worker
-        assert "--disk-policy" in worker
-        assert "media_storage_action=$STORAGE_ACTION" in worker
-        assert "media_vm_policy=$VM_POLICY" in worker
-        assert "media_disk_policy=$DISK_POLICY" in worker
+        assert "media_vm_action in ['create', 'recreate', 'keep']" in play
+        assert "media_raw_disk_action in ['import', 'erase']" in play
+        assert "MEDIA_DEPLOY_{{ media_vm_action | upper }}_" in play
+        assert "MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
+        assert "--vm-action" in worker
+        assert "--raw-disk-action" in worker
+        assert "media_vm_action=$VM_ACTION" in worker
+        assert "media_raw_disk_action=$RAW_DISK_ACTION" in worker
         assert "media_vm.yml" in guest
 
 
