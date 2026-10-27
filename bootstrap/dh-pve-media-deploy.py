@@ -324,8 +324,10 @@ def recreate_legacy_guest_if_needed(vmid, site, data, action, vm_policy="keep",
     state = config(vmid)
     need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
     if vm_policy == "keep":
-        need(disk_policy == "preserve",
-             "DISK_ERASE_REQUIRES_VM_RECREATE")
+        # VM lifecycle and physical disk policy are independent. This also
+        # permits resuming a first-install run that created the VM but failed
+        # before the guest ZFS setup: create + keep + erase must not delete
+        # the now-present managed VM.
         print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
     need(qm("status", vmid) == "status: running",
