@@ -1,20 +1,21 @@
-# DigitalHouses Media Server: initial account contract
+# DigitalHouses Media Server — простой каталог паролей
 
-Status: staged, not deployed.
+Утверждено владельцем, 27 октября 2026.
 
-Private Fleet defines precisely two names and roles for serzhan-home:
+Все пароли медиасервера должны находиться в одном месте:
 
-```yaml
-file_access:
-  accounts:
-    - {name: serzhan, role: owner}
-    - {name: serzhan_admin, role: administrator}
+```text
+/digitalhouses/users/
 ```
 
-The owner belongs to media_group and doc_group. The administrator also belongs to backup_group, download_group and admin_group. These are non-login POSIX accounts with corresponding SMB identities.
+В текущем VM/ZFS это соответствует `/serzhan-home-pool/digitalhouses/users/`.
 
-Initial credentials are randomly generated once, eight alphanumeric characters each, unique to each house, and persist in root-only records under the ZFS digitalhouses dataset. Subsequent deployments reuse them. They are not published through the service portal, Samba, or public GitHub. A privileged operator retrieves individual records for secure client handoff.
+Формат: обычные текстовые файлы для каждого пользователя или приложения, например `serzhan.txt`, `serzhan_admin.txt`, `jellyfin.txt`, `filestash.txt`, `qbittorrent.txt`. Внутри — логин и пароль. Обеспечить чтение владельцем для ручной пересылки через WhatsApp. Никаких отдельных механизмов выдачи, нового Vault, дополнительных этапов доставки секретов и интерфейсов для распространения паролей.
 
-Shares: Media and Documents permit the owner and administrator. DigitalHouses and Backups permit the administrator only. Anonymous access is denied. Avoid exposing SMB on untrusted networks; eight-character secrets require additional network controls.
+Пароли первоначально создаются и сохраняются; повторный `keep + import` их не меняет. Для SMB-пользователей `serzhan` и `serzhan_admin` пароль максимум 8 символов. Отдельные пользователи позже.
 
-The user-management web UI is a later project. Filestash passthrough and macOS/Windows functional acceptance remain mandatory before production rollout.
+Системные настройки приложений настраиваются по соответствующим файлам. Никаких паролей в публичном Git, логах Semaphore или на стартовой странице. Не открывать SMB в интернет.
+
+Это решение заменяет ранее обсуждавшиеся вложенные каталоги `digitalhouses/credentials/` и схему доставки через Fleet Vault именно для пользовательских и прикладных паролей медиасервера.
+
+Текущий PR остаётся черновым, пока скрипты и Ansible-пути не приведены к этому контракту и не пройдут проверки. Работающую VM не изменять; после готовности применять `keep + import`.
