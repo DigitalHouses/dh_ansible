@@ -4,7 +4,7 @@
   ansible.builtin.assert:
     that:
       - media_vm is mapping
-      - media_vm.name == 'media-server-' ~ site.id
+      - media_vm.name == 'mediaserver-' ~ site.owner_slug
       - media_vm.vmid | int >= 2200
       - media_vm.vmid | int <= 2254
       - media_vm.os.distribution == 'debian'
@@ -19,7 +19,7 @@
       - media_vm.pci.gpu != media_vm.pci.sata_controller
       - media_vm.legacy_gpu_owner_vmid | int != media_vm.vmid | int
       - media_vm.legacy_sata_owner_vmid | int != media_vm.vmid | int
-    fail_msg: "Media VM name must be media-server-<site_id> and VMID 2000+IPv4 last octet (2xx); network/PCI must be valid."
+    fail_msg: "Media VM name must be mediaserver-<owner_slug> and VMID 2000+IPv4 last octet (2xx); network/PCI must be valid."
 
 - name: Read live PCI inventory from pinned PVE API
   ansible.builtin.uri:
@@ -91,7 +91,7 @@
   ansible.builtin.set_fact:
     media_vm_plan_blockers: >-
       {{
-        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'equalto', media_vm.name) | list | length) > 0 else [])
+        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'in', [media_vm.name, 'media-server-' ~ site.id]) | list | length) > 0 else [])
         + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
         + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
         + (['GPU_ALREADY_ASSIGNED'] if (media_vm_gpu_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
