@@ -11,7 +11,7 @@
     state: directory
     mode: '0755'
 
-- name: Announce Samba share to macOS Finder
+- name: Announce SMB share and portal through Bonjour service discovery
   ansible.builtin.template:
     src: media-smb-avahi.service.j2
     dest: /etc/avahi/services/dh-media-smb.service
@@ -61,8 +61,24 @@
     enabled: true
     state: "{{ 'restarted' if media_nginx_changed.changed else 'started' }}"
 
-- name: Verify local portal is responding
+- name: Verify local portal is responding with the application directory
   ansible.builtin.uri:
     url: http://127.0.0.1/
     status_code: 200
+    return_content: true
+  register: media_portal_response
   changed_when: false
+
+- name: Require landing page to list every enabled media application
+  ansible.builtin.assert:
+    that:
+      - "'DigitalHouses' in media_portal_response.content"
+      - "'Plex' in media_portal_response.content"
+      - "'Filestash' in media_portal_response.content or not (media_vm.applications.filestash | default(false) | bool)"
+      - "'Sambee' in media_portal_response.content or not (media_vm.applications.sambee | default(false) | bool)"
+      - "'Jellyfin' in media_portal_response.content or not (media_vm.applications.jellyfin | default(false) | bool)"
+      - "'Radarr' in media_portal_response.content or not (media_vm.applications.radarr | default(false) | bool)"
+      - "'Sonarr' in media_portal_response.content or not (media_vm.applications.sonarr | default(false) | bool)"
+      - "'Prowlarr' in media_portal_response.content or not (media_vm.applications.prowlarr | default(false) | bool)"
+      - "'qBittorrent' in media_portal_response.content or not (media_vm.applications.qbittorrent | default(false) | bool)"
+    fail_msg: MEDIA_PORTAL_MISSING_ENABLED_APPLICATION_LINKS
