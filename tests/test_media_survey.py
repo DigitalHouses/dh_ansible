@@ -88,13 +88,17 @@ class MediaSurveyTest(unittest.TestCase):
             m.sync_existing_template(api, "/project/1/templates", desired, apply=True)
         self.assertEqual(api.writes, 0)
 
-    def test_create_stops_before_any_vm_action(self):
+    def test_engineer_action_reaches_exact_scoped_worker(self):
         play = (ROOT / self.media["playbook"]).read_text()
-        assert play.index("Require engineer-selected storage action") < play.index(
-            "Load canonical site identity")
-        assert "MEDIA_CREATE_NOT_READY" in play
-        assert "when: media_storage_action == 'create'" in play
+        worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
+        guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
         assert "media_storage_action in ['create', 'import']" in play
+        assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}" in play
+        assert "MEDIA_DEPLOY_CREATE" in worker
+        assert "MEDIA_DEPLOY_IMPORT" in worker
+        assert "--storage-action" in worker
+        assert "media_storage_action=$STORAGE_ACTION" in worker
+        assert "media_vm.yml" in guest
 
 
 if __name__ == "__main__":

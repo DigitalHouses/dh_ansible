@@ -5,8 +5,10 @@
       - media_vm.storage is mapping
       - media_vm.storage.mode in ['readonly', 'readwrite']
       - media_vm.storage.pool_name is match('^[a-zA-Z][a-zA-Z0-9_-]+$')
-      - media_vm.storage.pool_guid is match('^[0-9]{8,24}$')
-      - media_vm.storage.partition_partuuid is match('^[0-9a-f-]{36}$')
+      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
+      - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
+      - media_storage_action in ['create', 'import']
+      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}$')
       - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
       - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
       - media_vm.os.distribution == 'debian'
@@ -30,6 +32,8 @@
       - zfs-dkms
       - zfsutils-linux
       - zfs-zed
+      - gdisk
+      - util-linux
       - firmware-intel-graphics
       - intel-media-va-driver
       - vainfo
@@ -90,16 +94,66 @@
     update_cache: true
     cache_valid_time: 3600
 
+- name: Create canonical POSIX file groups
+  ansible.builtin.group:
+    name: "{{ item }}"
+    state: present
+  loop:
+    - doc_group
+    - backup_group
+    - media_group
+    - admin_group
+    - download_group
+
 - name: Give Plex Intel GPU render access
   ansible.builtin.user:
     name: plex
     groups:
       - video
       - render
+      - media_group
     append: true
   register: media_plex_groups
 
-- name: Disable generic ZFS auto-import and auto-mount for this dedicated readonly guest
+- name: Create site storage configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    mode: '0750'
+
+- name: Install generic ZFS create/import reconciler
+  ansible.builtin.copy:
+    src: dh-media-storage.py
+    dest: /usr/local/sbin/dh-media-storage
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Render exact declarative ZFS configuration
+  ansible.builtin.copy:
+    content: "{{ media_vm.storage | to_nice_json }}"
+    dest: /etc/digitalhouses/media-storage.json
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Reconcile physical ZFS pool and declared datasets
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-storage
+      - --config
+      - /etc/digitalhouses/media-storage.json
+      - --action
+      - "{{ media_storage_action }}"
+  register: media_zfs_reconcile
+  changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
+
+- name: Verify site ZFS reconciler succeeded
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_STORAGE_RECONCILED=PASS' in media_zfs_reconcile.stdout_lines"
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated guest
   ansible.builtin.systemd_service:
     name: "{{ item }}"
     enabled: false
@@ -130,7 +184,19 @@
     enabled: true
     state: started
 
-- name: Advertise existing readonly media library over SMB
+- name: Reconcile shared permanent media library directories
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.media_dataset }}/{{ item }}"
+    state: directory
+    owner: root
+    group: media_group
+    mode: '2775'
+  loop:
+    - movies
+    - tvshows
+    - music
+
+- name: Advertise existing media library over SMB
   ansible.builtin.template:
     src: media-smb.conf.j2
     dest: /etc/samba/smb.conf
@@ -267,7 +333,7 @@
   ansible.builtin.assert:
     that:
       - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
-      - media_zfs_properties.results[1].stdout == media_vm.storage.pool_guid
+      - media_zfs_properties.results[1].stdout is match('^[0-9]{8,24}$')
       - media_plex_http.status == 200
 
 - name: Require declarative selection of media management applications
@@ -285,14 +351,14 @@
 
 - name: Create shared media application group
   ansible.builtin.group:
-    name: media
+    name: media_group
     system: true
     state: present
 
 - name: Create native application users
   ansible.builtin.user:
     name: "{{ item.slug }}"
-    group: media
+    group: media_group
     system: true
     home: "/var/lib/{{ item.slug }}"
     create_home: false
@@ -306,7 +372,7 @@
     path: "/var/lib/{{ item.slug }}"
     state: directory
     owner: "{{ item.slug }}"
-    group: media
+    group: media_group
     mode: '0775'
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
@@ -387,7 +453,7 @@
 - name: Create qBittorrent native service user
   ansible.builtin.user:
     name: qbittorrent
-    group: media
+    group: media_group
     home: /var/lib/qbittorrent
     shell: /usr/sbin/nologin
     create_home: true
@@ -414,7 +480,7 @@
     path: "{{ media_vm.downloads.path }}"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -437,7 +503,7 @@
     path: "{{ media_vm.downloads.path }}/incomplete"
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
@@ -446,7 +512,7 @@
     path: /var/lib/qbittorrent/.config/qBittorrent
     state: directory
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
@@ -455,7 +521,7 @@
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
     force: false
   when: media_vm.applications.qbittorrent | bool
@@ -536,7 +602,7 @@
     insertafter: '^\[Preferences\]$'
     line: "{{ item.key }}={{ item.value }}"
     owner: qbittorrent
-    group: media
+    group: media_group
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
@@ -571,7 +637,7 @@
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
     owner: "{{ item.owner }}"
-    group: media
+    group: media_group
     mode: '2775'
   loop:
     - {path: 'complete', owner: 'qbittorrent'}
@@ -594,6 +660,8 @@
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/dh-media-arr-wire
+      - --library-root
+      - "/{{ media_vm.storage.media_dataset }}"
       - --downloads
       - "{{ media_vm.downloads.path }}"
   register: media_arr_wiring
@@ -614,3 +682,6 @@
       plex: "http://{{ ansible_host }}:32400/web"
       pool_mode: "{{ media_vm.storage.mode }}"
       agent: active
+
+- name: Provision Filestash Sambee and Jellyfin
+  ansible.builtin.import_tasks: apps.yml

@@ -1,42 +1,40 @@
 #!/usr/bin/env bash
-# Import pre-existing site media pool with declared access mode; never create or destroy datasets.
+# Import only the declared pool; never format on boot.
 set -Eeuo pipefail
 
 POOL={{ media_vm.storage.pool_name | quote }}
-GUID={{ media_vm.storage.pool_guid | quote }}
-PART="/dev/disk/by-partuuid/{{ media_vm.storage.partition_partuuid }}"
-MODE={{ media_vm.storage.mode | quote }}
-case "$MODE" in
-  readonly) READONLY=on ;;
-  readwrite) READONLY=off ;;
-  *) echo "MEDIA_ZFS=INVALID_MODE"; exit 2 ;;
-esac
+WWN={{ media_vm.storage.disk.wwn | quote }}
+SERIAL={{ media_vm.storage.disk.serial | quote }}
+ACCESS={{ media_vm.storage.mode | quote }}
+DEVICE="/dev/disk/by-id/wwn-$WWN"
 
 for attempt in $(seq 1 30); do
-  if test -b "$PART"; then break; fi
+  [[ -b "$DEVICE" ]] && break
   sleep 1
 done
-test -b "$PART" || { echo "MEDIA_ZFS=PARTITION_MISSING"; exit 2; }
+[[ -b "$DEVICE" ]] || { echo "MEDIA_ZFS=DISK_MISSING"; exit 2; }
+[[ "$(lsblk -dn -o SERIAL "$DEVICE" | xargs)" == "$SERIAL" ]] ||
+  { echo "MEDIA_ZFS=DISK_IDENTITY_MISMATCH"; exit 2; }
 
-/usr/sbin/modprobe zfs
-if ! /usr/sbin/zpool list -H -o name "$POOL" >/dev/null 2>&1; then
-  /usr/sbin/zpool import -N -f -o readonly="$READONLY" "$POOL"
+modprobe zfs
+if ! zpool list -H -o name "$POOL" >/dev/null 2>&1; then
+  OPTIONS=(-N -d /dev/disk/by-id)
+  if [[ "$ACCESS" == readonly ]]; then OPTIONS+=(-o readonly=on); fi
+  zpool import "${OPTIONS[@]}" "$POOL"
 fi
-test "$(/usr/sbin/zpool get -H -o value readonly "$POOL")" = "$READONLY" ||
-  { echo "MEDIA_ZFS=IMPORT_MODE_MISMATCH"; exit 2; }
-test "$(/usr/sbin/zpool get -H -o value guid "$POOL")" = "$GUID" ||
-  { echo "MEDIA_ZFS=GUID_MISMATCH"; exit 2; }
-test "$(/usr/sbin/zpool list -H -o health "$POOL")" = "ONLINE" ||
+[[ "$(zpool list -H -o health "$POOL")" == ONLINE ]] ||
   { echo "MEDIA_ZFS=POOL_NOT_ONLINE"; exit 2; }
+EXPECTED=off
+[[ "$ACCESS" == readonly ]] && EXPECTED=on
+[[ "$(zpool get -H -o value readonly "$POOL")" == "$EXPECTED" ]] ||
+  { echo "MEDIA_ZFS=IMPORT_MODE_MISMATCH"; exit 2; }
 
-{% set parts = media_vm.storage.media_dataset.split('/') %}
-{% for level in range(1, parts | length + 1) %}
-DATASET={{ (parts[:level] | join('/')) | quote }}
-/usr/sbin/zfs list -H -o name "$DATASET" >/dev/null
-if test "$(/usr/sbin/zfs get -H -o value mounted "$DATASET")" != "yes"; then
-  /usr/sbin/zfs mount "$DATASET"
+{% for dataset in media_vm.storage.layout.datasets %}
+DATASET={{ (media_vm.storage.pool_name ~ '/' ~ dataset) | quote }}
+zfs list -H -o name "$DATASET" >/dev/null
+if [[ "$(zfs get -H -o value mounted "$DATASET")" != yes ]]; then
+  zfs mount "$DATASET"
 fi
 {% endfor %}
-test -d {{ ('/' ~ media_vm.storage.media_dataset) | quote }} ||
-  { echo "MEDIA_ZFS=MEDIA_NOT_MOUNTED"; exit 2; }
-echo "MEDIA_ZFS=READY_${MODE^^}"
+test -d {{ ('/' ~ media_vm.storage.media_dataset) | quote }}
+echo "MEDIA_ZFS=READY_${ACCESS^^}"

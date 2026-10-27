@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=qbittorrent
-Group=media
+Group=media_group
 Environment=HOME=/var/lib/qbittorrent
 WorkingDirectory={{ media_vm.downloads.path }}
 ExecStart=/usr/bin/qbittorrent-nox --webui-port=8080 --confirm-legal-notice

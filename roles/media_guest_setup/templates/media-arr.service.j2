@@ -5,7 +5,7 @@ Wants=network-online.target
 
 [Service]
 User={{ item.slug }}
-Group=media
+Group=media_group
 UMask=0002
 Type=simple
 WorkingDirectory=/opt/{{ item.name }}

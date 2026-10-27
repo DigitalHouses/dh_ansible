@@ -13,13 +13,6 @@
           - media_storage_action in ['create', 'import']
         fail_msg: "MEDIA_STORAGE_ACTION_REQUIRED: choose create or import in task 80 Run dialog."
 
-    - name: Block destructive create until its verified implementation is deployed
-      ansible.builtin.fail:
-        msg: >-
-          MEDIA_CREATE_NOT_READY: the create workflow and physical disk identity
-          verification are not implemented yet; no VM or disk has been changed.
-      when: media_storage_action == 'create'
-
     - name: Load canonical site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
@@ -41,6 +34,19 @@
     - name: Load desired media server VM state
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/media_vm.yml"
+
+    - name: Validate canonical storage inventory
+      ansible.builtin.assert:
+        that:
+          - media_vm.storage.pool_name == site.id ~ '-pool'
+          - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
+          - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
+          - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
+          - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
+          - media_storage_action != 'create' or media_vm.storage.legacy_pool is not defined or media_vm.storage.destructive_without_backup | default(false) | bool
+          - media_vm.storage.layout.datasets is sequence
+          - media_vm.storage.layout.directories is sequence
+        fail_msg: MEDIA_STORAGE_INVENTORY_INVALID
 
     - name: Enforce site-local runner
       ansible.builtin.assert:
@@ -143,7 +149,7 @@
     - name: Submit fixed-purpose media deploy to existing PVE root worker
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY:{{ media_deploy_nonce.stdout }}\n"
+        content: "MEDIA_DEPLOY_{{ media_storage_action | upper }}:{{ media_deploy_nonce.stdout }}\n"
         mode: '0600'
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool

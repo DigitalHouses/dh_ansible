@@ -28,7 +28,8 @@ def test_deploy_reuses_existing_worker_no_extra_template():
     play = PLAY.read_text()
     tasks = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
     assert len([x for x in tasks if x["title"].startswith("80-Медиасервер")]) == 1
-    assert "MEDIA_DEPLOY" in worker and "MEDIA_DEPLOY:" in play
+    assert "MEDIA_DEPLOY_CREATE" in worker and "MEDIA_DEPLOY_IMPORT" in worker
+    assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}" in play
     assert "dh-pve-access-audit.request" in play
     assert "dh-pve-media-deploy" in worker
     assert "--apply" in worker
@@ -41,7 +42,11 @@ def test_image_download_and_host_compatibility():
                  "hashlib.sha512", "qm(\"importdisk\"", "qm(\"start\"",
                  "local-lvm", "pct(\"ssh-keygen\"", "hostpci"):
         assert term in code
-    for forbidden in ("qm destroy", "qm stop 501", "qm stop 700",
+    assert 'old_guest_matches(vmid, site, data)' in code
+    assert 'LEGACY_ZFS_GUID_MISMATCH' in code
+    assert 'LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH' in code
+    assert 'qm("destroy", vmid' in code
+    for forbidden in ("qm stop 501", "qm stop 700",
                       "wipefs", "mkfs", "sgdisk", "dd if="):
         assert forbidden not in code
 

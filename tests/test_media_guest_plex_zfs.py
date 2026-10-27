@@ -25,10 +25,10 @@ def test_fixed_guest_playbook_and_role():
     assert "/var/lib/ansible/.ssh/pve_host_write_ed25519" in str(plays[0])
 
 
-def test_readonly_zfs_excludes_reformatting_and_backup_mounts():
+def test_boot_importer_never_formats_disks():
     script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
-    for term in ("readwrite) READONLY=off", "pool_guid", "partition_partuuid",
-                 "media_dataset", "MEDIA_ZFS=READY_${MODE^^}"):
+    for term in ("WWN=", "SERIAL=", "zpool import",
+                 "media_dataset", "MEDIA_ZFS=READY_${ACCESS^^}"):
         assert term in script
     for forbidden in ("zpool create", "zpool destroy", "zpool export",
                       "zfs destroy", "zfs set", "wipefs", "mkfs", "parted",
@@ -70,7 +70,7 @@ def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
 def test_media_smb_discovery_is_readonly_and_idempotent():
     tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     named = {item["name"]: item for item in tasks}
-    assert "Advertise existing readonly media library over SMB" in named
+    assert "Advertise existing media library over SMB" in named
     assert "Start Samba and Windows WS-Discovery services" in named
     assert "Confirm readonly guest SMB share is reachable" in named
     assert "samba" in str(tasks) and "wsdd2" in str(tasks)
@@ -163,8 +163,8 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
 def test_zfs_declared_readwrite_requires_matching_import_mode():
     script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
     tasks = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
-    assert "readwrite) READONLY=off" in script
-    assert "readonly) READONLY=on" in script
+    assert "EXPECTED=off" in script
+    assert "[[ \"$ACCESS\" == readonly ]] && EXPECTED=on" in script
     assert "MEDIA_ZFS=IMPORT_MODE_MISMATCH" in script
     assert "media_vm.storage.mode in ['readonly', 'readwrite']" in tasks
     assert "media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')" in tasks
