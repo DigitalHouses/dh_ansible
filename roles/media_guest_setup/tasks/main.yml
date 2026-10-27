@@ -780,3 +780,6 @@
 
 - name: Export backup dataset to the approved PVE host over NFS
   ansible.builtin.import_tasks: nfs_backups.yml
+
+- name: Stage local root-only customer password recovery tools
+  ansible.builtin.import_tasks: password_rotation.yml
