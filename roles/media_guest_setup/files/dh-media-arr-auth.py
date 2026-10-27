@@ -39,7 +39,7 @@ def credential(path):
     lines = path.read_text("ascii").splitlines()
     require(len(lines) == 2 and lines[0] == "username=" + path.stem and
             lines[1].startswith("password=") and
-            len(lines[1][9:]) == 8 and lines[1][9:].isalnum(),
+            6 <= len(lines[1][9:]) <= 8 and lines[1][9:].isalnum(),
             "ARR_OWNER_CREDENTIAL_INVALID")
     return path.stem, lines[1][9:]
 
