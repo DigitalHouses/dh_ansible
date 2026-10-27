@@ -89,3 +89,28 @@ def test_first_boot_debian_apt_refresh_precedes_zfs_package_install():
     assert tasks[refresh].get("when") is None
 
 
+
+
+def test_media_external_apt_repos_are_always_refreshed_before_first_install():
+    import yaml
+    pairs = [
+        (ROOT / "roles/media_guest_setup/tasks/main.yml",
+         "Configure official Plex APT repository",
+         "Refresh APT after adding or reconciling Plex repository",
+         "Install Plex Media Server"),
+        (ROOT / "roles/media_guest_setup/tasks/apps.yml",
+         "Configure official Debian 13 Jellyfin package repository",
+         "Refresh APT after adding or reconciling Jellyfin repository",
+         "Install Jellyfin native media server"),
+    ]
+    for path, configured, refreshed, installed in pairs:
+        tasks = yaml.safe_load(path.read_text())
+        named = {task["name"]: idx for idx, task in enumerate(tasks)}
+        assert named[configured] < named[refreshed] < named[installed]
+        refresh = tasks[named[refreshed]]["ansible.builtin.apt"]
+        install = tasks[named[installed]]["ansible.builtin.apt"]
+        assert refresh["update_cache"] is True
+        assert refresh["cache_valid_time"] == 0
+        assert install["update_cache"] is False
+
+
