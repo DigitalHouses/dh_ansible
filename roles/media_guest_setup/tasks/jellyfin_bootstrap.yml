@@ -27,6 +27,10 @@
       - /usr/local/sbin/dh-jellyfin-bootstrap
       - --credential-file
       - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin.txt"
+      - --media-root
+      - "/{{ media_vm.storage.media_dataset }}"
   register: media_jellyfin_bootstrap
-  changed_when: "'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout"
+  changed_when: >-
+    'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout
+    or '=CREATED' in media_jellyfin_bootstrap.stdout
   no_log: true
