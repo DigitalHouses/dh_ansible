@@ -57,9 +57,8 @@ class MediaSurveyTest(unittest.TestCase):
 
     def test_exact_engineer_choices(self):
         self.assertEqual(len(self.survey), 2)
-        expected = {"media_storage_action": ["create", "import"],
-                    "media_vm_policy": ["keep", "recreate"],
-                    "media_disk_policy": ["preserve", "erase"]}
+        expected = {"media_vm_action": ["create", "recreate", "keep"],
+                    "media_raw_disk_action": ["import", "erase"]}
         for variable in self.survey:
             self.assertIn(variable["name"], expected)
             self.assertEqual(variable["type"], "enum")
