@@ -9,7 +9,7 @@
 
 - name: Check protected Jellyfin admin passport exists
   ansible.builtin.stat:
-    path: /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin-admin.json
+    path: /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin.txt
   register: media_jellyfin_admin_passport
 
 - name: Refuse open Jellyfin wizard without protected administrative credentials
@@ -26,7 +26,7 @@
     argv:
       - /usr/local/sbin/dh-jellyfin-bootstrap
       - --credential-file
-      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin-admin.json"
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin.txt"
   register: media_jellyfin_bootstrap
   changed_when: "'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout"
   no_log: true
