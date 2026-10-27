@@ -10,7 +10,7 @@
       - media_vm.storage.mode == 'readwrite'
       - media_vm.file_access.accounts | length == 2
       - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
-      - 'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)
+      - "'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)"
     fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
 
 - name: Validate approved account roles without reading any passwords
