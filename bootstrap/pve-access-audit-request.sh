@@ -11,9 +11,9 @@ INV_ROOT=/var/lib/ansible/site-data
 [[ -f "$REQUEST" && ! -L "$REQUEST" ]] || exit 2
 [[ "$(stat -c '%U:%G:%a' "$REQUEST")" == 'semaphore:semaphore:600' ]] || exit 2
 REQUEST_DATA="$(cat "$REQUEST")"
-[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
+[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
 ACTION="${BASH_REMATCH[1]}"
-NONCE="${BASH_REMATCH[4]}"
+NONCE="${BASH_REMATCH[6]}"
 rm -f -- "$REQUEST"
 report() { printf '%s:%s\n' "$1" "$NONCE" > "$STATUS"; chmod 0644 "$STATUS"; }
 MEDIA_RUNTIME_FILE=
@@ -87,18 +87,17 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
     -e "media_vm_action=$VM_ACTION" \
     -e "media_raw_disk_action=$RAW_DISK_ACTION" \
     -e "dh_media_runtime_secret_file=$MEDIA_RUNTIME_FILE" >> "$LOG" 2>&1
-  # Backup mapping is performed only after the guest successfully exports NFS.
-  # The PVE root script revalidates VMID, name, export path and storage ID.
-  /usr/bin/ssh -T -o BatchMode=yes -o IdentitiesOnly=yes \
-    -o StrictHostKeyChecking=yes \
-    -o UserKnownHostsFile=/var/lib/ansible/.ssh/pve_host_audit_known_hosts \
-    -o ConnectTimeout=8 \
-    -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
-    "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
-    --site "$SITE" --vm-action "$VM_ACTION" \
-    --raw-disk-action "$RAW_DISK_ACTION" --map-backups --apply >> "$LOG" 2>&1
+  # Backup target migration is a separate approved operation AFTER
+  # media application acceptance. Never modify PVE backup jobs or storage
+  # merely because the guest NFS export was created successfully.
+  echo "MEDIA_BACKUP_MIGRATION=DEFERRED_UNTIL_ACCEPTANCE" >> "$LOG"
   report PASS
   exit 0
+fi
+if [[ "$ACTION" == MEDIA_PLAN_* ]]; then
+  [[ "$ACTION" =~ ^MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)$ ]] || exit 2
+  MEDIA_PLAN_VM_ACTION="${BASH_REMATCH[1],,}"
+  MEDIA_PLAN_DISK_ACTION="${BASH_REMATCH[2],,}"
 fi
 if [[ "$ACTION" == "AUDIT" ]]; then
   /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$PLAY" >> "$LOG" 2>&1
@@ -110,7 +109,9 @@ else
   export ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles
   /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$PLAY" \
     -e pve_media_plan_requested=true \
-    -e "pve_media_plan_nonce=$NONCE" >> "$LOG" 2>&1
+    -e "pve_media_plan_nonce=$NONCE" \
+    -e "media_vm_action=$MEDIA_PLAN_VM_ACTION" \
+    -e "media_raw_disk_action=$MEDIA_PLAN_DISK_ACTION" >> "$LOG" 2>&1
   [[ -f /run/dh-pve-media-plan.json && ! -L /run/dh-pve-media-plan.json ]] || exit 2
   [[ "$(stat -c '%U:%G:%a' /run/dh-pve-media-plan.json)" == 'root:semaphore:640' ]] || exit 2
 fi
