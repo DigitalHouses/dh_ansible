@@ -20,12 +20,11 @@
     mode: '0644'
   register: media_avahi_changed
 
-- name: Enable Bonjour and Windows WS-Discovery services
+- name: Ensure Windows WS-Discovery service
   ansible.builtin.systemd_service:
-    name: "{{ item }}"
+    name: wsdd2.service
     enabled: true
     state: started
-  loop: [avahi-daemon.service, wsdd2.service]
 
 - name: Create media welcome page directory
   ansible.builtin.file:
