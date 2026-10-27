@@ -66,7 +66,10 @@ def test_portal_and_discovery_are_declared_without_secrets():
     names = [task["name"] for task in tasks]
     assert "Publish local media portal and LAN discovery" in names
     discovery = yaml.safe_load((ROLE / "tasks/discovery_portal.yml").read_text())
-    assert any("avahi-daemon" in str(task) for task in discovery)
+    baseline = yaml.safe_load((ROOT / "roles/guest_network_discovery/tasks/main.yml").read_text())
+    assert any("avahi-daemon" in str(task) for task in baseline)
+    assert any(task.get("ansible.builtin.import_role", {}).get("name") ==
+               "guest_network_discovery" for task in tasks)
     assert any("wsdd2.service" in str(task) for task in discovery)
     page = (ROLE / "templates/media-portal-index.html.j2").read_text()
     assert "media_vm.portal.links" in page
