@@ -166,4 +166,4 @@ def test_helper_has_no_hardcoded_site_storage_and_no_db_mutation():
     source = SCRIPT.read_text()
     assert "serzhan-home-pool" not in source
     assert "DELETE FROM" not in source and "UPDATE user" not in source
-    assert "os.replace(DATA, target / \\"data\\")" in source
+    assert 'os.replace(DATA, target / "data")' in source
