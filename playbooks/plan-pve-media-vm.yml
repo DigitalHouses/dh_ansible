@@ -6,17 +6,14 @@
   become: false
 
   pre_tasks:
-    - name: Require engineer-selected storage action from Semaphore survey
+    - name: Require two independent VM and raw disk actions from Semaphore survey
       ansible.builtin.assert:
         that:
-          - media_storage_action is defined
-          - media_storage_action in ['create', 'import']
-          - media_vm_policy is defined
-          - media_vm_policy in ['keep', 'recreate']
-          - media_disk_policy is defined
-          - media_disk_policy in ['preserve', 'erase']
-          - media_storage_action != 'import' or media_disk_policy == 'preserve'
-        fail_msg: "MEDIA_STORAGE_ACTION_REQUIRED: choose create or import in task 80 Run dialog."
+          - media_vm_action is defined
+          - media_vm_action in ['create', 'recreate', 'keep']
+          - media_raw_disk_action is defined
+          - media_raw_disk_action in ['import', 'erase']
+        fail_msg: "MEDIA_ACTIONS_REQUIRED: select VM create/recreate/keep and raw disk import/erase in task 80."
 
     - name: Load canonical site identity
       ansible.builtin.include_vars:
@@ -48,7 +45,7 @@
           - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
           - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
           - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
-          - media_storage_action != 'create' or media_vm.storage.legacy_pool is not defined or media_vm.storage.destructive_without_backup | default(false) | bool
+          - media_raw_disk_action != 'erase' or media_vm.storage.destructive_without_backup | default(false) | bool
           - media_vm.storage.layout.datasets is sequence
           - media_vm.storage.layout.directories is sequence
         fail_msg: MEDIA_STORAGE_INVENTORY_INVALID
@@ -154,7 +151,7 @@
     - name: Submit fixed-purpose media deploy to existing PVE root worker
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_storage_action | upper }}_{{ media_vm_policy | upper }}_{{ media_disk_policy | upper }}:{{ media_deploy_nonce.stdout }}\n"
+        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}\n"
         mode: '0600'
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool
