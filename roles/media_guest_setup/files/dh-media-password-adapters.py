@@ -137,7 +137,7 @@ class Servarr:
         class StopRedirect(urllib.request.HTTPRedirectHandler):
             def redirect_request(self, request, fp, code, msg, headers, url):
                 return None
-        opener = urllib.request.build_opener(StopRedirect)
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), StopRedirect)
         try:
             with opener.open(req, timeout=12) as response:
                 status, headers = response.status, response.headers
@@ -188,7 +188,7 @@ class QBittorrent:
                                               "Content-Type":
                                                   "application/x-www-form-urlencoded"})
         try:
-            with urllib.request.urlopen(req, timeout=12) as response:
+            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(req, timeout=12) as response:
                 return response.status == 200 and response.read(40).strip() == b"Ok."
         except (urllib.error.HTTPError, urllib.error.URLError):
             return False
