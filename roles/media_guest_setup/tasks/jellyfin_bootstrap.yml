@@ -1,0 +1,29 @@
+---
+- name: Install one-time Jellyfin initialization helper
+  ansible.builtin.copy:
+    src: dh-jellyfin-bootstrap.py
+    dest: /usr/local/sbin/dh-jellyfin-bootstrap
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Check protected Jellyfin admin passport exists
+  ansible.builtin.stat:
+    path: /etc/digitalhouses/jellyfin-admin.json
+  register: media_jellyfin_admin_passport
+
+- name: Refuse open Jellyfin wizard without protected administrative credentials
+  ansible.builtin.assert:
+    that:
+      - media_jellyfin_admin_passport.stat.isreg | default(false)
+      - media_jellyfin_admin_passport.stat.pw_name == 'root'
+      - media_jellyfin_admin_passport.stat.mode == '0600'
+    fail_msg: MEDIA_JELLYFIN_ADMIN_CREDENTIALS_NOT_COMMISSIONED
+  no_log: true
+
+- name: Complete and verify Jellyfin setup without disclosing administrator password
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-jellyfin-bootstrap]
+  register: media_jellyfin_bootstrap
+  changed_when: "'JELLYFIN_WIZARD=COMPLETED' in media_jellyfin_bootstrap.stdout"
+  no_log: true
