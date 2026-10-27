@@ -71,7 +71,7 @@
       ansible.builtin.assert:
         that:
           - dh_media_runtime.runtime_secrets.schema_version | int == 1
-          - dh_media_runtime.runtime_secrets.site_id == 'serzhan-home'
+          - dh_media_runtime.runtime_secrets.site_id == site.id
           - dh_media_runtime.runtime_secrets.site_secrets.plex_agent.mqtt.username | length > 0
           - dh_media_runtime.runtime_secrets.site_secrets.plex_agent.mqtt.password | length > 0
         fail_msg: MEDIA_SITE_MQTT_SECRET_INVALID
