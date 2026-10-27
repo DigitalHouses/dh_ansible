@@ -34,7 +34,7 @@ def load_credential(path):
     username = path.stem
     require(len(lines) == 2 and lines[0] == "username=" + username and
             lines[1].startswith("password=") and
-            len(lines[1][9:]) == 8 and lines[1][9:].isalnum(),
+            6 <= len(lines[1][9:]) <= 8 and lines[1][9:].isalnum(),
             "ACCOUNT_FILE_INVALID")
     return username, lines[1][9:]
 
