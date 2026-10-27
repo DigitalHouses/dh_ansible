@@ -7,12 +7,12 @@
     group: root
     mode: '0700'
 
-- name: Check protected Jellyfin admin passport exists
+- name: Check protected Jellyfin shared owner credential exists
   ansible.builtin.stat:
-    path: /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin.txt
+    path: /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt
   register: media_jellyfin_admin_passport
 
-- name: Refuse open Jellyfin wizard without protected administrative credentials
+- name: Refuse open Jellyfin wizard without protected the shared eight-character owner credential
   ansible.builtin.assert:
     that:
       - media_jellyfin_admin_passport.stat.isreg | default(false)
@@ -21,12 +21,12 @@
     fail_msg: MEDIA_JELLYFIN_ADMIN_CREDENTIALS_NOT_COMMISSIONED
   no_log: true
 
-- name: Complete and verify Jellyfin setup without disclosing administrator password
+- name: Complete and verify Jellyfin setup without disclosing owner password
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/dh-jellyfin-bootstrap
       - --credential-file
-      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/jellyfin.txt"
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
       - --media-root
       - "/{{ media_vm.storage.media_dataset }}"
   register: media_jellyfin_bootstrap
