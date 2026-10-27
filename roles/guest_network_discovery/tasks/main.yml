@@ -9,7 +9,287 @@
       - guest_network_discovery_hostname is defined
       - guest_network_discovery_hostname is match('^[a-z0-9][a-z0-9-]{1,62}$')
       - guest_network_discovery_ip is defined
-      - guest_network_discovery_ip is ansible.utils.ipv4
+      - guest_network_discovery_ip is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}
+      - guest_network_discovery_cidr is defined
+      - guest_network_discovery_cidr is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}/[0-9]{1,2}
+      - guest_network_discovery_provider is defined
+      - guest_network_discovery_provider in ['avahi', 'native']
+      - guest_network_discovery_delegate is defined
+      - guest_network_discovery_delegate | length > 0
+    fail_msg: GUEST_MDNS_CONTRACT_REQUIRED
+
+- name: Read actual guest hostname without changing it
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: dh_guest_mdns_hostname
+  changed_when: false
+
+- name: Require exact guest identity before changing packages
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_hostname.stdout == guest_network_discovery_hostname
+    fail_msg: GUEST_MDNS_HOSTNAME_MISMATCH
+
+- name: Check operating system on newly authorized Linux guest
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - distribution
+
+- name: Require supported Debian-family Avahi guest or native provider
+  ansible.builtin.assert:
+    that:
+      - guest_network_discovery_provider != 'avahi' or ansible_facts['os_family'] == 'Debian'
+    fail_msg: GUEST_MDNS_PROVIDER_UNSUPPORTED
+
+- name: Detect existing UDP listeners before installing another mDNS daemon
+  ansible.builtin.command:
+    argv: [ss, -H, -u, -l, -n, -p]
+  register: dh_guest_mdns_udp
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Reject unapproved competing mDNS listeners
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dh_guest_mdns_udp.stdout_lines |
+         select('search', '[:.]5353(?:\\s|$)') |
+         reject('search', 'avahi-daemon') | list | length) == 0
+    fail_msg: GUEST_MDNS_COMPETING_RESPONDER
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Install standard Avahi responder only on selected Linux guests
+  ansible.builtin.apt:
+    name: avahi-daemon
+    state: present
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Enable Avahi on approved guest
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    enabled: true
+    state: started
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Verify Avahi active service on guest
+  ansible.builtin.command:
+    argv: [systemctl, is-active, avahi-daemon.service]
+  register: dh_guest_mdns_service
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Require active Avahi responder
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_service.stdout == 'active'
+    fail_msg: GUEST_MDNS_DAEMON_NOT_ACTIVE
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Resolve mDNS hostname from independent LAN node via multicast
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/dh-mdns-probe.py --name {{ guest_network_discovery_hostname }}.local --ip {{ guest_network_discovery_ip }} --cidr {{ guest_network_discovery_cidr }}"
+  delegate_to: "{{ guest_network_discovery_delegate }}"
+  become: false
+  register: dh_guest_mdns_probe
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: dh_guest_mdns_probe.rc == 0
+
+- name: Confirm actual LAN mDNS self-publication
+  ansible.builtin.assert:
+    that:
+      - "'GUEST_MDNS=VERIFIED' in dh_guest_mdns_probe.stdout_lines"
+    fail_msg: GUEST_MDNS_LAN_VERIFICATION_FAILED
+)
+      - guest_network_discovery_cidr is defined
+      - guest_network_discovery_cidr is ansible.utils.ipv4
+      - guest_network_discovery_provider is defined
+      - guest_network_discovery_provider in ['avahi', 'native']
+      - guest_network_discovery_delegate is defined
+      - guest_network_discovery_delegate | length > 0
+    fail_msg: GUEST_MDNS_CONTRACT_REQUIRED
+
+- name: Read actual guest hostname without changing it
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: dh_guest_mdns_hostname
+  changed_when: false
+
+- name: Require exact guest identity before changing packages
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_hostname.stdout == guest_network_discovery_hostname
+    fail_msg: GUEST_MDNS_HOSTNAME_MISMATCH
+
+- name: Check operating system on newly authorized Linux guest
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - distribution
+
+- name: Require supported Debian-family Avahi guest or native provider
+  ansible.builtin.assert:
+    that:
+      - guest_network_discovery_provider != 'avahi' or ansible_facts['os_family'] == 'Debian'
+    fail_msg: GUEST_MDNS_PROVIDER_UNSUPPORTED
+
+- name: Detect existing UDP listeners before installing another mDNS daemon
+  ansible.builtin.command:
+    argv: [ss, -H, -u, -l, -n, -p]
+  register: dh_guest_mdns_udp
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Reject unapproved competing mDNS listeners
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dh_guest_mdns_udp.stdout_lines |
+         select('search', '[:.]5353(?:\\s|$)') |
+         reject('search', 'avahi-daemon') | list | length) == 0
+    fail_msg: GUEST_MDNS_COMPETING_RESPONDER
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Install standard Avahi responder only on selected Linux guests
+  ansible.builtin.apt:
+    name: avahi-daemon
+    state: present
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Enable Avahi on approved guest
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    enabled: true
+    state: started
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Verify Avahi active service on guest
+  ansible.builtin.command:
+    argv: [systemctl, is-active, avahi-daemon.service]
+  register: dh_guest_mdns_service
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Require active Avahi responder
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_service.stdout == 'active'
+    fail_msg: GUEST_MDNS_DAEMON_NOT_ACTIVE
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Resolve mDNS hostname from independent LAN node via multicast
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/dh-mdns-probe.py --name {{ guest_network_discovery_hostname }}.local --ip {{ guest_network_discovery_ip }} --cidr {{ guest_network_discovery_cidr }}"
+  delegate_to: "{{ guest_network_discovery_delegate }}"
+  become: false
+  register: dh_guest_mdns_probe
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: dh_guest_mdns_probe.rc == 0
+
+- name: Confirm actual LAN mDNS self-publication
+  ansible.builtin.assert:
+    that:
+      - "'GUEST_MDNS=VERIFIED' in dh_guest_mdns_probe.stdout_lines"
+    fail_msg: GUEST_MDNS_LAN_VERIFICATION_FAILED
+)
+      - guest_network_discovery_provider is defined
+      - guest_network_discovery_provider in ['avahi', 'native']
+      - guest_network_discovery_delegate is defined
+      - guest_network_discovery_delegate | length > 0
+    fail_msg: GUEST_MDNS_CONTRACT_REQUIRED
+
+- name: Read actual guest hostname without changing it
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: dh_guest_mdns_hostname
+  changed_when: false
+
+- name: Require exact guest identity before changing packages
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_hostname.stdout == guest_network_discovery_hostname
+    fail_msg: GUEST_MDNS_HOSTNAME_MISMATCH
+
+- name: Check operating system on newly authorized Linux guest
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - distribution
+
+- name: Require supported Debian-family Avahi guest or native provider
+  ansible.builtin.assert:
+    that:
+      - guest_network_discovery_provider != 'avahi' or ansible_facts['os_family'] == 'Debian'
+    fail_msg: GUEST_MDNS_PROVIDER_UNSUPPORTED
+
+- name: Detect existing UDP listeners before installing another mDNS daemon
+  ansible.builtin.command:
+    argv: [ss, -H, -u, -l, -n, -p]
+  register: dh_guest_mdns_udp
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Reject unapproved competing mDNS listeners
+  ansible.builtin.assert:
+    that:
+      - >-
+        (dh_guest_mdns_udp.stdout_lines |
+         select('search', '[:.]5353(?:\\s|$)') |
+         reject('search', 'avahi-daemon') | list | length) == 0
+    fail_msg: GUEST_MDNS_COMPETING_RESPONDER
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Install standard Avahi responder only on selected Linux guests
+  ansible.builtin.apt:
+    name: avahi-daemon
+    state: present
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Enable Avahi on approved guest
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    enabled: true
+    state: started
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Verify Avahi active service on guest
+  ansible.builtin.command:
+    argv: [systemctl, is-active, avahi-daemon.service]
+  register: dh_guest_mdns_service
+  changed_when: false
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Require active Avahi responder
+  ansible.builtin.assert:
+    that:
+      - dh_guest_mdns_service.stdout == 'active'
+    fail_msg: GUEST_MDNS_DAEMON_NOT_ACTIVE
+  when: guest_network_discovery_provider == 'avahi'
+
+- name: Resolve mDNS hostname from independent LAN node via multicast
+  ansible.builtin.script:
+    cmd: "{{ role_path }}/files/dh-mdns-probe.py --name {{ guest_network_discovery_hostname }}.local --ip {{ guest_network_discovery_ip }} --cidr {{ guest_network_discovery_cidr }}"
+  delegate_to: "{{ guest_network_discovery_delegate }}"
+  become: false
+  register: dh_guest_mdns_probe
+  changed_when: false
+  retries: 5
+  delay: 3
+  until: dh_guest_mdns_probe.rc == 0
+
+- name: Confirm actual LAN mDNS self-publication
+  ansible.builtin.assert:
+    that:
+      - "'GUEST_MDNS=VERIFIED' in dh_guest_mdns_probe.stdout_lines"
+    fail_msg: GUEST_MDNS_LAN_VERIFICATION_FAILED
+)
       - guest_network_discovery_cidr is defined
       - guest_network_discovery_cidr is ansible.utils.ipv4
       - guest_network_discovery_provider is defined
