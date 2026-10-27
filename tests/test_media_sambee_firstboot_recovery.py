@@ -165,5 +165,6 @@ def test_analyzed_firstboot_is_only_triggered_for_safe_state_before_native_login
 def test_helper_has_no_hardcoded_site_storage_and_no_db_mutation():
     source = SCRIPT.read_text()
     assert "serzhan-home-pool" not in source
+    assert '"ps", "--all", "-q", "sambee"' in source
     assert "DELETE FROM" not in source and "UPDATE user" not in source
     assert 'os.replace(DATA, target / "data")' in source
