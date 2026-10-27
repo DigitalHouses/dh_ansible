@@ -22,7 +22,7 @@ def module(file, name):
 def test_multicast_parser_reads_actual_guest_ipv4_not_router_dns():
     parser = module("roles/guest_network_discovery/files/dh-mdns-probe.py",
                     "mdns_probe_test")
-    q = b"\x11mediaserver-serzhan\x05local\x00"
+    q = bytes([len("mediaserver-serzhan")]) + b"mediaserver-serzhan\x05local\x00"
     query = struct.pack("!HHHHHH", 0, 0x8400, 1, 1, 0, 0)
     query += q + struct.pack("!HH", 1, 1)
     answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 120, 4)
