@@ -657,6 +657,24 @@
       - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
       - not (media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool)
 
+- name: Install local-only qBittorrent admin credential reconciler
+  ansible.builtin.copy:
+    src: dh-qbt-admin.py
+    dest: /usr/local/sbin/dh-qbt-admin
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Apply persistent qBittorrent LAN administrator from ZFS credential file
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-qbt-admin
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/apps/qbittorrent.txt"
+  register: media_qbt_admin
+  changed_when: "'QBT_ADMIN=COMMISSIONED' in media_qbt_admin.stdout"
+  no_log: true
+
 - name: Create separate writable download and staging roots on system disk
   ansible.builtin.file:
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
