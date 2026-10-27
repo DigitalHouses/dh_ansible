@@ -21,7 +21,8 @@ def request(method, path, payload=None):
     body = json.dumps(payload).encode() if payload is not None else None
     req = urllib.request.Request(
         BASE + path, data=body, method=method,
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json",
+                 "Authorization": 'MediaBrowser Client="DigitalHouses", Device="MediaServer", DeviceId="dh-mediaserver", Version="1.0"'})
     try:
         with urllib.request.urlopen(req, timeout=12) as response:
             data = response.read(1024 * 1024)
