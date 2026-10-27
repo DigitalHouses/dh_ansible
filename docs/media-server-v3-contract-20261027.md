@@ -155,3 +155,12 @@ repeat Ansible apply without resetting the customer password.
 
 Offline adapter/API simulations do not constitute live password rotation
 acceptance. VM 2238, CT1231 and physical ZFS remain untouched.
+
+
+## Аудит блокеров VM 2238: DHCP и отложенный PVE backup (2026-10-27)
+
+- Владелец подтвердил на ASUS диапазон DHCP `192.168.11.50–192.168.11.229`. Адрес медиасервера `192.168.11.238/24` находится вне него. Fleet объявляет точные `network.dhcp_pool.first_host/last_host` и `static_ipv4_verified=true`. Код проверяет диапазон и выход статического адреса за его пределы, а PVE/гость дополнительно проверяют фактический IPv4 и MAC.
+- Старое PVE-хранилище `truenas_backup` недоступно, поскольку физический диск передан медиасерверу. Единственное зависимое задание `dh-backup-critical-daily` использует явный список `110,200,333,501,1011,10001,10004`; **VM 2238 отсутствует**. Пока назначение не исправлено, резервирование этих гостей не работает.
+- Для уже существующей VM допускается одно узкое исключение: только `keep + import`, только один конкретный offline storage из Fleet, только одно явно указанное активное backup-задание со строгим перечнем VMID **без медиасервера**. В read-only PCI-плане остаётся `PVE_LEGACY_BACKUP_MIGRATION_DEFERRED`. При других недоступных storage, назначении `all`/pool, отсутствии точного списка VMID, включении VM2238 или выборе `erase/recreate` — **BLOCKED**.
+- Механизм планирования передаёт `VM_ACTION` и `DISK_ACTION` через nonce-scoped фиксированный запрос в доверенный PVE audit. PVE формирует и возвращает те же действия; Semaphore проверяет их точное совпадение перед apply.
+- На этапе media guest provisioning Ansible подготавливает NFS-экспорт `/serzhan-home-pool/backups/pve`. PVE **не добавляет** storage автоматически в задаче №80. После полной приёмки медиасервера отдельно проверить NFS и смонтировать его в PVE под `dh_media_backups`, затем с отдельным разрешением переназначить `dh-backup-critical-daily` со старого `truenas_backup`; проверить успешную резервную копию и восстановимость. Старое задание не отключать и не удалять до согласования.

@@ -218,6 +218,8 @@
           {{
             {
               'nonce': pve_media_plan_nonce,
+              'requested_vm_action': media_vm_action,
+              'requested_disk_action': media_raw_disk_action,
               'site': site.id,
               'name': media_vm.name,
               'vmid': media_vm.vmid,
@@ -226,6 +228,8 @@
               'gpu_owners': media_vm_gpu_owners,
               'sata_owners': media_vm_sata_owners,
               'offline_backup_targets': media_vm_offline_backup_targets,
+              'deferred_backup_jobs': (media_vm_deferred_backup_jobs | default([]) | map(attribute='id') | list),
+              'warnings': media_vm_plan_warnings,
               'blockers': media_vm_plan_blockers,
               'result': 'PLAN_ONLY'
             } | to_nice_json
