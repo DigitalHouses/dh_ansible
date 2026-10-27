@@ -76,7 +76,7 @@ No passcodes are rendered on the anonymous HTTP portal, pushed into public Git, 
 
 ## Approved unified client login · implementation update (2026-10-27)
 
-The **single client-facing** username is the Fleet owner identity, for this site `serzhan`. The authoritative password is the existing protected ZFS file `/serzhan-home-pool/digitalhouses/credentials/serzhan.txt`, generated once as **eight alphanumeric characters**. No application-specific client password files are generated, and a rerun reads the current owner value rather than regenerating it. The separate `serzhan_admin` POSIX/Samba identity is a DigitalHouses operator identity, not a second password the household must use for its media applications.
+The **single client-facing** username is the Fleet owner identity, for this site `serzhan`. The authoritative password is the existing protected ZFS file `/serzhan-home-pool/digitalhouses/credentials/serzhan.txt`, generated once as **eight alphanumeric characters**. Voluntary later changes may choose **6–8 alphanumeric characters**; qBittorrent requires at least six. No application-specific client password files are generated, and a rerun reads the current owner value rather than regenerating it. The separate `serzhan_admin` POSIX/Samba identity is a DigitalHouses operator identity, not a second password the household must use for its media applications.
 
 Initial application adapters (in the public code PR only, **not production verified**):
 - Windows/macOS SMB and Filestash's Samba passthrough use the owner Samba credential. Filestash's configuration-admin bcrypt hash is initially derived from the same owner value but never printed.
