@@ -27,7 +27,7 @@ def test_owner_password_is_only_application_bootstrap_source():
         directory = root / "credentials"
         directory.mkdir(parents=True)
         owner = directory / "serzhan.txt"
-        owner.write_text("username=serzhan\\npassword=8CharsAA\\n".replace("\\\\n", "\\n"))
+        owner.write_text("username=serzhan\npassword=8CharsAA\n")
         owner.chmod(0o640)
         with mock.patch.object(apps.grp, "getgrnam", return_value=type(
                 "G", (), {"gr_gid": os.getgid()})()):
