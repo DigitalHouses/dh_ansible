@@ -161,15 +161,17 @@ class GuestLifecycle(unittest.TestCase):
                 m.recreate_legacy_guest_if_needed(2238, "demo-home", data,
                                                     "create", "keep", "preserve")
 
-    def test_existing_vm_disk_erase_needs_recreate_answer(self):
+    def test_partial_first_install_vm_is_preserved_with_explicit_erase(self):
         m = self.m
         with (patch.object(m.Path, "exists", return_value=True),
-              patch.object(m, "config", return_value={"name": "media-server-demo-home"}),
-              patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
-            with self.assertRaisesRegex(m.Blocked, "DISK_ERASE_REQUIRES_VM_RECREATE"):
-                m.recreate_legacy_guest_if_needed(2238, "demo-home",
-                                                    {"storage": configuration()},
-                                                    "create", "keep", "erase")
+              patch.object(m, "config", return_value={"name": "media-server-demo-home",
+                                                       "description": m.MANAGED_MEDIA_DESCRIPTION}),
+              patch.object(m, "qm", side_effect=AssertionError("VM modified"))):
+            with redirect_stdout(io.StringIO()) as output:
+                m.recreate_legacy_guest_if_needed(
+                    2238, "demo-home", {"storage": configuration()},
+                    "create", "keep", "erase")
+            self.assertIn("MEDIA_VM=EXISTS_PRESERVED", output.getvalue())
 
     def test_import_with_erase_is_blocked(self):
         m = self.m
