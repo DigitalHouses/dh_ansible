@@ -50,3 +50,19 @@ The Jellyfin startup helper uses the official `Startup/User`, `Startup/RemoteAcc
 qBittorrent no longer has automatic authentication bypass for the entire LAN in the draft Ansible role: its passwordless API remains limited to loopback for the installed Arr integration. Permanent authenticated WebUI credentials still need a protected provisioning flow before the change may be applied to the live server.
 
 **Release gate:** Private Fleet PR #13 has no approved protected MQTT or application administration credential delivery mechanism. Do not mark this PR ready, do not merge to production or run Semaphore task #80. A dry syntax check and offline mocks are not evidence of a real E2E application acceptance.
+
+
+## Media v3 final application onboarding revision
+
+- Public code branch now provisions three application administrator account TXT files in the already-approved `<pool>/digitalhouses/credentials/apps/`, preserving existing files on rerun. User SMB accounts stay in `<pool>/digitalhouses/credentials/`.
+- Filestash uses Samba login without a duplicate web-user database and receives its administrative bcrypt hash automatically from the local app credential file.
+- qBittorrent is changed from LAN-wide anonymous API access to authenticated LAN WebUI; loopback access remains available to local Arr integrations. Administrator password is applied only once, with an idempotent stamp.
+- Jellyfin now initializes the admin account noninteractively, verifies authentication, and creates three media libraries `Movies`, `TV Shows`, and `Music`, using existing ZFS library paths without resetting existing valid entries.
+- DigitalHouses Plex Agent uses only the fixed-purpose site MQTT runtime, never an unencrypted private Fleet inventory password. The approved encrypted MQTT credential is stored in the private Fleet Vault main branch, commit `8c431b6b21d8b95f64081237db721090c2bd6e3b`.
+- A one-time owner-controlled runtime commissioning tool reads the encrypted Vault from GitHub on PVE, prompts for its *existing* master password, and creates only a root-owned 0600 site-runtime file on the PVE host. This is the already approved ADR 0009 mechanism. It does not ask for MQTT credentials again.
+- The fixed-purpose Semaphore deploy worker requires a scoped MQTT export **before any VM mutation**, writes the short-lived copy root:root 0600 under `/run`, forwards only that MQTT namespace to the Ansible guest setup, and removes the temporary file on exit.
+- The pinned PVE installer downloads and stages the complete media guest role rather than relying on incomplete static paths. Installation still requires the accepted, pinned worker rollout.
+
+Offline regression coverage currently includes application password persistence, qBittorrent authenticated LAN policy and idempotence, encrypted Vault MQTT extraction, per-site PVE runtime persistence, nonsecret Fleet preflight, installer staging completeness, and three Jellyfin media libraries.
+
+**No live E2E has been executed.** Both public and Fleet data-only PRs remain draft. Until code and Fleet are coordinated, PVE root helper is installed from the pinned source, local runtime is commissioned, and a read-only PVE acceptance passes, **Semaphore task #80 must not be applied**. Existing VMID 2238 and the live ZFS datasets have not been changed by this branch.
