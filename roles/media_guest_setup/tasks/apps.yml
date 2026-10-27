@@ -67,15 +67,46 @@
     shell: /usr/sbin/nologin
   when: media_vm.applications.filestash | default(true) | bool
 
+# The upstream native binary anchors its default data directory to its
+# executable location, not to systemd WorkingDirectory. Keep code root-owned
+# and mutable state under a dedicated, non-root-writable service directory.
+- name: Create root-owned Filestash executable directory
+  ansible.builtin.file:
+    path: /opt/dh-filestash
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Create persistent native Filestash state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: filestash
+    group: filestash
+    mode: '0750'
+  loop:
+    - /opt/dh-filestash/data
+    - /opt/dh-filestash/data/state
+    - /opt/dh-filestash/data/state/log
+    - /opt/dh-filestash/data/state/config
+    - /opt/dh-filestash/data/state/db
+    - /opt/dh-filestash/data/state/certs
+    - /opt/dh-filestash/data/state/plugins
+    - /opt/dh-filestash/data/state/search
+  when: media_vm.applications.filestash | default(true) | bool
+
 - name: Download upstream native Filestash executable
   ansible.builtin.get_url:
     url: https://downloads.filestash.app/latest/filestash_linux_x86_64.bin
-    dest: /usr/local/bin/filestash
+    dest: /opt/dh-filestash/filestash
     owner: root
     group: root
     mode: '0755'
     force: false
     timeout: 180
+  register: media_filestash_binary
   when: media_vm.applications.filestash | default(true) | bool
 
 - name: Install Filestash service definition
@@ -85,6 +116,7 @@
     owner: root
     group: root
     mode: '0644'
+  register: media_filestash_unit
   when: media_vm.applications.filestash | default(true) | bool
 
 - name: Start Filestash
@@ -92,7 +124,7 @@
     name: filestash.service
     daemon_reload: true
     enabled: true
-    state: started
+    state: "{{ 'restarted' if media_filestash_unit.changed or media_filestash_binary.changed else 'started' }}"
   when: media_vm.applications.filestash | default(true) | bool
 
 - name: Wait for Filestash HTTP UI

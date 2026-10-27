@@ -161,3 +161,37 @@ def test_two_select_contract_has_no_legacy_cli_flags():
     assert 'media_raw_disk_action' in guest_tasks
     assert 'ensure_create(data, disk, physical, "erase")' in disk_source
 
+
+
+def test_native_filestash_state_follows_binary_directory_and_is_writable():
+    """Guard against /usr/local/bin/data/state/log crash on a fresh Debian VM."""
+    import yaml
+    tasks = yaml.safe_load(
+        (ROOT / "roles/media_guest_setup/tasks/apps.yml").read_text())
+    by_name = {task["name"]: (index, task) for index, task in enumerate(tasks)}
+    root_i, root_task = by_name["Create root-owned Filestash executable directory"]
+    state_i, state_task = by_name["Create persistent native Filestash state directories"]
+    bin_i, bin_task = by_name["Download upstream native Filestash executable"]
+    unit_i, unit_task = by_name["Install Filestash service definition"]
+    start_i, start_task = by_name["Start Filestash"]
+    check_i, _ = by_name["Wait for Filestash HTTP UI"]
+    assert root_i < state_i < bin_i < unit_i < start_i < check_i
+    root_args = root_task["ansible.builtin.file"]
+    assert (root_args["path"], root_args["owner"], root_args["group"]) == (
+        "/opt/dh-filestash", "root", "root")
+    state_args = state_task["ansible.builtin.file"]
+    assert state_args["owner"] == "filestash"
+    assert state_args["group"] == "filestash"
+    assert "recurse" not in state_args
+    required = {"log", "config", "db", "certs", "plugins", "search"}
+    paths = state_task["loop"]
+    assert {f"/opt/dh-filestash/data/state/{name}" for name in required}.issubset(paths)
+    binary = bin_task["ansible.builtin.get_url"]
+    assert binary["dest"] == "/opt/dh-filestash/filestash"
+    assert binary["owner"] == "root" and binary["force"] is False
+    unit = (ROOT / "roles/media_guest_setup/templates/media-filestash.service.j2").read_text()
+    assert "User=filestash" in unit
+    assert "ExecStart=/opt/dh-filestash/filestash" in unit
+    assert "WorkingDirectory=/opt/dh-filestash" in unit
+    assert "/usr/local/bin/filestash" not in unit
+    assert "restarted" in start_task["ansible.builtin.systemd_service"]["state"]

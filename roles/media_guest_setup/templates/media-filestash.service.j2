@@ -7,8 +7,8 @@ Wants=network-online.target
 Type=simple
 User=filestash
 Group=filestash
-WorkingDirectory=/var/lib/filestash
-ExecStart=/usr/local/bin/filestash
+WorkingDirectory=/opt/dh-filestash
+ExecStart=/opt/dh-filestash/filestash
 Restart=on-failure
 RestartSec=5
 
