@@ -1,48 +1,31 @@
 ---
-# Authenticated SMB access. Account secrets live only in private Fleet site data.
-# This must run before rendering smb.conf or restarting smbd.
-- name: Require explicit Samba accounts and writable media pool
+- name: Require only the commissioned initial identities
   ansible.builtin.assert:
     that:
       - media_vm.storage.mode == 'readwrite'
-      - media_vm.file_access is mapping
-      - media_vm.file_access.accounts is sequence
-      - media_vm.file_access.accounts is not string
-      - media_vm.file_access.accounts | length > 0
-      - (media_vm.file_access.accounts | map(attribute='name') | list | unique | length) == (media_vm.file_access.accounts | length)
-    fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
-  no_log: true
+      - media_vm.file_access.accounts | length == 2
+      - (media_vm.file_access.accounts | map(attribute='name') | sort | list) == ['serzhan', 'serzhan_admin']
+      - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan') | map(attribute='role') | first) == 'owner'
+      - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan_admin') | map(attribute='role') | first) == 'administrator'
+    fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
 
-- name: Validate media account names roles and password strength
-  ansible.builtin.assert:
-    that:
-      - item.name is match('^[a-z][a-z0-9_-]{2,30}$')
-      - item.name not in ['root', 'debian', 'nobody', 'plex', 'jellyfin', 'radarr', 'sonarr', 'prowlarr', 'qbittorrent', 'filestash', 'samba']
-      - item.role in ['reader', 'writer']
-      - item.password is string
-      - item.password | length >= 16
-      - "'\n' not in item.password"
-      - "'\r' not in item.password"
-    fail_msg: MEDIA_FILE_ACCESS_ACCOUNT_INVALID
-  loop: "{{ media_vm.file_access.accounts }}"
-  loop_control:
-    label: "{{ item.name | default('INVALID') }}"
-  no_log: true
-
-- name: Create media SMB reader and writer authorization groups
+- name: Create approved media access groups
   ansible.builtin.group:
     name: "{{ item }}"
     state: present
   loop:
-    - dh_media_readers
-    - dh_media_writers
+    - media_group
+    - doc_group
+    - backup_group
+    - download_group
+    - admin_group
 
-- name: Create declared non-login SMB identities
+- name: Create approved POSIX owners and DigitalHouses admin
   ansible.builtin.user:
     name: "{{ item.name }}"
-    group: media_group
-    groups: "{{ 'dh_media_writers' if item.role == 'writer' else 'dh_media_readers' }}"
-    append: true
+    group: "{{ 'admin_group' if item.role == 'administrator' else 'media_group' }}"
+    groups: "{{ 'media_group,doc_group,backup_group,download_group,admin_group' if item.role == 'administrator' else 'media_group,doc_group' }}"
+    append: false
     home: /nonexistent
     create_home: false
     shell: /usr/sbin/nologin
@@ -51,30 +34,52 @@
   loop: "{{ media_vm.file_access.accounts }}"
   loop_control:
     label: "{{ item.name }}"
-  no_log: true
 
-- name: Reconcile Samba passwords exclusively from private Fleet
-  ansible.builtin.command:
-    argv: [smbpasswd, -s, -a, "{{ item.name }}"]
-    stdin: "{{ item.password }}\n{{ item.password }}\n"
-    stdin_add_newline: false
-  loop: "{{ media_vm.file_access.accounts }}"
-  no_log: true
-
-- name: Permit authenticated writers at the media dataset root
+- name: Permit owners to write Media dataset without recursive chmod
   ansible.builtin.file:
     path: "/{{ media_vm.storage.media_dataset }}"
     state: directory
     owner: root
     group: media_group
-    mode: '2775'
-  # Never recurse: existing files and directories are preserved.
+    mode: '2770'
 
-- name: Verify per-account Samba membership without exposing credentials
+- name: Create group-private Documents and DigitalHouses dataset roots
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.pool_name }}/{{ item.path }}"
+    state: directory
+    owner: root
+    group: "{{ item.group }}"
+    mode: '2770'
+  loop:
+    - {path: doc, group: doc_group}
+    - {path: digitalhouses, group: admin_group}
+    - {path: backups, group: backup_group}
+
+- name: Install root-only idempotent Samba credential manager
+  ansible.builtin.copy:
+    src: dh-media-accounts.py
+    dest: /usr/local/sbin/dh-media-accounts
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Generate or reuse protected DigitalHouses credentials and provision Samba
   ansible.builtin.command:
-    argv: [pdbedit, -L, "-u", "{{ item.name }}"]
-  changed_when: false
-  loop: "{{ media_vm.file_access.accounts }}"
-  loop_control:
-    label: "{{ item.name }}"
+    argv:
+      - /usr/local/sbin/dh-media-accounts
+      - --digitalhouses-root
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses"
+      - --account
+      - serzhan
+      - --account
+      - serzhan_admin
+  register: media_access_result
+  changed_when: "'SYNCHRONIZED' in media_access_result.stdout"
+  no_log: true
+
+- name: Require both Samba accounts ready
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_CREDENTIALS=READY' in media_access_result.stdout_lines"
+    fail_msg: MEDIA_ACCOUNTS_PROVISION_FAILED
   no_log: true
