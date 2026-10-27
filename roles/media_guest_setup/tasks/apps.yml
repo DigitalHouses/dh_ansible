@@ -56,6 +56,53 @@
   changed_when: "'Started' in media_sambee_up.stderr or 'Created' in media_sambee_up.stderr"
   when: media_vm.applications.sambee | default(true) | bool
 
+- name: Install guarded Sambee firstboot identity recovery helper
+  ansible.builtin.copy:
+    src: dh-sambee-firstboot-recovery.py
+    dest: /usr/local/sbin/dh-sambee-firstboot-recovery
+    owner: root
+    group: root
+    mode: '0700'
+  when: media_vm.applications.sambee | bool
+
+- name: Inspect whether empty preexisting Sambee admin state needs recovery
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-sambee-firstboot-recovery
+      - --check
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
+  register: media_sambee_firstboot_recovery
+  changed_when: false
+  when: media_vm.applications.sambee | bool
+
+- name: Stop only empty preexisting Sambee bootstrap container for protected recovery
+  ansible.builtin.command:
+    argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, stop, sambee]
+  when:
+    - media_vm.applications.sambee | bool
+    - "'SAMBEE_RECOVERY=REQUIRED' in media_sambee_firstboot_recovery.stdout_lines"
+
+- name: Preserve entire legacy Sambee database with atomic root-only snapshot
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-sambee-firstboot-recovery
+      - --apply
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
+  register: media_sambee_firstboot_snapshot
+  changed_when: "'SAMBEE_RECOVERY=BACKUP_SAVED_NEW_DATA_STAGED' in media_sambee_firstboot_snapshot.stdout_lines"
+  when:
+    - media_vm.applications.sambee | bool
+    - "'SAMBEE_RECOVERY=REQUIRED' in media_sambee_firstboot_recovery.stdout_lines"
+
+- name: Recreate only the Sambee container against verified clean application data
+  ansible.builtin.command:
+    argv: [docker, compose, -f, /opt/dh-sambee/docker-compose.yml, up, -d, --force-recreate, sambee]
+  when:
+    - media_vm.applications.sambee | bool
+    - "'SAMBEE_RECOVERY=REQUIRED' in media_sambee_firstboot_recovery.stdout_lines"
+
 - name: Wait for Sambee HTTP UI
   ansible.builtin.uri:
     url: http://127.0.0.1:8000/
@@ -66,6 +113,18 @@
   until: media_sambee_http.status in [200, 302, 307, 401]
   changed_when: false
   when: media_vm.applications.sambee | default(true) | bool
+
+- name: Verify fresh Sambee bootstrap created the Fleet owner before password reconciliation
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-sambee-firstboot-recovery
+      - --verify-new-owner
+      - --credentials-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
+  changed_when: false
+  when:
+    - media_vm.applications.sambee | bool
+    - "'SAMBEE_RECOVERY=REQUIRED' in media_sambee_firstboot_recovery.stdout_lines"
 
 - name: Install protected Sambee local-owner commissioning helper
   ansible.builtin.copy:
