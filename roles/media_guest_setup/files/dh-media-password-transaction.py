@@ -80,6 +80,67 @@ def owner_password(path):
     return pw
 
 
+class PassportAdapter:
+    """Last commit step: atomic ZFS owner TXT replacement, never an API call."""
+
+    def __init__(self, path):
+        self.path = Path(path)
+
+    def verify(self, password):
+        return owner_password(self.path) == password
+
+    def apply(self, previous, password):
+        require(self.verify(previous), "ROTATION_PASSPORT_DRIFT")
+        stat_info = self.path.stat()
+        content = "username=" + self.path.stem + "\npassword=" + password + "\n"
+        fd, tmp = tempfile.mkstemp(prefix=".owner-passport-", dir=self.path.parent)
+        try:
+            os.fchown(fd, stat_info.st_uid, stat_info.st_gid)
+            os.fchmod(fd, stat.S_IMODE(stat_info.st_mode))
+            with os.fdopen(fd, "w", encoding="ascii") as out:
+                out.write(content)
+                out.flush()
+                os.fsync(out.fileno())
+            os.replace(tmp, self.path)
+            flush_parent(self.path.parent)
+        finally:
+            if os.path.lexists(tmp):
+                os.unlink(tmp)
+
+
+class StampAdapter:
+    """Reconcile only pre-existing, root-owned service stamps."""
+
+    def __init__(self, path, username):
+        self.path = Path(path)
+        self.username = username
+
+    def verify(self, password):
+        check_file(self.path)
+        return self.path.read_text("ascii").strip() == digest(
+            self.username, password)
+
+    def apply(self, previous, password):
+        require(self.verify(previous), "ROTATION_STAMP_DRIFT")
+        durable_text(self.path, digest(self.username, password) + "\n")
+
+
+def durable_text(path, value):
+    check_file(path)
+    fd, tmp = tempfile.mkstemp(prefix=".dh-rotate-stamp-", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="ascii") as out:
+            out.write(value)
+            out.flush()
+            os.fsync(out.fileno())
+        os.replace(tmp, path)
+        flush_parent(path.parent)
+    finally:
+        if os.path.lexists(tmp):
+            os.unlink(tmp)
+
+
 def preflight_scope(path):
     require(os.geteuid() == 0, "ROTATION_REQUIRES_ROOT")
     require(path.is_absolute() and path.parent.name == "credentials"
