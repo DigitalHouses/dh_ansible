@@ -75,16 +75,21 @@ def reconcile_libraries(media_root, token):
 
 def bootstrap(secret_file, media_root):
     require(os.geteuid() == 0, "ROOT_ONLY")
-    require(secret_file.parent.name == 'apps' and secret_file.parent.parent.name == 'credentials' and secret_file.parent.parent.parent.name == 'digitalhouses', 'PASSPORT_LOCATION_INVALID')
+    require(secret_file.parent.name == 'credentials' and
+            secret_file.parent.parent.name == 'digitalhouses' and
+            secret_file.name.endswith('.txt') and
+            secret_file.stem != 'serzhan_admin', 'PASSPORT_LOCATION_INVALID')
     require(not secret_file.is_symlink() and secret_file.is_file(), "ADMIN_PASSPORT_MISSING")
     st = secret_file.stat()
     require(st.st_uid == 0 and stat.S_IMODE(st.st_mode) == 0o640,
             "ADMIN_PASSPORT_UNSAFE")
     lines = secret_file.read_text("ascii").splitlines()
-    require(len(lines) == 2 and lines[0] == "username=serzhan_admin" and
+    username = secret_file.stem
+    require(len(lines) == 2 and lines[0] == "username=" + username and
             lines[1].startswith("password=") and
-            len(lines[1][9:]) == 24, "ADMIN_PASSPORT_INVALID")
-    credentials = {"username": "serzhan_admin", "password": lines[1][9:]}
+            len(lines[1][9:]) == 8 and lines[1][9:].isalnum(),
+            "ADMIN_PASSPORT_INVALID")
+    credentials = {"username": username, "password": lines[1][9:]}
     public = request("GET", "/System/Info/Public")
     require(isinstance(public, dict), "JELLYFIN_PUBLIC_STATUS_INVALID")
     if not public.get("StartupWizardCompleted"):
@@ -92,7 +97,7 @@ def bootstrap(secret_file, media_root):
         require(isinstance(initial, dict), "JELLYFIN_STARTUP_CONFIG_INVALID")
         request("POST", "/Startup/Configuration", initial)
         request("POST", "/Startup/User",
-                {"Name": "serzhan_admin", "Password": credentials["password"]})
+                {"Name": credentials["username"], "Password": credentials["password"]})
         request("POST", "/Startup/RemoteAccess",
                 {"EnableRemoteAccess": False, "EnableAutomaticPortMapping": False})
         request("POST", "/Startup/Complete")
@@ -102,7 +107,7 @@ def bootstrap(secret_file, media_root):
     else:
         print("JELLYFIN_WIZARD=ALREADY_COMPLETED")
     auth = request("POST", "/Users/AuthenticateByName",
-                   {"Username": "serzhan_admin", "Pw": credentials["password"]})
+                   {"Username": credentials["username"], "Pw": credentials["password"]})
     require(isinstance(auth, dict) and bool(auth.get("AccessToken")),
             "JELLYFIN_MANAGED_LOGIN_FAILED")
     print("JELLYFIN_ADMIN_AUTH=PASS")
