@@ -103,6 +103,7 @@ CODE_FILES = (
     "roles/media_guest_setup/templates/media-portal-index.html.j2",
     "roles/media_guest_setup/templates/media-pve-nfs.exports.j2",
     "playbooks/setup-pve-media-guest.yml",
+    "playbooks/commission-new-runner-bonjour.yml",
     "bootstrap/dh-pve-media-deploy.py",
 )
 REMOTE_INSTALL_FILES = tuple(item for item in CODE_FILES
@@ -1153,7 +1154,8 @@ def stage_pve_access_audit(checkout: Path) -> None:
         destination = role_dir + "/" + relative
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
-    for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml"):
+    for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml",
+                     "commission-new-runner-bonjour.yml"):
         source = checkout / "playbooks" / playbook
         if not source.is_file() or source.is_symlink():
             raise Blocked("Pinned PVE/media playbook missing")
@@ -1180,6 +1182,23 @@ def stage_pve_access_audit(checkout: Path) -> None:
         raise Blocked("Fixed-purpose PVE access audit watcher inactive")
     print("PVE_ACCESS_SEMAPHORE_AUDIT=READY", flush=True)
 
+
+
+def commission_new_runner_mdns(site: str, runner_cidr: str, pve_ip: str) -> None:
+    """Apply reusable Bonjour role ONLY to freshly commissioned Debian runner."""
+    play = "/opt/digitalhouses/bootstrap/pve-access/playbooks/commission-new-runner-bonjour.yml"
+    result = pct_guest(
+        "env", "ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles",
+        "/opt/ansible/venv/bin/ansible-playbook", "-i", "localhost,", play,
+        "-e", "dh_runner_mdns_first_boot=true",
+        "-e", "dh_runner_hostname=" + runner_hostname(site),
+        "-e", "dh_runner_cidr=" + runner_cidr,
+        "-e", "dh_pve_ip=" + pve_ip,
+        timeout=600,
+    )
+    if "NEW_RUNNER_BONJOUR=VERIFIED" not in result:
+        raise Blocked("NEW_RUNNER_BONJOUR_NOT_VERIFIED")
+    print("NEW_RUNNER_BONJOUR=VERIFIED", flush=True)
 
 
 def stage_site_data_provider(checkout: Path) -> None:
@@ -1561,6 +1580,9 @@ def apply(args, template):
                                          args.pve_ip, checkout,
                                          args.expected_fleet_commit, owner_master, env,
                                          restore_only=bool(args.resume_semaphore))
+        # Only brand-new CT or resume-fresh; no implicit mature runner retrofit.
+        if not (args.resume or args.resume_ansible or args.resume_semaphore):
+            commission_new_runner_mdns(args.site, args.runner_cidr, args.pve_ip)
     print(f"DONE: Semaphore https://{ipaddress.IPv4Interface(args.runner_cidr).ip}:3000/")
     print("ADMIN_PASSWORD=ROOT_ONLY_GUEST_FILE (never post to chat)")
     print("FLEET_VAULT_ON_GUEST=NO")
