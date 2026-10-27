@@ -14,6 +14,27 @@ import urllib.error
 BASE = "http://127.0.0.1:8096"
 DIAGNOSTIC = Path("/run/dh-jellyfin-bootstrap.status")
 STAGE = ["NOT_STARTED"]
+# These are program-owned diagnostics, never arbitrary exception messages.
+SAFE_ERROR_CODES = frozenset({
+    "ROOT_ONLY", "PASSPORT_LOCATION_INVALID", "ADMIN_PASSPORT_MISSING",
+    "ADMIN_PASSPORT_UNSAFE", "ADMIN_PASSPORT_INVALID",
+    "JELLYFIN_ACCESS_TOKEN_INVALID", "JELLYFIN_DIAGNOSTIC_INVALID",
+    "JELLYFIN_DIAGNOSTIC_ROOT_REQUIRED", "JELLYFIN_DIAGNOSTIC_UNAVAILABLE",
+    "JELLYFIN_DIAGNOSTIC_UNSAFE", "JELLYFIN_LIBRARY_CREATE_UNCONFIRMED",
+    "JELLYFIN_LIBRARY_DRIFT", "JELLYFIN_LIBRARY_DUPLICATE",
+    "JELLYFIN_LIBRARY_LIST_INVALID", "JELLYFIN_LIBRARY_PATH_CONFLICT",
+    "JELLYFIN_MANAGED_LOGIN_FAILED", "JELLYFIN_MEDIA_PATH_MISSING",
+    "JELLYFIN_MEDIA_ROOT_UNSAFE", "JELLYFIN_PUBLIC_STATUS_INVALID",
+    "JELLYFIN_SETUP_ARGUMENTS_REQUIRED", "JELLYFIN_STARTUP_CONFIG_INVALID",
+    "JELLYFIN_STARTUP_NOT_CONFIRMED",
+})
+SAFE_STAGES = frozenset({"NOT_STARTED"}) | frozenset(
+    method + "_" + route
+    for method in ("GET", "POST")
+    for route in ("PUBLIC_STATUS", "STARTUP_CONFIG", "STARTUP_USER",
+                  "STARTUP_REMOTE_ACCESS", "STARTUP_COMPLETE", "OWNER_AUTH",
+                  "LIBRARY", "OTHER_FIXED_ENDPOINT")
+)
 
 
 def stage_name(method, path):
@@ -31,12 +52,20 @@ def stage_name(method, path):
 
 
 def sanitized_diagnostic(error):
-    stage = STAGE[0]
-    code = str(error) if isinstance(error, RuntimeError) else type(error).__name__
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,75}", code):
+    stage = STAGE[0] if STAGE[0] in SAFE_STAGES else "UNKNOWN_STAGE"
+    if type(error) is RuntimeError:
+        candidate = str(error)
+        code = (candidate if candidate in SAFE_ERROR_CODES or
+                re.fullmatch(r"JELLYFIN_HTTP_[1-5][0-9]{2}", candidate)
+                else "UNCLASSIFIED")
+    elif isinstance(error, urllib.error.URLError):
+        code = "NETWORK_ERROR"
+    elif isinstance(error, OSError):
+        code = "OS_ERROR"
+    elif isinstance(error, ValueError):
+        code = "VALUE_ERROR"
+    else:
         code = "UNCLASSIFIED"
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,75}", stage):
-        stage = "UNKNOWN_STAGE"
     return "JELLYFIN_STAGE=" + stage + " JELLYFIN_ERROR=" + code + "\n"
 
 
@@ -203,6 +232,8 @@ if __name__ == "__main__":
                     "JELLYFIN_SETUP_ARGUMENTS_REQUIRED")
             bootstrap(args.credential_file, args.media_root)
     except (OSError, ValueError, RuntimeError, urllib.error.URLError) as e:
-        record_diagnostic(e)
+        # Inspection failure must never replace the original bootstrap failure.
+        if not args.inspect_stage:
+            record_diagnostic(e)
         print("JELLYFIN_SETUP=BLOCKED", file=sys.stderr)
         sys.exit(2)

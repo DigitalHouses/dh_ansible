@@ -67,18 +67,21 @@ def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
     assert "intel-media-va-driver" in code
     assert "vainfo" in code
 
-def test_media_smb_discovery_is_readonly_and_idempotent():
+def test_media_smb_discovery_requires_authenticated_two_way_access():
     tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     named = {item["name"]: item for item in tasks}
+    assert "Require Fleet identities and provision authenticated SMB access" in named
     assert "Advertise existing media library over SMB" in named
     assert "Start Samba and Windows WS-Discovery services" in named
-    assert "Confirm readonly guest SMB share is reachable" in named
     assert "samba" in str(tasks) and "wsdd2" in str(tasks)
     template = (ROOT / "roles/media_guest_setup/templates/media-smb.conf.j2").read_text()
     assert "path = /{{ media_vm.storage.media_dataset }}" in template
-    assert "read only = yes" in template
-    assert "guest ok = yes" in template
+    assert "read only = no" in template
+    assert "guest ok = no" in template
+    assert "map to guest = Never" in template
+    assert "valid users =" in template
     assert template.count("[Media]") == 1
+    assert template.count("[Documents]") == 1
     assert "netbios name = {{ media_vm.discovery.netbios_name }}" in template
     assert "media-smb.conf.j2" in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
 
@@ -154,7 +157,8 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
     named = {r["name"]: r for r in role}
     assert "Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys" in named
     assert "Check staging-only automation outcome" in named
-    assert "Ensure qBittorrent local API can be used without copying passwords" in named
+    assert "Verify LAN authentication is mandatory while loopback API remains available" in named
+    assert "Apply persistent qBittorrent LAN administrator from ZFS credential file" in named
     assert "Create separate writable download and staging roots on system disk" in named
     assert named["Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys"]["ansible.builtin.command"]["argv"][0] == '/usr/local/sbin/dh-media-arr-wire'
     assert '("media_guest_setup", "files/dh-media-arr-wire.py")' in (ROOT / "bootstrap/semaphore-host-install.py").read_text()

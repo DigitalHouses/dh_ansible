@@ -14,7 +14,7 @@ def test_media_vm_preflight_catalog_is_read_only():
     playbook = (ROOT / entries[0]["playbook"]).read_text()
     worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
     guarded = (ROOT / "playbooks/audit-pve-access.yml").read_text()
-    assert "MEDIA_PLAN:" in playbook
+    assert "MEDIA_PLAN_" in playbook
     assert "MEDIA_PLAN" in worker
     assert "pve_audit" in guarded
     assert "pve_media_vm_plan" in guarded
@@ -25,7 +25,7 @@ def test_media_vm_identity_uses_service_site_ip_octet_rule():
     tasks = yaml.safe_load((ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text())
     assertions = tasks[0]["ansible.builtin.assert"]["that"]
     rule = "\n".join(assertions)
-    assert "media_vm.name == 'media-server-' ~ site.id" in rule
+    assert "media_vm.name == 'mediaserver-' ~ site.owner_slug" in rule
     assert "media_vm.vmid | int == 2000 +" in rule
     assert "media_vm.network.ipv4.split('/')[0].split('.')[-1]" in rule
     assert "range(200, 255)" in rule

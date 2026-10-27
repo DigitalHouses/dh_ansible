@@ -25,10 +25,14 @@ def test_diagnostic_accepts_only_predefined_safe_codes():
     m.STAGE[0] = "POST_STARTUP_USER"
     assert m.sanitized_diagnostic(RuntimeError("JELLYFIN_HTTP_400")) == (
         "JELLYFIN_STAGE=POST_STARTUP_USER JELLYFIN_ERROR=JELLYFIN_HTTP_400\n")
-    for secret in ('passw0rd', 'Bearer secret-token', 'JELLYFIN_HTTP_400 password'):
+    for secret in ('passw0rd', 'Bearer secret-token', 'JELLYFIN_HTTP_400 password',
+                   'ABCDEFGH', 'PW123456', 'PASSWORD_RESET'):
         assert secret not in m.sanitized_diagnostic(RuntimeError(secret))
         assert "JELLYFIN_ERROR=UNCLASSIFIED" in m.sanitized_diagnostic(
             RuntimeError(secret))
+    m.STAGE[0] = "PASSWORD12"
+    assert "JELLYFIN_STAGE=UNKNOWN_STAGE" in m.sanitized_diagnostic(
+        RuntimeError("ADMIN_PASSPORT_INVALID"))
 
 def test_diagnostic_file_is_root_owned_private_and_never_prints_credentials(tmp_path):
     m = helper()
