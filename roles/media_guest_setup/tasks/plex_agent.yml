@@ -1,0 +1,81 @@
+---
+- name: Require private MQTT settings for DigitalHouses Plex Agent
+  ansible.builtin.assert:
+    that:
+      - media_vm.plex_agent is mapping
+      - media_vm.plex_agent.mqtt is mapping
+      - media_vm.plex_agent.mqtt.host is match('^[0-9a-zA-Z.-]+$')
+      - media_vm.plex_agent.mqtt.port | int >= 1
+      - media_vm.plex_agent.mqtt.port | int <= 65535
+      - media_vm.plex_agent.mqtt.username | length > 0
+      - media_vm.plex_agent.mqtt.password | length > 0
+    fail_msg: MEDIA_PLEX_AGENT_MQTT_FLEET_REQUIRED
+  no_log: true
+
+- name: Install Plex Agent prerequisites
+  ansible.builtin.apt:
+    name: [git, python3-venv]
+    state: present
+
+- name: Create protected Plex Agent configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses_plex_agent
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+
+- name: Seed noninteractive Plex Agent configuration from protected Fleet
+  ansible.builtin.template:
+    src: digitalhouses-plex-agent.conf.j2
+    dest: /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
+    owner: root
+    group: root
+    mode: '0600'
+  register: media_plex_agent_config
+  no_log: true
+
+- name: Check for installed canonical Plex Agent build provenance
+  ansible.builtin.stat:
+    path: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+  register: media_plex_agent_build
+
+- name: Read installed Plex Agent build metadata
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_plex_agent/BUILD_INFO
+  register: media_plex_agent_installed_build
+  when: media_plex_agent_build.stat.exists
+
+- name: Download pinned official Plex Agent installer
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_plex_agent-v0.8.0/digitalhouses_plex_agent/install.sh
+    dest: /var/cache/digitalhouses/media/digitalhouses-plex-agent-install-v0.8.0.sh
+    owner: root
+    group: root
+    mode: '0700'
+  when: >-
+    not media_plex_agent_build.stat.exists or
+    'source = digitalhouses_plex_agent-v0.8.0' not in (media_plex_agent_installed_build.content | default('') | b64decode)
+
+- name: Install official Plex Agent from pinned release only if needed
+  ansible.builtin.command:
+    argv: [bash, /var/cache/digitalhouses/media/digitalhouses-plex-agent-install-v0.8.0.sh]
+  environment:
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_plex_agent-v0.8.0
+  when: >-
+    not media_plex_agent_build.stat.exists or
+    'source = digitalhouses_plex_agent-v0.8.0' not in (media_plex_agent_installed_build.content | default('') | b64decode)
+  no_log: true
+
+- name: Enable active Plex Agent with reconciled site MQTT config
+  ansible.builtin.systemd_service:
+    name: digitalhouses_plex_agent.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_agent_config.changed else 'started' }}"
+
+- name: Check canonical Plex Agent is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, digitalhouses_plex_agent.service]
+  register: media_plex_agent_active
+  changed_when: false
+  failed_when: media_plex_agent_active.stdout != 'active'
