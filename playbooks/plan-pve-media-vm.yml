@@ -137,11 +137,14 @@
     - name: Provision only when canonical Fleet authorizes media server
       ansible.builtin.assert:
         that:
+          - media_plan_summary.blockers is sequence
+          - media_plan_summary.blockers is not string
+          - media_plan_summary.blockers | length == 0
           - (media_plan_summary.gpu_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
           - (media_plan_summary.sata_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
           - media_vm.approvals.gpu_cutover | bool
           - media_vm.approvals.sata_cutover | bool
-        fail_msg: "MEDIA_PCI_ALREADY_OWNED_OR_NOT_APPROVED"
+        fail_msg: "MEDIA_DEPLOY_BLOCKED_BY_PREFLIGHT: resolve all plan blockers before any writes"
       when: media_vm.approvals.provision | default(false) | bool
 
     - name: Create deployment request ID
