@@ -4,8 +4,8 @@
     that:
       - media_vm.storage.mode == 'readwrite'
       - media_vm.file_access.accounts | length == 2
-      - (media_vm.file_access.accounts | map(attribute='name') | sort | list) == ['serzhan', 'serzhan_admin']
-      - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan') | map(attribute='role') | first) == 'owner'
+      - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+      - 'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)
       - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan_admin') | map(attribute='role') | first) == 'administrator'
     fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
 
@@ -70,7 +70,7 @@
       - --digitalhouses-root
       - "/{{ media_vm.storage.pool_name }}/digitalhouses"
       - --account
-      - serzhan
+      - "{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}"
       - --account
       - serzhan_admin
   register: media_access_result
