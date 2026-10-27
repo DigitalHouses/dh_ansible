@@ -114,3 +114,30 @@ def test_media_external_apt_repos_are_always_refreshed_before_first_install():
         assert install["update_cache"] is False
 
 
+
+
+def test_sambee_data_directory_writable_by_container_uid_before_launch():
+    import yaml
+    app_tasks = yaml.safe_load(
+        (ROOT / "roles/media_guest_setup/tasks/apps.yml").read_text())
+    names = [task["name"] for task in app_tasks]
+    config = names.index("Prepare Sambee application configuration directory")
+    data = names.index("Allow Sambee UID 1000 to persist its SQLite database")
+    compose = names.index("Install Sambee container definition")
+    start = names.index("Start or reconcile Sambee service")
+    assert config < data < compose < start
+    data_task = app_tasks[data]["ansible.builtin.file"]
+    assert data_task["path"] == "/opt/dh-sambee/data"
+    assert str(data_task["owner"]) == "1000"
+    assert str(data_task["group"]) == "1000"
+    assert data_task["recurse"] is True
+    assert str(data_task["mode"]) == "0750"
+    config_task = app_tasks[config]["ansible.builtin.file"]
+    assert config_task["path"] == "/opt/dh-sambee"
+    assert config_task["owner"] == "root"
+    assert config_task["group"] == "root"
+    compose_text = (
+        ROOT / "roles/media_guest_setup/templates/media-sambee-compose.yml.j2"
+    ).read_text()
+    assert "./data:/app/data" in compose_text
+    assert "ghcr.io/helgeklein/sambee:stable" in compose_text
