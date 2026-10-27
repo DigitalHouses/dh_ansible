@@ -713,3 +713,6 @@
 
 - name: Publish local media portal and LAN discovery
   ansible.builtin.import_tasks: discovery_portal.yml
+
+- name: Export backup dataset to the approved PVE host over NFS
+  ansible.builtin.import_tasks: nfs_backups.yml
