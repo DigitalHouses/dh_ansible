@@ -220,7 +220,10 @@
 
 - name: Reconcile Filestash SMB passthrough without creating web users
   ansible.builtin.command:
-    argv: [/usr/local/sbin/dh-filestash-smb-config]
+    argv:
+      - /usr/local/sbin/dh-filestash-smb-config
+      - --credential-file
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
   register: media_filestash_smb
   changed_when: "'FILESTASH_SMB=RECONCILED' in media_filestash_smb.stdout"
   when: media_vm.applications.filestash | default(true) | bool
