@@ -453,17 +453,31 @@ def read_public_catalog():
 
 
 def allowed_survey_upgrade(title, existing, wanted):
-    """Only the exact previously deployed task 80 survey may gain fields."""
+    """Allow exactly the known legacy task 80 survey to become two selects.
+
+    Keep its template ID/history. Any manual or foreign survey remains blocked.
+    """
     if existing in ([], wanted):
         return True
-    return (title == "80-Медиасервер · Развёртывание"
-            and isinstance(existing, list)
-            and len(existing) == 1
-            and isinstance(wanted, list)
-            and len(wanted) == 3
-            and existing == wanted[:1]
-            and [v.get("name") for v in wanted] ==
-            ["media_storage_action", "media_vm_policy", "media_disk_policy"])
+    if (title != "80-Медиасервер · Развёртывание"
+            or not isinstance(existing, list)
+            or len(existing) not in (1, 3)
+            or not isinstance(wanted, list)
+            or [v.get("name") for v in wanted] !=
+            ["media_vm_action", "media_raw_disk_action"]):
+        return False
+    old_names = ["media_storage_action", "media_vm_policy", "media_disk_policy"]
+    old_options = [["create", "import"], ["keep", "recreate"],
+                   ["preserve", "erase"]]
+    return all(
+        isinstance(var, dict)
+        and var.get("name") == old_names[i]
+        and var.get("type") == "enum"
+        and var.get("required") is True
+        and [option.get("value") for option in var.get("values", [])]
+        == old_options[i]
+        for i, var in enumerate(existing)
+    )
 
 
 def sync_existing_template(api, path, desired, *, apply=False):
