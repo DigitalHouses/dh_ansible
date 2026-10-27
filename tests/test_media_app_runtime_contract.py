@@ -120,3 +120,40 @@ def test_all_media_assets_in_pinned_bootstrap_download_manifest():
                  "roles/media_guest_setup/tasks/jellyfin_bootstrap.yml",
                  "playbooks/setup-pve-media-guest.yml"):
         assert item in names and (ROOT / item).is_file()
+
+
+def test_pve_runtime_publisher_preserves_existing_site_envelope():
+    publisher = module("bootstrap/dh-pve-media-mqtt-runtime-commission.py",
+                       "pve_runtime_publish")
+    with tempfile.TemporaryDirectory() as scratch:
+        path = Path(scratch) / "runtime" / "serzhan-home.yml"
+        with mock.patch.object(publisher, "TARGET", path):
+            mqtt = {"username": "synthetic", "password": "dummy-only"}
+            publisher.update_runtime(mqtt)
+            first = path.read_bytes()
+            publisher.update_runtime(mqtt)
+            assert path.read_bytes() == first
+            import yaml
+            record = yaml.safe_load(first)
+            assert record["runtime_secrets"]["site_secrets"]["plex_agent"]["mqtt"] == mqtt
+
+
+def test_bootstrap_installer_stages_every_file_in_media_guest_role():
+    text = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    tree = ast.parse(text)
+    stage = next(item for item in tree.body if isinstance(item, ast.FunctionDef)
+                 and item.name == "stage_pve_access_audit")
+    relative_files = set()
+    for item in ast.walk(stage):
+        if isinstance(item, ast.Tuple) and len(item.elts) == 2:
+            try:
+                role, path = ast.literal_eval(item)
+            except (ValueError, TypeError, SyntaxError):
+                continue
+            if role == "media_guest_setup":
+                relative_files.add(path)
+    for path in (ROOT / "roles/media_guest_setup").rglob("*"):
+        if path.is_file() and "__pycache__" not in str(path) and
+                path.suffix != ".pyc":
+            rel = str(path.relative_to(ROOT / "roles/media_guest_setup"))
+            assert rel in relative_files, "Installer does not stage " + rel
