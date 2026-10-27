@@ -1,0 +1,61 @@
+---
+- name: Require exact approved Proxmox NFS backup export identity
+  ansible.builtin.assert:
+    that:
+      - media_vm.backup_export is mapping
+      - media_vm.backup_export.storage_id == 'dh_media_backups'
+      - media_vm.backup_export.pve_host is match('^[0-9.]+$')
+      - media_vm.backup_export.path == '/' ~ media_vm.storage.pool_name ~ '/backups/pve'
+    fail_msg: MEDIA_PVE_NFS_EXPORT_FLEET_REQUIRED
+
+- name: Install NFS kernel server for Proxmox backup export
+  ansible.builtin.apt:
+    name: nfs-kernel-server
+    state: present
+
+- name: Prepare only approved NFS backup directory
+  ansible.builtin.file:
+    path: "{{ media_vm.backup_export.path }}"
+    state: directory
+    owner: nobody
+    group: nogroup
+    mode: '0700'
+
+- name: Create exports directory if absent
+  ansible.builtin.file:
+    path: /etc/exports.d
+    state: directory
+    mode: '0755'
+
+- name: Export backup directory only to approved PVE IP
+  ansible.builtin.template:
+    src: media-pve-nfs.exports.j2
+    dest: /etc/exports.d/dh-media-pve.exports
+    owner: root
+    group: root
+    mode: '0644'
+  register: media_nfs_config
+
+- name: Validate NFS export file
+  ansible.builtin.command:
+    argv: [exportfs, -ra]
+  changed_when: media_nfs_config.changed
+
+- name: Enable guest NFS server
+  ansible.builtin.systemd_service:
+    name: nfs-server.service
+    enabled: true
+    state: started
+
+- name: Check declared NFS export is visible to server
+  ansible.builtin.command:
+    argv: [exportfs, -v]
+  register: media_nfs_exports
+  changed_when: false
+
+- name: Require approved NFS export present
+  ansible.builtin.assert:
+    that:
+      - media_vm.backup_export.path in media_nfs_exports.stdout
+      - media_vm.backup_export.pve_host in media_nfs_exports.stdout
+    fail_msg: MEDIA_NFS_EXPORT_NOT_APPLIED
