@@ -56,10 +56,9 @@ class MediaSurveyTest(unittest.TestCase):
         return SurveyAPI(row.copy()), row.copy()
 
     def test_exact_engineer_choices(self):
-        self.assertEqual(len(self.survey), 3)
-        expected = {"media_storage_action": ["create", "import"],
-                    "media_vm_policy": ["keep", "recreate"],
-                    "media_disk_policy": ["preserve", "erase"]}
+        self.assertEqual(len(self.survey), 2)
+        expected = {"media_vm_action": ["create", "recreate", "keep"],
+                    "media_raw_disk_action": ["import", "erase"]}
         for variable in self.survey:
             self.assertIn(variable["name"], expected)
             self.assertEqual(variable["type"], "enum")
@@ -68,6 +67,18 @@ class MediaSurveyTest(unittest.TestCase):
             self.assertNotIn("default_value", variable)
             self.assertEqual([o["value"] for o in variable["values"]],
                              expected[variable["name"]])
+
+    def legacy_survey(self):
+        return [
+            {"name": name, "title": "Prior deployment select",
+             "description": "Migrated only from known task 80 contract",
+             "type": "enum", "required": True,
+             "values": [{"name": str(value), "value": value} for value in choices]}
+            for name, choices in (
+                ("media_storage_action", ("create", "import")),
+                ("media_vm_policy", ("keep", "recreate")),
+                ("media_disk_policy", ("preserve", "erase")))
+        ]
 
     def test_catalog_sync_retains_id_and_is_idempotent(self):
         m = self.module
@@ -83,20 +94,22 @@ class MediaSurveyTest(unittest.TestCase):
         m.sync_existing_template(api, route, desired, apply=True)
         self.assertEqual(api.writes, 1)
 
-    def test_existing_single_field_survey_is_extended_in_place(self):
+    def test_existing_legacy_surveys_are_replaced_in_place(self):
         m = self.module
         api, desired = self.make_api()
         desired["survey_vars"] = self.survey
-        api.row["survey_vars"] = self.survey[:1]
         route = "/project/1/templates?sort=name&order=asc"
-        m.sync_existing_template(api, route, desired, apply=False)
-        self.assertEqual(api.writes, 0)
-        m.sync_existing_template(api, route, desired, apply=True)
-        self.assertEqual(api.row["id"], 80)
-        self.assertEqual(api.row["survey_vars"], self.survey)
-        self.assertEqual(api.writes, 1)
-        m.sync_existing_template(api, route, desired, apply=True)
-        self.assertEqual(api.writes, 1)
+        for legacy in (self.legacy_survey()[:1], self.legacy_survey()):
+            api.row["survey_vars"] = legacy
+            count = api.writes
+            m.sync_existing_template(api, route, desired, apply=False)
+            self.assertEqual(api.writes, count)
+            m.sync_existing_template(api, route, desired, apply=True)
+            self.assertEqual(api.row["id"], 80)
+            self.assertEqual(api.row["survey_vars"], self.survey)
+            self.assertEqual(api.writes, count + 1)
+            m.sync_existing_template(api, route, desired, apply=True)
+            self.assertEqual(api.writes, count + 1)
 
     def test_manual_survey_drift_blocked(self):
         m = self.module
@@ -120,16 +133,19 @@ class MediaSurveyTest(unittest.TestCase):
         play = (ROOT / self.media["playbook"]).read_text()
         worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
         guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
-        assert "media_storage_action in ['create', 'import']" in play
-        assert "MEDIA_DEPLOY_{{ media_storage_action | upper }}_" in play
-        assert "MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)" in worker
-        assert "--storage-action" in worker
-        assert "--vm-policy" in worker
-        assert "--disk-policy" in worker
-        assert "media_storage_action=$STORAGE_ACTION" in worker
-        assert "media_vm_policy=$VM_POLICY" in worker
-        assert "media_disk_policy=$DISK_POLICY" in worker
+        assert "media_vm_action in ['create', 'recreate', 'keep']" in play
+        assert "media_raw_disk_action in ['import', 'erase']" in play
+        assert "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}" in play
+        assert "MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
+        assert "--vm-action" in worker
+        assert "--raw-disk-action" in worker
+        assert "media_vm_action=$VM_ACTION" in worker
+        assert "media_raw_disk_action=$RAW_DISK_ACTION" in worker
         assert "media_vm.yml" in guest
+        for legacy in ("media_storage_action", "media_vm_policy", "media_disk_policy"):
+            assert legacy not in play
+            assert legacy not in worker
+            assert legacy not in (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
 
 
 if __name__ == "__main__":
