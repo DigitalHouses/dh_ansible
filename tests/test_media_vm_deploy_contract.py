@@ -42,7 +42,7 @@ def test_image_download_and_host_compatibility():
                  "hashlib.sha512", "qm(\"importdisk\"", "qm(\"start\"",
                  "local-lvm", "pct(\"ssh-keygen\"", "hostpci"):
         assert term in code
-    assert 'old_guest_matches(vmid, site, data)' in code
+    assert 'old_guest_matches(vmid, site, data, managed=managed)' in code
     assert 'LEGACY_ZFS_GUID_MISMATCH' in code
     assert 'LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH' in code
     assert 'qm("destroy", vmid' in code
