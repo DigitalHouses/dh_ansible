@@ -34,7 +34,7 @@ try:
     mqtt = site_secrets["plex_agent"]["mqtt"]
     username, password = mqtt["username"], mqtt["password"]
     if not all(isinstance(v, str) and 0 < len(v) <= 512 and
-               "\\n" not in v and "\\r" not in v
+               "\n" not in v and "\r" not in v
                for v in [username, password]):
         raise ValueError("MQTT_INVALID")
     print(json.dumps({"username": username, "password": password}))
