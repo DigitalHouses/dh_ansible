@@ -113,19 +113,29 @@ def effective_admin_config(secret):
     body = json.dumps({"password": secret}).encode("ascii")
     request = urllib.request.Request(
         BASE + "/admin/api/session", data=body, headers=headers, method="POST")
+    stage = "ADMIN_LOGIN"
     try:
         with opener.open(request, timeout=12) as response:
             result = json.loads(response.read(16384))
         require(isinstance(result, dict) and result.get("status") == "ok",
                 "FILESTASH_ADMIN_LOGIN_REJECTED")
         require(bool(list(cookies)), "FILESTASH_ADMIN_COOKIE_NOT_SET")
+        stage = "ADMIN_CONFIG"
         with opener.open(BASE + "/admin/api/config", timeout=12) as response:
             result = json.loads(response.read(1024 * 1024))
         require(isinstance(result, dict) and isinstance(result.get("result"), dict),
                 "FILESTASH_RUNTIME_CONFIG_INVALID")
         return result["result"]
-    except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError):
-        raise Blocked("FILESTASH_RUNTIME_CONFIG_UNAVAILABLE")
+    except urllib.error.HTTPError as error:
+        # HTTP status only, never URL, headers, cookies, or response body.
+        code = error.code
+        if type(code) is not int or not 400 <= code <= 599:
+            raise Blocked("FILESTASH_" + stage + "_HTTP_ERROR") from None
+        raise Blocked("FILESTASH_" + stage + "_HTTP_" + str(code)) from None
+    except urllib.error.URLError:
+        raise Blocked("FILESTASH_" + stage + "_NETWORK_ERROR") from None
+    except TimeoutError:
+        raise Blocked("FILESTASH_" + stage + "_TIMEOUT") from None
 
 
 def reconcile(path=PATH, credential=None):
