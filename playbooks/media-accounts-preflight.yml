@@ -47,8 +47,8 @@
       - media_vm.plex_agent.mqtt.host is match('^[0-9a-zA-Z.-]+$')
       - media_vm.plex_agent.mqtt.port | int >= 1
       - media_vm.plex_agent.mqtt.port | int <= 65535
-      - media_vm.plex_agent.mqtt.username | length > 0
-      - media_vm.plex_agent.mqtt.password | length > 0
+      - media_vm.plex_agent.mqtt.username is not defined
+      - media_vm.plex_agent.mqtt.password is not defined
       - media_vm.discovery.netbios_name | length <= 15
     fail_msg: MEDIA_V3_FLEET_INCOMPLETE
   no_log: true
