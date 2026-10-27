@@ -17,6 +17,10 @@
       - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
       - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
 
+- name: Set canonical Debian media server hostname without recreating VM
+  ansible.builtin.hostname:
+    name: "{{ media_vm.name }}"
+
 - name: Enable Debian contrib for supported ZFS packages
   ansible.builtin.replace:
     path: /etc/apt/sources.list.d/debian.sources
@@ -703,6 +707,9 @@
 
 - name: Provision Filestash Sambee and Jellyfin
   ansible.builtin.import_tasks: apps.yml
+
+- name: Deploy DigitalHouses Plex Agent with private MQTT settings
+  ansible.builtin.import_tasks: plex_agent.yml
 
 - name: Publish local media portal and LAN discovery
   ansible.builtin.import_tasks: discovery_portal.yml
