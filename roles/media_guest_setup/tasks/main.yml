@@ -208,6 +208,9 @@
     - tvshows
     - music
 
+- name: Require Fleet identities and provision authenticated SMB access
+  ansible.builtin.import_tasks: file_access.yml
+
 - name: Advertise existing media library over SMB
   ansible.builtin.template:
     src: media-smb.conf.j2
@@ -228,15 +231,18 @@
     - nmbd.service
     - wsdd2.service
 
-- name: Confirm readonly guest SMB share is reachable
+- name: Reject anonymous access to authenticated Media share
   ansible.builtin.command:
-    argv:
-      - smbclient
-      - -N
-      - //127.0.0.1/Media
-      - -c
-      - ls
+    argv: [smbclient, -N, //127.0.0.1/Media, -c, ls]
+  register: media_smb_anonymous
   changed_when: false
+  failed_when: false
+
+- name: Require anonymous Media access to be denied
+  ansible.builtin.assert:
+    that:
+      - media_smb_anonymous.rc != 0
+    fail_msg: MEDIA_SMB_ANONYMOUS_ACCESS_NOT_DENIED
 
 - name: Start Plex with Intel video/render permissions
   ansible.builtin.systemd_service:
