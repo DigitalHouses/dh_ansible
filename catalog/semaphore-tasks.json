@@ -62,6 +62,40 @@
               "value": "import"
             }
           ]
+        },
+        {
+          "name": "media_vm_policy",
+          "title": "Если медиасервер уже существует — пересоздать VM?",
+          "description": "Нет: сохранить существующую VM и привести её к конфигурации Fleet Detail. Да: удалить только проверенную VM этого объекта и установить Debian заново.",
+          "type": "enum",
+          "required": true,
+          "values": [
+            {
+              "name": "Нет — сохранить существующую VM (keep)",
+              "value": "keep"
+            },
+            {
+              "name": "Да — пересоздать VM (recreate)",
+              "value": "recreate"
+            }
+          ]
+        },
+        {
+          "name": "media_disk_policy",
+          "title": "Удалить содержимое переданных физических дисков?",
+          "description": "Сохранить: никаких ZFS destroy, wipefs или новой разметки на занятых дисках. Удалить: только при create и после проверки WWN, serial, размера и старого пула.",
+          "type": "enum",
+          "required": true,
+          "values": [
+            {
+              "name": "Сохранить данные (preserve)",
+              "value": "preserve"
+            },
+            {
+              "name": "Удалить данные без backup (erase)",
+              "value": "erase"
+            }
+          ]
         }
       ]
     }

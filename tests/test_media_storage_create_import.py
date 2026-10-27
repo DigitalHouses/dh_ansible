@@ -69,7 +69,7 @@ class StorageLifecycle(unittest.TestCase):
              patch.object(m, "imported_guid_visible", return_value=None), \
              patch.object(m, "command", side_effect=AssertionError("write attempted")):
             with self.assertRaisesRegex(m.Blocked, "LEGACY_POOL_GUID_MISMATCH"):
-                m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb")
+                m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb", "erase")
 
     def test_unknown_existing_partitions_fail_closed(self):
         m = self.m
@@ -83,6 +83,27 @@ class StorageLifecycle(unittest.TestCase):
              patch.object(m, "command", side_effect=command):
             with self.assertRaisesRegex(m.Blocked, "UNKNOWN_EXISTING_PARTITIONS"):
                 m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb")
+
+
+    def test_existing_legacy_pool_is_preserved_without_erase(self):
+        m = self.m
+        data = configuration()
+        with (patch.object(m, "get_pool", side_effect=lambda name:
+                           None if name == "demo-home-pool" else "123456789012345"),
+              patch.object(m, "imported_guid_visible", return_value=None),
+              patch.object(m, "command", side_effect=AssertionError("write attempted"))):
+            with self.assertRaisesRegex(m.Blocked, "LEGACY_POOL_ERASE_NOT_AUTHORIZED"):
+                m.ensure_create(data, "/dev/disk/by-id/verified", "/dev/sdb", "preserve")
+
+    def test_canonical_pool_erase_needs_fleet_permission(self):
+        m = self.m
+        data = configuration()
+        data["destructive_without_backup"] = False
+        with (patch.object(m, "get_pool", return_value="445566778899"),
+              patch.object(m, "ensure_import", return_value=("445566778899", False)),
+              patch.object(m, "command", side_effect=AssertionError("disk write attempted"))):
+            with self.assertRaisesRegex(m.Blocked, "DESTRUCTIVE_APPROVAL_MISSING"):
+                m.ensure_create(data, "/dev/disk/by-id/verified", "/dev/sdb", "erase")
 
     def test_import_has_no_create_wipe_or_destroy(self):
         m = self.m
@@ -128,6 +149,60 @@ class GuestLifecycle(unittest.TestCase):
         m = self.m
         with patch.object(m, "qm", side_effect=AssertionError("guest modified")):
             m.recreate_legacy_guest_if_needed(2238, "demo-home", {}, "import")
+
+
+    def test_existing_vm_preserved_by_default(self):
+        m = self.m
+        data = {"storage": configuration()}
+        with (patch.object(m.Path, "exists", return_value=True),
+              patch.object(m, "config", return_value={"name": "media-server-demo-home"}),
+              patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
+            with redirect_stdout(io.StringIO()):
+                m.recreate_legacy_guest_if_needed(2238, "demo-home", data,
+                                                    "create", "keep", "preserve")
+
+    def test_existing_vm_disk_erase_needs_recreate_answer(self):
+        m = self.m
+        with (patch.object(m.Path, "exists", return_value=True),
+              patch.object(m, "config", return_value={"name": "media-server-demo-home"}),
+              patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
+            with self.assertRaisesRegex(m.Blocked, "DISK_ERASE_REQUIRES_VM_RECREATE"):
+                m.recreate_legacy_guest_if_needed(2238, "demo-home",
+                                                    {"storage": configuration()},
+                                                    "create", "keep", "erase")
+
+    def test_import_with_erase_is_blocked(self):
+        m = self.m
+        with self.assertRaisesRegex(m.Blocked, "IMPORT_DISK_ERASE_CONFLICT"):
+            m.recreate_legacy_guest_if_needed(2238, "demo-home", {},
+                                                "import", "recreate", "erase")
+
+
+    def test_managed_vm_recreated_only_after_explicit_answer(self):
+        m = self.m
+        data = {"storage": configuration(), "pci": {
+            "gpu": "0000:00:02.0", "sata_controller": "0000:00:17.0"}}
+        state = {"name": "media-server-demo-home",
+                 "description": m.MANAGED_MEDIA_DESCRIPTION}
+        removed = [False]
+        calls = []
+        def qm(cmd, *_args, **_kwargs):
+            calls.append(cmd)
+            if cmd == "status":
+                return "status: stopped" if "shutdown" in calls else "status: running"
+            if cmd == "destroy":
+                removed[0] = True
+            return ""
+        with (patch.object(m.Path, "exists", side_effect=lambda: not removed[0]),
+              patch.object(m, "config", return_value=state),
+              patch.object(m, "old_guest_matches") as preflight,
+              patch.object(m, "qm", side_effect=qm)):
+            with redirect_stdout(io.StringIO()):
+                m.recreate_legacy_guest_if_needed(
+                    2238, "demo-home", data, "create", "recreate", "preserve")
+        preflight.assert_called_once_with(2238, "demo-home", data, managed=True)
+        self.assertIn("shutdown", calls)
+        self.assertIn("destroy", calls)
 
     def test_legacy_vdev_must_be_on_approved_ssd(self):
         m = self.m

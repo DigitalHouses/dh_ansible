@@ -117,45 +117,62 @@ def ensure_import(pool, disk, physical, access):
     return guid, True
 
 
-def ensure_create(data, disk, physical):
+def ensure_create(data, disk, physical, disk_policy="preserve"):
+    """Create on an empty disk, or erase exact known pool only after approval."""
+    require(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
     name = data["pool_name"]
-    existing = get_pool(name)
-    if existing is not None or imported_guid_visible(name) is not None:
+    target_active = get_pool(name)
+    target_importable = imported_guid_visible(name) if not target_active else None
+    if target_active or target_importable:
         guid, modified = ensure_import(name, disk, physical, data["mode"])
-        print("POOL=ALREADY_CANONICAL", flush=True)
-        return guid, modified
-    legacy = data.get("legacy_pool")
-    legacy_active = get_pool(legacy["name"]) if legacy else None
-    legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
-    if legacy_active or legacy_importable:
-        require(data.get("destructive_without_backup") is True, "DESTRUCTIVE_APPROVAL_MISSING")
-        observed = legacy_active or legacy_importable
-        require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
-        partitions = json.loads(command("/usr/bin/lsblk", "-J", "-o",
-                                         "PATH,PARTUUID,TYPE", physical))
-        children = partitions.get("blockdevices", [{}])[0].get("children", [])
-        require(len(children) == 1
-                and children[0].get("partuuid", "").lower()
-                == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
-        if not legacy_active:
-            command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
-                    "/dev/disk/by-id", legacy["name"])
-        require(get_pool(legacy["name"]) == str(legacy["guid"]),
-                "LEGACY_POOL_IMPORTED_GUID_DRIFT")
-        verify_pool_disk(legacy["name"], physical)
-        command("/usr/sbin/zpool", "destroy", legacy["name"])
-        print("LEGACY_POOL=DESTROYED", flush=True)
+        if disk_policy == "preserve":
+            print("POOL=ALREADY_CANONICAL", flush=True)
+            return guid, modified
+        require(data.get("destructive_without_backup") is True,
+                "DESTRUCTIVE_APPROVAL_MISSING")
+        verify_pool_disk(name, physical)
+        command("/usr/sbin/zpool", "destroy", name)
+        require(get_pool(name) is None, "CANONICAL_POOL_STILL_ACTIVE")
+        print("CANONICAL_POOL=DESTROYED_EXPLICITLY", flush=True)
+        # The previously verified ZFS layout may have partitioned the SSD.
+        # Continue only with the same strict WWN-verified disk path.
     else:
-        # Only a truly unpartitioned, unformatted disk may be initialized.
-        children = json.loads(command("/usr/bin/lsblk", "-J", "-o",
-                                      "PATH,TYPE", physical))["blockdevices"][0].get("children", [])
-        require(not children, "UNKNOWN_EXISTING_PARTITIONS")
-        require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
-                "UNKNOWN_EXISTING_SIGNATURE")
-        print("DATA_DISK=EMPTY", flush=True)
+        legacy = data.get("legacy_pool")
+        legacy_active = get_pool(legacy["name"]) if legacy else None
+        legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
+        if legacy_active or legacy_importable:
+            require(disk_policy == "erase", "LEGACY_POOL_ERASE_NOT_AUTHORIZED")
+            require(data.get("destructive_without_backup") is True,
+                    "DESTRUCTIVE_APPROVAL_MISSING")
+            observed = legacy_active or legacy_importable
+            require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
+            partitions = json.loads(command("/usr/bin/lsblk", "-J", "-o",
+                                             "PATH,PARTUUID,TYPE", physical))
+            children = partitions.get("blockdevices", [{}])[0].get("children", [])
+            require(len(children) == 1
+                    and children[0].get("partuuid", "").lower()
+                    == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
+            if not legacy_active:
+                command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
+                        "/dev/disk/by-id", legacy["name"])
+            require(get_pool(legacy["name"]) == str(legacy["guid"]),
+                    "LEGACY_POOL_IMPORTED_GUID_DRIFT")
+            verify_pool_disk(legacy["name"], physical)
+            command("/usr/sbin/zpool", "destroy", legacy["name"])
+            print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
+        else:
+            # Never interpret arbitrary partitions as erase approval.
+            children = json.loads(command("/usr/bin/lsblk", "-J", "-o",
+                                          "PATH,TYPE", physical))["blockdevices"][0].get("children", [])
+            require(not children, "UNKNOWN_EXISTING_PARTITIONS")
+            require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
+                    "UNKNOWN_EXISTING_SIGNATURE")
+            print("DATA_DISK=EMPTY", flush=True)
+    # The physical disk was previously identified from serial+WWN+size.
     command("/usr/sbin/wipefs", "--all", physical)
     command("/usr/sbin/sgdisk", "--zap-all", physical)
     command("/usr/bin/udevadm", "settle")
+    legacy = data.get("legacy_pool")
     if legacy:
         require(not get_pool(legacy["name"]), "LEGACY_POOL_STILL_ACTIVE")
     command("/usr/sbin/zpool", "create", "-f", "-o", "ashift=12",
@@ -236,6 +253,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--action", choices=("create", "import"), required=True)
+    parser.add_argument("--disk-policy", choices=("preserve", "erase"),
+                        default="preserve")
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROOT_REQUIRED")
     require(args.config.is_file() and not args.config.is_symlink(), "CONFIG_MISSING")
@@ -245,12 +264,14 @@ def main():
     require(data["media_dataset"] == data["pool_name"] + "/media",
             "CANONICAL_MEDIA_DATASET_MISMATCH")
     validate_layout(data)
+    require(args.action != "import" or args.disk_policy == "preserve",
+            "IMPORT_DISK_ERASE_CONFLICT")
     require(args.action != "create" or data["mode"] == "readwrite",
             "CREATE_REQUIRES_READWRITE")
     disk, physical = find_disk(data["disk"])
     command("/usr/sbin/modprobe", "zfs")
     if args.action == "create":
-        guid, changed = ensure_create(data, disk, physical)
+        guid, changed = ensure_create(data, disk, physical, args.disk_policy)
     else:
         guid, changed = ensure_import(data["pool_name"], disk, physical, data["mode"])
         print("POOL=IMPORTED", flush=True)

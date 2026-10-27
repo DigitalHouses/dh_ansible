@@ -452,6 +452,20 @@ def read_public_catalog():
     return tasks
 
 
+def allowed_survey_upgrade(title, existing, wanted):
+    """Only the exact previously deployed task 80 survey may gain fields."""
+    if existing in ([], wanted):
+        return True
+    return (title == "80-Медиасервер · Развёртывание"
+            and isinstance(existing, list)
+            and len(existing) == 1
+            and isinstance(wanted, list)
+            and len(wanted) == 3
+            and existing == wanted[:1]
+            and [v.get("name") for v in wanted] ==
+            ["media_storage_action", "media_vm_policy", "media_disk_policy"])
+
+
 def sync_existing_template(api, path, desired, *, apply=False):
     """Modify only a known catalog-owned template, preserving ID and history."""
     items = api.request("GET", path)
@@ -492,7 +506,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
     if "survey_vars" in desired:
         # Protect engineer-defined surveys: adopt only an empty or exact survey.
         observed_survey = current.get("survey_vars") or []
-        if observed_survey not in ([], desired["survey_vars"]):
+        if not allowed_survey_upgrade(title, observed_survey, desired["survey_vars"]):
             raise Blocked("Unexpected existing survey variables: " + title)
         allowed_change += ("survey_vars",)
     changed = [k for k in allowed_change
@@ -518,7 +532,7 @@ def sync_existing_template(api, path, desired, *, apply=False):
         raise Blocked("Catalog template changed concurrently")
     if "survey_vars" in desired:
         actual_survey = details.get("survey_vars") or []
-        if actual_survey not in ([], desired["survey_vars"]):
+        if not allowed_survey_upgrade(title, actual_survey, desired["survey_vars"]):
             raise Blocked("Catalog survey modified concurrently")
     payload = dict(details)
     payload.update({k: desired[k] for k in allowed_change})

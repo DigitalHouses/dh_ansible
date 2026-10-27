@@ -11,6 +11,11 @@
         that:
           - media_storage_action is defined
           - media_storage_action in ['create', 'import']
+          - media_vm_policy is defined
+          - media_vm_policy in ['keep', 'recreate']
+          - media_disk_policy is defined
+          - media_disk_policy in ['preserve', 'erase']
+          - media_storage_action != 'import' or media_disk_policy == 'preserve'
         fail_msg: "MEDIA_STORAGE_ACTION_REQUIRED: choose create or import in task 80 Run dialog."
 
     - name: Load canonical site identity
@@ -149,7 +154,7 @@
     - name: Submit fixed-purpose media deploy to existing PVE root worker
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_storage_action | upper }}:{{ media_deploy_nonce.stdout }}\n"
+        content: "MEDIA_DEPLOY_{{ media_storage_action | upper }}_{{ media_vm_policy | upper }}_{{ media_disk_policy | upper }}:{{ media_deploy_nonce.stdout }}\n"
         mode: '0600'
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool
