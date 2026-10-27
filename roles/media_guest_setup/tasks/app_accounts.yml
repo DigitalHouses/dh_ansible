@@ -12,17 +12,19 @@
     group: root
     mode: '0700'
 
-- name: Create or reuse ZFS administrator credentials for installed media apps
+- name: Configure application bootstrap from the existing eight-character owner SMB credential
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/dh-media-app-accounts
       - --digitalhouses-root
       - "/{{ media_vm.storage.pool_name }}/digitalhouses"
+      - --owner
+      - "{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}"
   register: media_app_accounts_result
-  changed_when: "'=CREATED' in media_app_accounts_result.stdout"
+  changed_when: "'FILESTASH_ADMIN_ENV=CREATED' in media_app_accounts_result.stdout"
   no_log: true
 
-- name: Require locally provisioned application identities
+- name: Require shared owner credential accepted for app bootstrap
   ansible.builtin.assert:
     that:
       - "'MEDIA_APP_CREDENTIALS=READY' in media_app_accounts_result.stdout_lines"
