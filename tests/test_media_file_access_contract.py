@@ -12,7 +12,10 @@ def test_fleet_identity_preflight_precedes_pve_worker():
     names = [task["name"] for task in play["pre_tasks"]]
     assert names.index("Validate Fleet-provided media identities before PVE worker") < names.index("Validate canonical storage inventory")
     guard = yaml.safe_load((ROOT / "playbooks/media-accounts-preflight.yml").read_text())
-    assert len(guard) == 3
+    assert len(guard) == 4
+    assert guard[-1]['name'] == 'Require complete media v3 site declaration before PVE worker'
+    assert guard[-1]['no_log'] is True
+    assert 'MEDIA_V3_FLEET_INCOMPLETE' in str(guard[-1])
     content = str(guard)
     assert "serzhan_admin" in content and "administrator" in content
     assert "item.password is not defined" in content
