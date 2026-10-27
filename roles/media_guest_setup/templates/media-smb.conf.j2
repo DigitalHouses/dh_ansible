@@ -14,7 +14,7 @@
     browseable = yes
     read only = no
     guest ok = no
-    valid users = serzhan serzhan_admin
+    valid users = {{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }} serzhan_admin
     force group = media_group
     create mask = 0660
     directory mask = 2770
@@ -26,7 +26,7 @@
     browseable = yes
     read only = no
     guest ok = no
-    valid users = serzhan serzhan_admin
+    valid users = {{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }} serzhan_admin
     force group = doc_group
     create mask = 0660
     directory mask = 2770
