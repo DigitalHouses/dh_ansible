@@ -103,16 +103,17 @@ def require(value, message):
 
 def prompt_from_tty():
     try:
-        tty = open("/dev/tty", "r+", encoding="utf-8")
+        tty_input = open("/dev/tty", "r", encoding="utf-8")
+        tty_output = open("/dev/tty", "w", encoding="utf-8")
     except OSError as exc:
         raise RuntimeError("INTERACTIVE_TTY_UNAVAILABLE") from exc
-    with tty:
-        tty.write("MQTT username: ")
-        tty.flush()
-        username = tty.readline().rstrip("\r\n")
-        password = getpass.getpass("MQTT password: ", stream=tty)
+    with tty_input, tty_output:
+        tty_output.write("MQTT username: ")
+        tty_output.flush()
+        username = tty_input.readline().rstrip("\r\n")
+        password = getpass.getpass("MQTT password: ", stream=tty_output)
         master = getpass.getpass("Existing Fleet Vault master password: ",
-                                 stream=tty)
+                                 stream=tty_output)
     require(0 < len(username) <= 128 and not any(ord(c) < 32 for c in username),
             "MQTT_USERNAME_INVALID")
     require(0 < len(password) <= 512 and not any(ord(c) < 32 for c in password),
