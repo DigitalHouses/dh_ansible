@@ -453,17 +453,33 @@ def read_public_catalog():
 
 
 def allowed_survey_upgrade(title, existing, wanted):
-    """Only the exact previously deployed task 80 survey may gain fields."""
+    """Migrate only the known old media survey; do not overwrite custom surveys."""
     if existing in ([], wanted):
         return True
-    return (title == "80-Медиасервер · Развёртывание"
-            and isinstance(existing, list)
-            and len(existing) == 1
-            and isinstance(wanted, list)
-            and len(wanted) == 3
-            and existing == wanted[:1]
-            and [v.get("name") for v in wanted] ==
-            ["media_storage_action", "media_vm_policy", "media_disk_policy"])
+    if title != "80-Медиасервер · Развёртывание":
+        return False
+    if [entry.get("name") for entry in wanted] != [
+            "media_vm_action", "media_raw_disk_action"]:
+        return False
+    legacy = [
+        ("media_storage_action", ["create", "import"]),
+        ("media_vm_policy", ["keep", "recreate"]),
+        ("media_disk_policy", ["preserve", "erase"]),
+    ]
+    if not isinstance(existing, list) or len(existing) not in (1, 3):
+        return False
+    for entry, (name, values) in zip(existing, legacy):
+        if (not isinstance(entry, dict)
+                or set(entry) != {"name", "title", "description", "type",
+                                      "required", "values"}
+                or entry.get("name") != name
+                or entry.get("type") != "enum"
+                or entry.get("required") is not True
+                or not isinstance(entry.get("values"), list)
+                or [option.get("value") for option in entry["values"]]
+                   != values):
+            return False
+    return True
 
 
 def sync_existing_template(api, path, desired, *, apply=False):
