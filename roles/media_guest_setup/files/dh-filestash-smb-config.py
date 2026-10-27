@@ -108,8 +108,11 @@ def effective_admin_config(secret):
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         urllib.request.HTTPCookieProcessor(cookies))
+    # Filestash SecureOrigin requires this exact header for browser-style
+    # authenticated calls. Keep API protection enabled; do not bypass WAF.
     headers = {"Content-Type": "application/json",
-               "Accept": "application/json"}
+               "Accept": "application/json",
+               "X-Requested-With": "XmlHttpRequest"}
     body = json.dumps({"password": secret}).encode("ascii")
     request = urllib.request.Request(
         BASE + "/admin/api/session", data=body, headers=headers, method="POST")
@@ -131,6 +134,7 @@ def effective_admin_config(secret):
         config_request = urllib.request.Request(
             BASE + "/admin/api/config",
             headers={"Accept": "application/json",
+                     "X-Requested-With": "XmlHttpRequest",
                      "Authorization": "Bearer " + token},
             method="GET")
         with opener.open(config_request, timeout=12) as response:

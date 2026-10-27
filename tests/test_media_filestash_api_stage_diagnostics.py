@@ -93,7 +93,9 @@ def test_native_bearer_token_authenticates_config_read_without_using_password_he
     second = opener.open.call_args_list[1].args[0]
     assert first.get_method() == "POST"
     assert first.get_header("Accept") == "application/json"
+    assert first.get_header("X-requested-with") == "XmlHttpRequest"
     assert second.get_method() == "GET"
+    assert second.get_header("X-requested-with") == "XmlHttpRequest"
     assert second.get_header("Authorization") == "Bearer " + fake_access_token
     assert "FAKE_LOGIN_ONLY" not in str(second.headers)
 
