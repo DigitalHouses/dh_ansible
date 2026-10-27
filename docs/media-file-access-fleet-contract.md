@@ -1,36 +1,20 @@
-# DigitalHouses Media Server — authenticated file access contract
+# DigitalHouses Media Server: initial account contract
 
-This stage is **staged in a feature branch** and intentionally fails closed when private Fleet credentials have not been commissioned. Do not merge/deploy it until site inventory is populated. No live VM or ZFS data must be changed during code review.
+Status: staged, not deployed.
 
-## Private Fleet site data (not in this public repository)
-
-Add to `media_vm` in `serzhan-home/media_vm.yml` **only in `dh_ansible_fleet_detail`**:
+Private Fleet defines precisely two names and roles for serzhan-home:
 
 ```yaml
 file_access:
   accounts:
-    - name: example_reader
-      role: reader
-      password: "<REPLACE_WITH_UNIQUE_16_PLUS_CHAR_SECRET_IN_PRIVATE_FLEET>"
-    - name: example_writer
-      role: writer
-      password: "<REPLACE_WITH_DIFFERENT_UNIQUE_16_PLUS_CHAR_SECRET_IN_PRIVATE_FLEET>"
+    - {name: serzhan, role: owner}
+    - {name: serzhan_admin, role: administrator}
 ```
 
-These are placeholders, not real account names or passwords. Replace before deployment. Usernames must be unique, 3–31 characters, lowercase Latin, digits, underscores or hyphens, starting with a letter. Reserved system names are rejected. Passwords require at least 16 characters. The private Fleet file remains the **only** declarative password source; no sensitive material is committed to `dh_ansible`.
+The owner belongs to media_group and doc_group. The administrator also belongs to backup_group, download_group and admin_group. These are non-login POSIX accounts with corresponding SMB identities.
 
-## Access design
+Initial credentials are randomly generated once, eight alphanumeric characters each, unique to each house, and persist in root-only records under the ZFS digitalhouses dataset. Subsequent deployments reuse them. They are not published through the service portal, Samba, or public GitHub. A privileged operator retrieves individual records for secure client handoff.
 
-- Samba offers a single Media share at the existing ZFS media dataset.
-- No guest access; no forced `nobody` identity. Every SMB login is a non-login POSIX account, with Samba password provisioned from its Fleet record.
-- `reader` can list/download; `writer` can also upload/create/delete under normal POSIX directory permissions.
-- Samba authorization groups: `dh_media_readers` and `dh_media_writers`. The `media_group` POSIX group is shared with Plex/Arr.
-- The Media dataset root gains `root:media_group 2775` without recursion. The files/directories and other ZFS datasets are left untouched.
-- Reapplying the role reconciles the Samba password from Fleet (including rotations); plaintext values are suppressed in Ansible output with `no_log`.
-- Preflight fails with `MEDIA_FILE_ACCESS_FLEET_REQUIRED` before the PVE deploy worker is invoked if the private access contract is absent.
+Shares: Media and Documents permit the owner and administrator. DigitalHouses and Backups permit the administrator only. Anonymous access is denied. Avoid exposing SMB on untrusted networks; eight-character secrets require additional network controls.
 
-## Remaining acceptance requirements
-
-Filestash must be configured with SMB backend + passthrough authentication (same Samba credentials, no duplicate client password database) and independently tested for upload/download files, folders, and large objects. Do not write guesswork into Filestash `config.json`. Initialize Jellyfin wizard/admin credentials from approved private Fleet parameters. Test Sambee separately. Indexers are user-selected; none are provisioned implicitly. Perform a Windows/macOS SMB and browser-based E2E test, including authenticated reader denial of writes and persistence across restart.
-
-**Important:** A successful Semaphore run is not sufficient evidence of functional acceptance. Continue using `keep + import` until approved destructive E2E.
+The user-management web UI is a later project. Filestash passthrough and macOS/Windows functional acceptance remain mandatory before production rollout.
