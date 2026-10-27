@@ -15,6 +15,18 @@ def helper():
     spec.loader.exec_module(m)
     return m
 
+def native_form(values):
+    """Construct the native Filestash admin schema without real secrets."""
+    return {
+        "middleware": {
+            name: {field: {"label": field, "type": "text",
+                           "value": value, "default": None}
+                   for field, value in fields.items()}
+            for name, fields in values["middleware"].items()
+        }
+    }
+
+
 def seed(directory,opaque=False):
     module=helper()
     data=module.desired()
@@ -40,7 +52,8 @@ def test_runtime_decrypted_equivalence_preserves_encrypted_bytes_and_unrelated_s
         original=path.read_bytes()
         secret=Path(temp)/"secret.txt"
         with mock.patch.object(mod,"passport",return_value="sample88") as passport, \
-             mock.patch.object(mod,"effective_admin_config",return_value=mod.desired()) as api:
+             mock.patch.object(mod,"effective_admin_config",
+                               return_value=native_form(mod.desired())) as api:
             mod.reconcile(path=path,credential=secret)
             passport.assert_called_once_with(secret)
             api.assert_called_once_with("sample88")
@@ -51,10 +64,10 @@ def test_encrypted_foreign_config_fails_closed_and_is_not_replaced():
     with tempfile.TemporaryDirectory() as temp:
         mod,path=seed(temp,True)
         original=path.read_bytes()
+        foreign=native_form(mod.desired())
+        foreign["middleware"]["identity_provider"]["type"]["value"]="foreign"
         with mock.patch.object(mod,"passport",return_value="sample88"), \
-             mock.patch.object(mod,"effective_admin_config",return_value={
-                 "connections": [{"label":"Other","type":"samba"}],
-                 "middleware": mod.desired()["middleware"]}):
+             mock.patch.object(mod,"effective_admin_config",return_value=foreign):
             try:
                 mod.reconcile(path=path,credential=Path(temp)/"secret")
             except mod.Blocked as err:
@@ -98,11 +111,12 @@ def test_live_admin_api_login_is_loopback_only_without_outbound_proxy():
             if url.endswith("/admin/api/session"):
                 assert getattr(request,"data",None)
                 return Response({"status":"ok","result":{"access_token":"fake-admin-access-token-12345"}})
-            return Response({"status":"ok","result":mod.desired()})
+            return Response({"status":"ok","result":native_form(mod.desired())})
     with mock.patch.object(mod.http.cookiejar,"CookieJar",return_value=["admin-session"]), \
          mock.patch.object(mod.urllib.request,"build_opener",return_value=FakeOpener()) as build:
         value=mod.effective_admin_config("test1234")
-    assert mod.semantic_config(value,mod.desired())
+    assert mod.semantic_middleware(mod.native_admin_middleware(value),
+                                   mod.desired()["middleware"])
     assert requests==[
         ("http://127.0.0.1:8334/admin/api/session",12),
         ("http://127.0.0.1:8334/admin/api/config",12)]
@@ -112,3 +126,44 @@ def test_source_declares_password_path_without_inline_secret():
     source=(ROOT/"roles/media_guest_setup/tasks/apps.yml").read_text()
     assert "--credential-file" in source
     assert "dh-filestash-smb-config" in source
+
+
+def test_native_admin_form_projection_rejects_missing_or_foreign_fields():
+    mod=helper()
+    form=native_form(mod.desired())
+    assert mod.native_admin_middleware(form)==mod.desired()["middleware"]
+    invalid=json.loads(json.dumps(form))
+    del invalid["middleware"]["attribute_mapping"]["params"]["value"]
+    with mock.patch.object(mod,"passport",return_value="sample88"):
+        try:
+            mod.native_admin_middleware(invalid)
+        except mod.Blocked as err:
+            assert str(err)=="FILESTASH_RUNTIME_CONFIG_INVALID"
+        else:
+            assert False,"Missing runtime values must fail closed"
+    invalid=json.loads(json.dumps(form))
+    invalid["middleware"]["attribute_mapping"]["other"]={"value":"unexpected"}
+    try:
+        mod.native_admin_middleware(invalid)
+    except mod.Blocked as err:
+        assert str(err)=="FILESTASH_RUNTIME_SMB_CONFIG_DRIFT"
+    else:
+        assert False,"Extra runtime fields must fail closed"
+
+
+def test_foreign_disk_connections_block_before_admin_api(tmp_path):
+    mod=helper()
+    config=mod.desired()
+    config["connections"]=[{"label":"Foreign share","type":"samba"}]
+    path=tmp_path/"config.json"
+    path.write_text(json.dumps(config))
+    original=path.read_bytes()
+    with mock.patch.object(mod,"effective_admin_config",
+                           side_effect=AssertionError("must not authenticate")):
+        try:
+            mod.reconcile(path=path,credential=tmp_path/"unused")
+        except mod.Blocked as err:
+            assert str(err)=="FILESTASH_EXISTING_CONNECTIONS_CONFLICT"
+        else:
+            assert False,"Foreign connection must be preserved"
+    assert path.read_bytes()==original

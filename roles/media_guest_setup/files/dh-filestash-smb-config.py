@@ -98,6 +98,33 @@ def semantic_config(current, target):
                                     target["middleware"]))
 
 
+def native_admin_middleware(form):
+    """Project Filestash's native admin form descriptors to current values.
+
+    GET /admin/api/config returns a form schema, not config.json: each leaf
+    is a descriptor containing a `value` field. It does not expose the
+    "connections" list, which has already been checked on disk.
+    """
+    require(isinstance(form, dict) and isinstance(form.get("middleware"), dict),
+            "FILESTASH_RUNTIME_CONFIG_INVALID")
+    source = form["middleware"]
+    expected = desired()["middleware"]
+    require(set(source) == set(expected), "FILESTASH_RUNTIME_SMB_CONFIG_DRIFT")
+    normalized = {}
+    for component, fields in expected.items():
+        group = source.get(component)
+        require(isinstance(group, dict) and set(group) == set(fields),
+                "FILESTASH_RUNTIME_SMB_CONFIG_DRIFT")
+        normalized[component] = {}
+        for field in fields:
+            descriptor = group.get(field)
+            require(isinstance(descriptor, dict)
+                    and isinstance(descriptor.get("value"), str),
+                    "FILESTASH_RUNTIME_CONFIG_INVALID")
+            normalized[component][field] = descriptor["value"]
+    return normalized
+
+
 def effective_admin_config(secret):
     """Fetch authoritative *decrypted* state from installed Filestash.
 
@@ -172,7 +199,9 @@ def reconcile(path=PATH, credential=None):
         # cannot be safely equated with our source JSON. Authenticate to the
         # running admin API and compare its DECRYPTED effective settings.
         require(credential is not None, "FILESTASH_RUNTIME_AUTH_REQUIRED")
-        effective = effective_admin_config(passport(credential))
+        admin_form = effective_admin_config(passport(credential))
+        effective = {"connections": connections,
+                     "middleware": native_admin_middleware(admin_form)}
         require(semantic_config(effective, target),
                 "FILESTASH_RUNTIME_SMB_CONFIG_DRIFT")
         print("FILESTASH_SMB=UNCHANGED")
