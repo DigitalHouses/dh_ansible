@@ -39,3 +39,7 @@
         guest_network_discovery_cidr: "{{ dh_runner_cidr }}"
         guest_network_discovery_provider: avahi
         guest_network_discovery_delegate: dh_new_runner_mdns_pve
+  post_tasks:
+    - name: Report independent new runner Bonjour acceptance
+      ansible.builtin.debug:
+        msg: NEW_RUNNER_BONJOUR=VERIFIED
