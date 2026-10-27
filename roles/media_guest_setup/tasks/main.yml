@@ -592,7 +592,7 @@
       - media_vm.applications.prowlarr | bool
       - media_vm.applications.qbittorrent | bool
 
-- name: Check if qBittorrent's local/LAN API access is already configured
+- name: Check qBittorrent local API and LAN authentication policy
   ansible.builtin.uri:
     url: http://127.0.0.1:8080/api/v2/app/preferences
     status_code: [200, 403]
@@ -606,8 +606,8 @@
       {{
         media_qbt_web_prefs.status != 200
         or not (media_qbt_web_prefs.json.bypass_local_auth | default(false) | bool)
-        or not (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
-        or (media_vm.network.lan_cidr not in (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')))
+        or (media_qbt_web_prefs.json.bypass_auth_subnet_whitelist_enabled | default(false) | bool)
+        or ((media_qbt_web_prefs.json.bypass_auth_subnet_whitelist | default('')) | length > 0)
       }}
   changed_when: false
 
@@ -617,7 +617,7 @@
     state: stopped
   when: media_qbt_access_update | bool
 
-- name: Ensure qBittorrent local API can be used without copying passwords
+- name: Disable qBittorrent LAN-wide bypass while preserving loopback API
   ansible.builtin.lineinfile:
     path: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
     regexp: "^{{ item.key | regex_escape }}="
@@ -628,11 +628,11 @@
     mode: '0640'
   loop:
     - {key: 'WebUI\LocalHostAuth', value: 'false'}
-    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'true'}
-    - {key: 'WebUI\AuthSubnetWhitelist', value: "127.0.0.1/32,{{ media_vm.network.lan_cidr }}"}
+    - {key: 'WebUI\AuthSubnetWhitelistEnabled', value: 'false'}
+    - {key: 'WebUI\AuthSubnetWhitelist', value: ''}
   when: media_qbt_access_update | bool
 
-- name: Start qBittorrent with local/LAN WebUI access
+- name: Start qBittorrent with authenticated LAN WebUI and loopback-only API
   ansible.builtin.systemd_service:
     name: qbittorrent.service
     state: started
@@ -648,11 +648,11 @@
   until: media_qbt_authenticated_prefs.status == 200
   changed_when: false
 
-- name: Verify local qBittorrent authentication bypass for server-side API integrations
+- name: Verify LAN authentication is mandatory while loopback API remains available
   ansible.builtin.assert:
     that:
       - media_qbt_authenticated_prefs.json.bypass_local_auth | bool
-      - media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool
+      - not (media_qbt_authenticated_prefs.json.bypass_auth_subnet_whitelist_enabled | bool)
 
 - name: Create separate writable download and staging roots on system disk
   ansible.builtin.file:
