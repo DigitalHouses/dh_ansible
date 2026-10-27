@@ -117,3 +117,41 @@ Offline acceptance on the Ansible runner: 45 PASS, 0 FAIL, one fixture-specific
 test not run. Syntax checks PASS for media planning, media guest setup,
 NetAlertX installation, and new-runner commissioning. PVE VM2238 and live
 ZFS were never modified by this PR.
+
+
+## Root-only voluntary customer password rotation: staged primitive, NOT public UI
+
+The approved optional password change (customer MAY change, never forced) is
+implemented as a staged local-only primitive in draft PR #55:
+
+- dh-media-password-transaction.py: root-owned write-ahead JSON journal
+  (0600), single process lock, durable fsync and atomic stage commits,
+  staged native login verification, rollback on partial operations, explicit
+  resume after process crash. A committed password is never silently reverted
+  merely because an application temporarily cannot be verified.
+- dh-media-password-adapters.py: official native authentication APIs for SMB,
+  Jellyfin, Sambee, Radarr/Sonarr/Prowlarr, qBittorrent, and Filestash.
+  qBittorrent checks the LAN WebUI IP (not exempt localhost). Filestash
+  checks the on-disk bcrypt hash and the running service hash. HTTP API
+  requests disable proxy forwarding.
+- dh-media-password-rotate.py: fixed root-only site manifest and privileged
+  entrypoint; old and new passwords enter through bounded STDIN JSON only,
+  never argv, environment variables, Git, or HTTP access logs. Service and
+  Samba stamps reconcile after app updates; credentials/<owner>.txt commits
+  last. Plex, MQTT, and inter-app API keys are not rotated.
+- Pending ZFS journal blocks ordinary guest Ansible apply before application
+  mutation. The HTTP port 80 site is asserted to remain static with no
+  FastCGI or reverse-proxy password mutation endpoint.
+
+**Not yet commissioned:** no password-change form or listener is enabled.
+Before allowing client-initiated changes, provision a trustworthy HTTPS
+certificate for client browsers; authenticated session and CSRF protection;
+rate limiting; request size/time bounds; no secret-bearing access logs;
+a constrained privilege bridge to the root-only CLI; and interrupted
+operation recovery. Untrusted self-signed certificates with browser warnings
+are not accepted as normal client UX. Enable the voluntary portal control
+only after live pinned-version E2E verifies all services, rollback, and
+repeat Ansible apply without resetting the customer password.
+
+Offline adapter/API simulations do not constitute live password rotation
+acceptance. VM 2238, CT1231 and physical ZFS remain untouched.
