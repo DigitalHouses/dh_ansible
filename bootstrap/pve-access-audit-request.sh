@@ -11,9 +11,9 @@ INV_ROOT=/var/lib/ansible/site-data
 [[ -f "$REQUEST" && ! -L "$REQUEST" ]] || exit 2
 [[ "$(stat -c '%U:%G:%a' "$REQUEST")" == 'semaphore:semaphore:600' ]] || exit 2
 REQUEST_DATA="$(cat "$REQUEST")"
-[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN|MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
+[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
 ACTION="${BASH_REMATCH[1]}"
-NONCE="${BASH_REMATCH[5]}"
+NONCE="${BASH_REMATCH[4]}"
 rm -f -- "$REQUEST"
 report() { printf '%s:%s\n' "$1" "$NONCE" > "$STATUS"; chmod 0644 "$STATUS"; }
 on_exit() { rc=$?; if (( rc != 0 )); then report FAILED; fi; }
@@ -33,11 +33,9 @@ report RUNNING
 : > "$LOG"; chmod 0600 "$LOG"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
-  [[ "$ACTION" =~ ^MEDIA_DEPLOY_(CREATE|IMPORT)_(KEEP|RECREATE)_(PRESERVE|ERASE)$ ]] || exit 2
-  STORAGE_ACTION="${BASH_REMATCH[1],,}"
-  VM_POLICY="${BASH_REMATCH[2],,}"
-  DISK_POLICY="${BASH_REMATCH[3],,}"
-  [[ "$STORAGE_ACTION" != import || "$DISK_POLICY" == preserve ]] || exit 2
+  [[ "$ACTION" =~ ^MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)$ ]] || exit 2
+  VM_ACTION="${BASH_REMATCH[1],,}"
+  RAW_DISK_ACTION="${BASH_REMATCH[2],,}"
   PVE_FILE="$INV_ROOT/$SITE/pve.yml"
   [[ -f "$PVE_FILE" && ! -L "$PVE_FILE" ]] || exit 2
   PVE_IP="$(/opt/ansible/venv/bin/python -c 'import sys,yaml,ipaddress; d=yaml.safe_load(open(sys.argv[1]))["pve"]; host=d["host"]; ipaddress.IPv4Address(host); print(host)' "$PVE_FILE")"
@@ -48,8 +46,8 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
     -o ConnectTimeout=8 \
     -i /var/lib/ansible/.ssh/pve_host_write_ed25519 \
     "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
-    --site "$SITE" --storage-action "$STORAGE_ACTION" \
-    --vm-policy "$VM_POLICY" --disk-policy "$DISK_POLICY" --apply >> "$LOG" 2>&1
+    --site "$SITE" --vm-action "$VM_ACTION" \
+    --raw-disk-action "$RAW_DISK_ACTION" --apply >> "$LOG" 2>&1
   if grep -Fxq "VM_CREATED=YES" "$LOG" || \
      grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_LEGACY" "$LOG" || \
      grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_MANAGED" "$LOG"; then
@@ -66,9 +64,8 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   [[ "$(stat -c '%U:%G:%a' "$GUEST_PLAY")" == 'root:root:644' ]] || exit 2
   export ANSIBLE_ROLES_PATH=/opt/digitalhouses/bootstrap/pve-access/roles
   /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$GUEST_PLAY" \
-    -e "media_storage_action=$STORAGE_ACTION" \
-    -e "media_vm_policy=$VM_POLICY" \
-    -e "media_disk_policy=$DISK_POLICY" >> "$LOG" 2>&1
+    -e "media_vm_action=$VM_ACTION" \
+    -e "media_raw_disk_action=$RAW_DISK_ACTION" >> "$LOG" 2>&1
   report PASS
   exit 0
 fi
