@@ -1,0 +1,4 @@
+# DigitalHouses: only the initial Sambee admin name is set here.
+# No password stored in container configuration or repository.
+[admin]
+username = "{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}"
