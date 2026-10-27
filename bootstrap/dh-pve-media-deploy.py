@@ -387,9 +387,19 @@ def main():
     parser.add_argument("--site", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--storage-action", choices=("create", "import"), required=True)
+    parser.add_argument("--verify-recreate", action="store_true",
+                        help="Read-only PVE/QGA/ZFS identity gate; never changes VM or disks")
     args = parser.parse_args()
     data, pve = site_data(args.site)
     vmid, name, ip = check(args.site, data, pve)
+    if args.verify_recreate:
+        need(not args.apply and args.storage_action == "create",
+             "READ_ONLY_RECREATE_PREFLIGHT_ONLY")
+        need(Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists(),
+             "TARGET_VM_NOT_PRESENT")
+        old_guest_matches(vmid, args.site, data)
+        print("MEDIA_VM_RECREATE_READ_ONLY_PREFLIGHT=PASS", flush=True)
+        return
     if not args.apply:
         print("MEDIA_DEPLOY_PREFLIGHT=PASS VMID=" + str(vmid))
         return
