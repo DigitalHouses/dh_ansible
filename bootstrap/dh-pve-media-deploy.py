@@ -253,7 +253,7 @@ def guest_exec(vmid, *args):
     return result.get("out-data", "").strip()
 
 
-def old_guest_matches(vmid, site, data):
+def old_guest_matches(vmid, site, data, *, managed=False):
     """Read-only, exact disk and pool identity check before VM deletion."""
     storage = data["storage"]
     state = config(vmid)
@@ -279,13 +279,22 @@ def old_guest_matches(vmid, site, data):
                and int(d.get("size") or 0) == int(storage["disk"]["size_bytes"])]
     need(len(matches) == 1 and matches[0].get("name") != "sda",
          "LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH")
-    old = storage["legacy_pool"]
+    if managed:
+        pool = storage["pool_name"]
+        expected_guid = None
+        need(state.get("description") == MANAGED_MEDIA_DESCRIPTION,
+             "MANAGED_VM_MARKER_MISSING")
+    else:
+        old = storage["legacy_pool"]
+        pool = old["name"]
+        expected_guid = str(old["guid"])
     observed = guest_exec(vmid, "/usr/sbin/zpool", "get",
-                          "-H", "-o", "value", "guid", old["name"])
-    need(observed == str(old["guid"]), "LEGACY_ZFS_GUID_MISMATCH")
+                          "-H", "-o", "value", "guid", pool)
+    need(observed.isdecimal() and (expected_guid is None or observed == expected_guid),
+         "LEGACY_ZFS_GUID_MISMATCH")
     # Match legacy ZFS's sole vdev to the approved SSD, not merely a pool
     # with the correct GUID on another disk of the passed SATA controller.
-    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-LP", old["name"])
+    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-LP", pool)
     vdevs = []
     for line in status.splitlines():
         column = line.strip().split()
@@ -300,39 +309,43 @@ def old_guest_matches(vmid, site, data):
     print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
 
 
-def recreate_legacy_guest_if_needed(vmid, site, data, action):
-    """One-time recreation. A canonical or partially recreated VM is never deleted."""
-    if action != "create":
-        return
-    if not Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists():
+def recreate_legacy_guest_if_needed(vmid, site, data, action, vm_policy="keep",
+                                    disk_policy="preserve"):
+    """Recreate only on explicit VM approval; separate disk content approval."""
+    need(vm_policy in ("keep", "recreate"), "VM_POLICY_INVALID")
+    need(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
+    need(action in ("create", "import"), "STORAGE_ACTION_INVALID")
+    need(action != "import" or disk_policy == "preserve",
+         "IMPORT_DISK_ERASE_CONFLICT")
+    exists = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists()
+    if not exists:
+        print("MEDIA_VM=ABSENT_CREATE_FRESH", flush=True)
         return
     state = config(vmid)
     need(state.get("name") == "media-server-" + site, "FOREIGN_VM_BLOCKED")
-    if state.get("description") == MANAGED_MEDIA_DESCRIPTION:
-        print("VM_RECREATE=ALREADY_MANAGED_OR_PARTIAL", flush=True)
+    if vm_policy == "keep":
+        need(disk_policy == "preserve",
+             "DISK_ERASE_REQUIRES_VM_RECREATE")
+        print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
-    if qm("status", vmid) != "status: running":
-        # Do not destroy a stopped VM with unknown disk state.
-        print("VM_RECREATE=SKIPPED_STOPPED", flush=True)
-        return
-    # QGA can fail if new VM is still booting; never infer legacy from absence.
-    try:
-        target = guest_exec(vmid, "/usr/sbin/zpool", "get", "-H", "-o",
-                            "value", "name", data["storage"]["pool_name"])
-        if target == data["storage"]["pool_name"]:
-            print("VM_RECREATE=ALREADY_CANONICAL", flush=True)
-            return
-    except (Blocked, json.JSONDecodeError, subprocess.TimeoutExpired):
-        pass
-    try:
-        old_guest_matches(vmid, site, data)
-    except (Blocked, json.JSONDecodeError, subprocess.TimeoutExpired):
-        print("VM_RECREATE=BLOCKED_UNRECOGNIZED_STATE", flush=True)
-        raise
-    need(data["storage"].get("destructive_without_backup") is True,
-         "DESTRUCTIVE_APPROVAL_MISSING")
-    # The PCI SATA controller stays physically attached to the host;
-    # qm destroy removes only verified local-lvm guest volumes.
+    need(qm("status", vmid) == "status: running",
+         "VM_RECREATE_REQUIRES_RUNNING_VERIFIABLE_GUEST")
+    managed = state.get("description") == MANAGED_MEDIA_DESCRIPTION
+    # A managed marker by itself is insufficient: identify the physical
+    # SSD AND the ZFS vdev through QEMU guest agent.
+    old_guest_matches(vmid, site, data, managed=managed)
+    # Do not destroy a legacy VM if the requested disk action will be
+    # refused after booting the replacement Debian.
+    if not managed:
+        need(action == "create" and disk_policy == "erase",
+             "LEGACY_POOL_REQUIRES_EXPLICIT_ERASE")
+    elif action == "import" or disk_policy == "preserve":
+        need(managed, "CANONICAL_POOL_REQUIRED")
+    if disk_policy == "erase":
+        need(data["storage"].get("destructive_without_backup") is True,
+             "DISK_ERASE_NOT_APPROVED_IN_FLEET")
+    # Only the VM's verified Proxmox local-lvm disks are destroyed here;
+    # the physical SSD attached via passthrough is not erased on the host.
     try:
         qm("set", vmid, "--protection", "0")
         qm("shutdown", vmid, "--timeout", "120", timeout=135)
@@ -345,13 +358,14 @@ def recreate_legacy_guest_if_needed(vmid, site, data, action):
     finally:
         if Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists():
             qm("set", vmid, "--protection", "1")
-    print("VM_RECREATE=REMOVED_VERIFIED_LEGACY", flush=True)
+    print("VM_RECREATE=REMOVED_VERIFIED_" + ("MANAGED" if managed else "LEGACY"),
+          flush=True)
 
 
-def apply(site, action):
+def apply(site, action, vm_policy="keep", disk_policy="preserve"):
     data, pve = site_data(site)
     vmid, name, ip = check(site, data, pve)
-    recreate_legacy_guest_if_needed(vmid, site, data, action)
+    recreate_legacy_guest_if_needed(vmid, site, data, action, vm_policy, disk_policy)
     existing = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf").exists()
     if existing:
         need(config(vmid).get("name") == name, "EXISTING_VM_MISMATCH")
@@ -387,11 +401,15 @@ def main():
     parser.add_argument("--site", required=True)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--storage-action", choices=("create", "import"), required=True)
+    parser.add_argument("--vm-policy", choices=("keep", "recreate"), default="keep")
+    parser.add_argument("--disk-policy", choices=("preserve", "erase"), default="preserve")
     parser.add_argument("--verify-recreate", action="store_true",
                         help="Read-only PVE/QGA/ZFS identity gate; never changes VM or disks")
     args = parser.parse_args()
     data, pve = site_data(args.site)
     vmid, name, ip = check(args.site, data, pve)
+    need(args.storage_action != "import" or args.disk_policy == "preserve",
+         "IMPORT_DISK_ERASE_CONFLICT")
     if args.verify_recreate:
         need(not args.apply and args.storage_action == "create",
              "READ_ONLY_RECREATE_PREFLIGHT_ONLY")
@@ -403,7 +421,7 @@ def main():
     if not args.apply:
         print("MEDIA_DEPLOY_PREFLIGHT=PASS VMID=" + str(vmid))
         return
-    apply(args.site, args.storage_action)
+    apply(args.site, args.storage_action, args.vm_policy, args.disk_policy)
 
 
 if __name__ == "__main__":
