@@ -177,6 +177,33 @@ class GuestLifecycle(unittest.TestCase):
             m.recreate_legacy_guest_if_needed(2238, "demo-home", {},
                                                 "import", "recreate", "erase")
 
+
+    def test_managed_vm_recreated_only_after_explicit_answer(self):
+        m = self.m
+        data = {"storage": configuration(), "pci": {
+            "gpu": "0000:00:02.0", "sata_controller": "0000:00:17.0"}}
+        state = {"name": "media-server-demo-home",
+                 "description": m.MANAGED_MEDIA_DESCRIPTION}
+        removed = [False]
+        calls = []
+        def qm(cmd, *_args, **_kwargs):
+            calls.append(cmd)
+            if cmd == "status":
+                return "status: stopped" if "shutdown" in calls else "status: running"
+            if cmd == "destroy":
+                removed[0] = True
+            return ""
+        with (patch.object(m.Path, "exists", side_effect=lambda: not removed[0]),
+              patch.object(m, "config", return_value=state),
+              patch.object(m, "old_guest_matches") as preflight,
+              patch.object(m, "qm", side_effect=qm)):
+            with redirect_stdout(io.StringIO()):
+                m.recreate_legacy_guest_if_needed(
+                    2238, "demo-home", data, "create", "recreate", "preserve")
+        preflight.assert_called_once_with(2238, "demo-home", data, managed=True)
+        self.assertIn("shutdown", calls)
+        self.assertIn("destroy", calls)
+
     def test_legacy_vdev_must_be_on_approved_ssd(self):
         m = self.m
         data = {
