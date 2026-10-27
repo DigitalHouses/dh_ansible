@@ -83,6 +83,21 @@ class MediaSurveyTest(unittest.TestCase):
         m.sync_existing_template(api, route, desired, apply=True)
         self.assertEqual(api.writes, 1)
 
+    def test_existing_single_field_survey_is_extended_in_place(self):
+        m = self.module
+        api, desired = self.make_api()
+        desired["survey_vars"] = self.survey
+        api.row["survey_vars"] = self.survey[:1]
+        route = "/project/1/templates?sort=name&order=asc"
+        m.sync_existing_template(api, route, desired, apply=False)
+        self.assertEqual(api.writes, 0)
+        m.sync_existing_template(api, route, desired, apply=True)
+        self.assertEqual(api.row["id"], 80)
+        self.assertEqual(api.row["survey_vars"], self.survey)
+        self.assertEqual(api.writes, 1)
+        m.sync_existing_template(api, route, desired, apply=True)
+        self.assertEqual(api.writes, 1)
+
     def test_manual_survey_drift_blocked(self):
         m = self.module
         api, desired = self.make_api()
