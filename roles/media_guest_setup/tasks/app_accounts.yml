@@ -1,0 +1,30 @@
+---
+- name: Install local tool for Filestash bcrypt administrator hashing
+  ansible.builtin.apt:
+    name: apache2-utils
+    state: present
+
+- name: Install reusable media application account generator
+  ansible.builtin.copy:
+    src: dh-media-app-accounts.py
+    dest: /usr/local/sbin/dh-media-app-accounts
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Create or reuse ZFS administrator credentials for installed media apps
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-app-accounts
+      - --digitalhouses-root
+      - "/{{ media_vm.storage.pool_name }}/digitalhouses"
+  register: media_app_accounts_result
+  changed_when: "'=CREATED' in media_app_accounts_result.stdout"
+  no_log: true
+
+- name: Require locally provisioned application identities
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_APP_CREDENTIALS=READY' in media_app_accounts_result.stdout_lines"
+    fail_msg: MEDIA_APPLICATION_CREDENTIALS_INCOMPLETE
+  no_log: true
