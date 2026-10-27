@@ -37,3 +37,16 @@ Serve a lightweight responsive site index at http://192.168.11.238/ listing only
 4. Apply to existing VM only using `keep` + `import`.
 5. Test Windows/macOS discovery and upload/download, web client uploads, 8-char account policy, portal, Plex Agent MQTT and backed-up recovery.
 6. A destructive `recreate` + `erase` E2E requires a separate, explicit decision.
+
+
+## Application authentication implementation status
+
+The branch now contains an idempotent Filestash SMB passthrough configuration reconciler, using the upstream-supported `username_and_password` authentication middleware. Each user signs in with their Samba credentials, and the application enumerates only the shares Samba grants them. Existing Filestash general configuration is preserved; unknown custom storage backends block rather than being overwritten.
+
+Filestash is intentionally prevented from starting without an operator-provisioned root-owned 0600 `/etc/digitalhouses/filestash.env` containing a bcrypt `ADMIN_PASSWORD` hash. The protected secret injection from the encrypted Fleet Vault is **not yet implemented**.
+
+The Jellyfin startup helper uses the official `Startup/User`, `Startup/RemoteAccess`, `Startup/Complete` and `Users/AuthenticateByName` API operations. It requires a root-owned 0600 administrator JSON passport in `<pool>/digitalhouses/credentials/apps/jellyfin-admin.json`. A test with a mocked local API verifies initial completion and repeat-run idempotence. Provisioning the secret from Vault and configuring authenticated media libraries remain pending.
+
+qBittorrent no longer has automatic authentication bypass for the entire LAN in the draft Ansible role: its passwordless API remains limited to loopback for the installed Arr integration. Permanent authenticated WebUI credentials still need a protected provisioning flow before the change may be applied to the live server.
+
+**Release gate:** Private Fleet PR #13 has no approved protected MQTT or application administration credential delivery mechanism. Do not mark this PR ready, do not merge to production or run Semaphore task #80. A dry syntax check and offline mocks are not evidence of a real E2E application acceptance.
