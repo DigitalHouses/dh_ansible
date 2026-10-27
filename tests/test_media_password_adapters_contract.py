@@ -125,12 +125,16 @@ def test_qbittorrent_rechecks_over_lan_ip_not_loopback():
                     "bypass_auth_subnet_whitelist_enabled": False}
     with mock.patch.object(mod, "helper", return_value=Fake()):
         q = mod.QBittorrent("serzhan", "192.0.2.238")
-        with mock.patch.object(mod.urllib.request, "urlopen",
-                               return_value=FakeResponse()) as call:
+        with mock.patch.object(mod.urllib.request, "build_opener") as maker:
+            maker.return_value.open.return_value = FakeResponse()
             assert q.verify("oldpass8")
-            assert call.call_args.args[0].full_url == (
+            request = maker.return_value.open.call_args.args[0]
+            assert request.full_url == (
                 "http://192.0.2.238:8080/api/v2/auth/login")
-            assert "Origin" in call.call_args.args[0].headers
+            assert "Origin" in request.headers
+            assert isinstance(maker.call_args.args[0],
+                              mod.urllib.request.ProxyHandler)
+            assert maker.call_args.args[0].proxies == {}
         with mock.patch.object(q, "verify", return_value=True):
             q.apply("oldpass8", "newpass8")
     assert seen[-1][0] == "/api/v2/app/setPreferences"
