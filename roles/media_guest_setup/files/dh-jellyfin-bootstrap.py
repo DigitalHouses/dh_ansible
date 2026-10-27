@@ -87,7 +87,7 @@ def bootstrap(secret_file, media_root):
     username = secret_file.stem
     require(len(lines) == 2 and lines[0] == "username=" + username and
             lines[1].startswith("password=") and
-            len(lines[1][9:]) == 8 and lines[1][9:].isalnum(),
+            6 <= len(lines[1][9:]) <= 8 and lines[1][9:].isalnum(),
             "ADMIN_PASSPORT_INVALID")
     credentials = {"username": username, "password": lines[1][9:]}
     public = request("GET", "/System/Info/Public")
