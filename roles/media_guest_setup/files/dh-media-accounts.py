@@ -5,6 +5,7 @@ Passwords are created once on the approved ZFS digitalhouses dataset and are
 never logged, sent over command-line arguments or written to public Git.
 """
 import argparse
+import grp
 import hashlib
 import os
 from pathlib import Path
@@ -28,22 +29,31 @@ def run(argv, **kwargs):
     return subprocess.run(argv, check=True, **kwargs)
 
 
-def protected_directory(path):
+def protected_directory(path, group=None):
     path = Path(path)
     if not path.exists():
         path.mkdir(mode=0o700)
     info = path.lstat()
-    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and not path.is_symlink(),
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and
+            not path.is_symlink() and
+            info.st_gid in ((0, group) if group is not None else (0,)),
             "CREDENTIAL_DIRECTORY_UNSAFE")
-    path.chmod(0o700)
+    if group is not None:
+        os.chown(path, 0, group)
+    path.chmod(0o750 if group is not None else 0o700)
 
 
-def read_or_create(path, username):
+def read_or_create(path, username, group=None):
     if path.exists() or path.is_symlink():
         info = path.lstat()
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
-                stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1,
+                stat.S_IMODE(info.st_mode) in ((0o600, 0o640) if group is not None else (0o600,)) and
+                info.st_gid in ((0, group) if group is not None else (0,)) and
+                info.st_nlink == 1,
                 "CREDENTIAL_FILE_UNSAFE")
+        if group is not None:
+            os.chown(path, 0, group)
+            path.chmod(0o640)
         parts = path.read_text(encoding="ascii").splitlines()
         require(len(parts) == 2 and parts[0] == "username=" + username and
                 parts[1].startswith("password="), "CREDENTIAL_FILE_INVALID")
@@ -54,6 +64,9 @@ def read_or_create(path, username):
     password = "".join(secrets.choice(ALPHABET) for _ in range(8))
     fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                  getattr(os, "O_NOFOLLOW", 0), 0o600)
+    if group is not None:
+        os.fchown(fd, 0, group)
+        os.fchmod(fd, 0o640)
     with os.fdopen(fd, "w", encoding="ascii") as file:
         file.write("username=" + username + "\npassword=" + password + "\n")
         file.flush()
@@ -68,13 +81,14 @@ def provision(root, accounts):
     result = run(["findmnt", "-n", "-o", "FSTYPE", "-T", str(root)],
                  capture_output=True, text=True)
     require(result.stdout.strip() == "zfs", "DIGITALHOUSES_NOT_ON_ZFS")
-    protected_directory(root / "credentials")
+    admin_gid = grp.getgrnam("admin_group").gr_gid
+    protected_directory(root / "credentials", admin_gid)
     state = root / "credentials" / ".samba-sync"
     protected_directory(state)
     for username in accounts:
         require(USERNAME.fullmatch(username) is not None, "ACCOUNT_NAME_INVALID")
         record = root / "credentials" / (username + ".txt")
-        password, created = read_or_create(record, username)
+        password, created = read_or_create(record, username, admin_gid)
         digest = hashlib.sha256((username + "\0" + password).encode("ascii")).hexdigest()
         stamp = state / (username + ".sha256")
         old = stamp.read_text().strip() if stamp.is_file() else None
