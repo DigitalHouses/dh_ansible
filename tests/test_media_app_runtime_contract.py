@@ -44,7 +44,7 @@ def test_qbittorrent_sets_password_only_once_and_requires_local_only_api():
         secret = root / "serzhan.txt"
         secret.write_text("username=serzhan\npassword=" + "B" * 8 + "\n")
         secret.chmod(0o640)
-        state = {"bypass_local_auth": True, "bypass_auth_subnet_whitelist_enabled": False,
+        state = {"bypass_local_auth": True, "bypass_auth_subnet_whitelist_enabled": True,
                  "web_ui_username": "admin"}
         changes = []
 
@@ -63,6 +63,19 @@ def test_qbittorrent_sets_password_only_once_and_requires_local_only_api():
         assert changes[0]["web_ui_username"] == "serzhan"
         assert changes[0]["web_ui_password"] == "B" * 8
         assert changes[0]["bypass_auth_subnet_whitelist_enabled"] is False
+        assert state["bypass_auth_subnet_whitelist_enabled"] is False
+        # A managed installation must block if an operator later reopens
+        # unauthenticated LAN access; do not accept this as a healthy rerun.
+        state["bypass_auth_subnet_whitelist_enabled"] = True
+        with mock.patch.object(item, "call", side_effect=local_api), \
+             mock.patch.object(item.os, "geteuid", return_value=0):
+            try:
+                item.reconcile(secret)
+            except RuntimeError as error:
+                assert str(error) == "QBT_MANAGED_LAN_AUTH_BYPASS_DRIFT"
+            else:
+                assert False, "Insecure managed LAN bypass must block"
+        assert len(changes) == 1
 
 
 def test_encrypted_fleet_mqtt_runtime_worker_roundtrip():
