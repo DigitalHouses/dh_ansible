@@ -1,116 +1,86 @@
 #!/usr/bin/env python3
-"""Generate reusable application admin credentials in existing DigitalHouses ZFS."""
+"""Reconcile app bootstrap from one existing owner SMB password; never rotate it."""
 import argparse
 import grp
 import os
 from pathlib import Path
-import pwd
-import secrets
+import re
 import stat
-import string
 import subprocess
 import sys
 
-ALPHABET = string.ascii_letters + string.digits
-APPS = ("filestash", "jellyfin", "qbittorrent")
+IDENTITY = re.compile(r"^[a-z][a-z0-9_]{2,30}$")
+ALPHABET = frozenset("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789")
 
 
-def check(value, message):
+def check(value, reason):
     if not value:
-        raise RuntimeError(message)
+        raise RuntimeError(reason)
 
 
-def safe_dir(path, group=None):
-    if not path.exists():
-        path.mkdir(mode=0o700)
-    st = path.lstat()
-    check(stat.S_ISDIR(st.st_mode) and st.st_uid == 0 and
-          st.st_gid in ((0, group) if group is not None else (0,)) and
-          not path.is_symlink(), "CREDENTIAL_DIRECTORY_UNSAFE")
-    if group is not None:
-        os.chown(path, 0, group)
-    path.chmod(0o750 if group is not None else 0o700)
+def read_owner(root: Path, username: str):
+    check(root.is_absolute() and root.name == "digitalhouses" and
+          root.parent.name.endswith("-pool") and
+          IDENTITY.fullmatch(username) is not None,
+          "OWNER_IDENTITY_INVALID")
+    file = root / "credentials" / (username + ".txt")
+    check(not file.is_symlink(), "OWNER_PASSPORT_SYMLINK")
+    info = file.lstat()
+    admin_gid = grp.getgrnam("admin_group").gr_gid
+    check(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+          info.st_gid in (0, admin_gid) and
+          stat.S_IMODE(info.st_mode) in (0o600, 0o640) and
+          info.st_nlink == 1, "OWNER_PASSPORT_UNSAFE")
+    data = file.read_text(encoding="ascii").splitlines()
+    check(len(data) == 2 and data[0] == "username=" + username and
+          data[1].startswith("password="), "OWNER_PASSPORT_INVALID")
+    password = data[1].removeprefix("password=")
+    check(len(password) == 8 and all(c in ALPHABET for c in password),
+          "OWNER_PASSWORD_POLICY_INVALID")
+    return password
 
 
-def atomic_create(path, text, group=None):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+def filestash_admin(password):
+    """This sets the Filestash *configuration admin* hash; file login uses SMB."""
+    dest = Path("/etc/digitalhouses/filestash.env")
+    check(dest.parent.is_dir() and not dest.parent.is_symlink(),
+          "FILESTASH_CONFIG_DIRECTORY_UNAVAILABLE")
+    check(os.stat(dest.parent).st_uid == 0, "FILESTASH_DIRECTORY_NOT_ROOT")
+    if dest.exists() or dest.is_symlink():
+        info = dest.lstat()
+        check(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+              stat.S_IMODE(info.st_mode) == 0o600 and
+              info.st_nlink == 1, "FILESTASH_ADMIN_ENV_UNSAFE")
+        content = dest.read_text("ascii").strip()
+        check(content.startswith("ADMIN_PASSWORD=$2") and
+              content.count("\n") == 0, "FILESTASH_ADMIN_ENV_INVALID")
+        # Credential changes are handled by an explicit authenticated rotation.
+        # A repeat Ansible run never changes a previously commissioned hash.
+        return False
+    result = subprocess.run(["/usr/bin/htpasswd", "-niB", "-C", "12", ""],
+                            input=(password + "\n").encode("ascii"),
+                            capture_output=True, check=True)
+    output = result.stdout.decode("ascii").strip()
+    check(":" in output and output.split(":", 1)[1].startswith("$2"),
+          "FILESTASH_BCRYPT_INVALID")
+    fd = os.open(dest, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
                  getattr(os, "O_NOFOLLOW", 0), 0o600)
-    if group is not None:
-        os.fchown(fd, 0, group)
-        os.fchmod(fd, 0o640)
-    with os.fdopen(fd, "w", encoding="ascii") as f:
-        f.write(text)
-        f.flush()
-        os.fsync(f.fileno())
-
-
-def account(directory, app, group=None):
-    path = directory / (app + ".txt")
-    if path.exists() or path.is_symlink():
-        st = path.lstat()
-        check(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
-              stat.S_IMODE(st.st_mode) in ((0o600, 0o640) if group is not None else (0o600,)) and
-              st.st_gid in ((0, group) if group is not None else (0,)) and
-              st.st_nlink == 1, "ACCOUNT_FILE_UNSAFE")
-        if group is not None:
-            os.chown(path, 0, group)
-            path.chmod(0o640)
-        parts = path.read_text("ascii").splitlines()
-        check(len(parts) == 2 and parts[0] == "username=serzhan_admin" and
-              parts[1].startswith("password="), "ACCOUNT_FILE_INVALID")
-        password = parts[1][9:]
-        check(len(password) == 24 and all(ch in ALPHABET for ch in password),
-              "ACCOUNT_PASSWORD_INVALID")
-        return password, False
-    password = "".join(secrets.choice(ALPHABET) for _ in range(24))
-    atomic_create(path, "username=serzhan_admin\npassword=" + password + "\n", group)
-    return password, True
-
-
-def configure_filestash(directory, password):
-    import tempfile
-    result = subprocess.run(
-        ["/usr/bin/htpasswd", "-niB", "-C", "12", ""],
-        input=(password + "\n").encode("ascii"),
-        capture_output=True, check=True)
-    line = result.stdout.decode("ascii").strip()
-    check(":" in line and line.split(":", 1)[1].startswith("$2"),
-          "FILESTASH_HASH_INVALID")
-    hash_value = line.split(":", 1)[1]
-    target = Path("/etc/digitalhouses/filestash.env")
-    safe_dir(target.parent)
-    desired = ("ADMIN_PASSWORD=" + hash_value + "\n").encode("ascii")
-    if target.exists():
-        st = target.lstat()
-        check(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
-              stat.S_IMODE(st.st_mode) == 0o600, "FILESTASH_ENV_UNSAFE")
-        # Existing bcrypt hash may have a random salt; preserve it on rerun.
-        if target.read_bytes().startswith(b"ADMIN_PASSWORD=$2"):
-            return False
-        raise RuntimeError("FILESTASH_ENV_CONFLICT")
-    atomic_create(target, desired.decode("ascii"))
+    with os.fdopen(fd, "w", encoding="ascii") as file:
+        file.write("ADMIN_PASSWORD=" + output.split(":", 1)[1] + "\n")
+        file.flush()
+        os.fsync(file.fileno())
     return True
 
 
-def provision(root):
-    check(os.geteuid() == 0 and root.is_absolute() and
-          root.name == "digitalhouses" and root.parent.name.endswith("-pool"),
-          "APP_CREDENTIAL_ROOT_INVALID")
+def provision(root, owner):
+    check(os.geteuid() == 0, "ROOT_REQUIRED")
     fstype = subprocess.run(["findmnt", "-n", "-o", "FSTYPE", "-T", str(root)],
                             capture_output=True, text=True, check=True)
-    check(fstype.stdout.strip() == "zfs", "APP_CREDENTIALS_NOT_ON_ZFS")
-    admin_gid = grp.getgrnam("admin_group").gr_gid
-    parent = root / "credentials"
-    safe_dir(parent, admin_gid)
-    directory = parent / "apps"
-    safe_dir(directory, admin_gid)
-    for app in APPS:
-        password, created = account(directory, app, admin_gid)
-        if app == "filestash":
-            changed = configure_filestash(directory, password)
-            check(changed or not created, "FILESTASH_ENV_ALREADY_EXISTS_NEW_PASSWORD")
-        print("MEDIA_APP_CREDENTIAL_" + app.upper() + "=" +
-              ("CREATED" if created else "UNCHANGED"))
+    check(fstype.stdout.strip() == "zfs", "OWNER_SECRET_NOT_ON_ZFS")
+    password = read_owner(root, owner)
+    updated = filestash_admin(password)
+    print("MEDIA_SHARED_OWNER_CREDENTIAL=VERIFIED")
+    print("FILESTASH_ADMIN_ENV=" + ("CREATED" if updated else "UNCHANGED"))
     print("MEDIA_APP_CREDENTIALS=READY")
 
 
@@ -118,7 +88,9 @@ if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
         parser.add_argument("--digitalhouses-root", type=Path, required=True)
-        provision(parser.parse_args().digitalhouses_root)
-    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as e:
-        print("MEDIA_APP_CREDENTIALS=BLOCKED_" + type(e).__name__, file=sys.stderr)
+        parser.add_argument("--owner", required=True)
+        args = parser.parse_args()
+        provision(args.digitalhouses_root, args.owner)
+    except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError):
+        print("MEDIA_APP_CREDENTIALS=BLOCKED", file=sys.stderr)
         sys.exit(2)
