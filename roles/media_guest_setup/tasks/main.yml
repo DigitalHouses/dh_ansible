@@ -17,6 +17,18 @@
       - media_vm.discovery.netbios_name is match('^[A-Z0-9-]{1,15}$')
       - media_vm.discovery.workgroup is match('^[A-Z0-9-]{1,15}$')
 
+- name: Refuse ordinary Ansible apply during unfinished customer password rotation
+  ansible.builtin.stat:
+    path: "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/.dh-media-password-rotation.json"
+    follow: false
+  register: media_owner_rotation_pending
+
+- name: Protect application logins from incomplete password change
+  ansible.builtin.assert:
+    that:
+      - not (media_owner_rotation_pending.stat.exists | default(false))
+    fail_msg: MEDIA_PASSWORD_ROTATION_PENDING_RECOVERY
+
 - name: Set canonical Debian media server hostname without recreating VM
   ansible.builtin.hostname:
     name: "{{ media_vm.name }}"
