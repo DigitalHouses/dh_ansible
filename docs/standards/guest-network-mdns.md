@@ -100,8 +100,12 @@ Linux/Debian-гостей. Роль принимает однозначные `h
 мультикаста/закрытого firewall — `BLOCKED`, никаких автоматических правок
 правил firewall/bridge/IP.
 
-Подключено к установке медиасервера Debian VM и **нового** NetAlertX Debian
-LXC. Роль включена в pinned Bootstrap staging. Это не разрешение на retrofit
+Подключено к установке медиасервера Debian VM, **нового** NetAlertX Debian
+LXC, а также к первичному созданию Ansible runner Debian LXC (проверка имени
+runner выполняется независимым PVE после выдачи проверенного SSH-доступа).
+Для зрелого runner режимы `resume`, `resume-ansible` и `resume-semaphore`
+не выполняют никаких фоновых mDNS-изменений.
+Роль включена в pinned Bootstrap staging. Это не разрешение на retrofit
 существующих других VM/LXC. HAOS/TrueNAS используют только собственные штатные
 механизмы обнаружения. Для каждого следующего Linux provisioning playbook роль
 обязательна до приёмки; универсальный массовый fleet-rollout не выполнялся.
