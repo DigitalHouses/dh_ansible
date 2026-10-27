@@ -19,6 +19,12 @@
       - media_vm.pci.gpu != media_vm.pci.sata_controller
       - media_vm.legacy_gpu_owner_vmid | int != media_vm.vmid | int
       - media_vm.legacy_sata_owner_vmid | int != media_vm.vmid | int
+      - media_vm.network.static_ipv4_verified is boolean
+      - media_vm.network.dhcp_pool is mapping
+      - media_vm.network.dhcp_pool.first_host | int >= 1
+      - media_vm.network.dhcp_pool.last_host | int <= 254
+      - media_vm.network.dhcp_pool.first_host | int <= media_vm.network.dhcp_pool.last_host | int
+      - (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int) < (media_vm.network.dhcp_pool.first_host | int) or (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int) > (media_vm.network.dhcp_pool.last_host | int)
     fail_msg: "Media VM name must be mediaserver-<owner_slug> and VMID 2000+IPv4 last octet (2xx); network/PCI must be valid."
 
 - name: Read live PCI inventory from pinned PVE API
@@ -85,6 +91,163 @@
 - name: Identify enabled jobs pointing at unavailable storage
   ansible.builtin.set_fact:
     media_vm_offline_backup_targets: "{{ (media_vm_active_backup_jobs | map(attribute='storage') | list | unique | list) | difference(media_vm_active_storage_names) }}"
+  changed_when: false
+
+- name: Validate explicitly declared transition from legacy PVE backup storage
+  ansible.builtin.assert:
+    that:
+      - media_vm.backup_export.deferred_legacy_backup is mapping
+      - media_vm.backup_export.deferred_legacy_backup.storage_id is match('^[a-z][a-z0-9_-]{2,60}
+  ansible.builtin.set_fact:
+    media_vm_plan_blockers: >-
+      {{
+        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'in', [media_vm.name, 'media-server-' ~ site.id]) | list | length) > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if (media_vm_offline_backup_targets | length > 0 and not (media_vm_backup_deferral_safe | default(false) | bool)) else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
+        + (['GPU_ALREADY_ASSIGNED'] if (media_vm_gpu_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if (media_vm_sata_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
+        + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
+        + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
+      }}
+  changed_when: false
+
+- name: Report exact read-only hardware and provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      vmid: "{{ media_vm.vmid }}"
+      name: "{{ media_vm.name }}"
+      guest_exists: "{{ media_vm_existing_targets | length > 0 }}"
+      gpu:
+        bdf: "{{ media_vm.pci.gpu }}"
+        iommu_group: "{{ media_vm_gpu_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_gpu_owners }}"
+      sata_controller:
+        bdf: "{{ media_vm.pci.sata_controller }}"
+        iommu_group: "{{ media_vm_sata_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_sata_owners }}"
+      enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
+      deferred_backup_jobs: "{{ (media_vm_deferred_backup_jobs | default([])) | map(attribute='id') | list }}"
+      warnings: "{{ media_vm_plan_warnings }}"
+      blockers: "{{ media_vm_plan_blockers }}"
+      result: PLAN_ONLY
+      vm_created: false
+      pci_detached: false
+      existing_guests_changed: false
+)
+      - media_vm.backup_export.deferred_legacy_backup.job_id is match('^[a-z][a-z0-9_-]{2,80}
+  ansible.builtin.set_fact:
+    media_vm_plan_blockers: >-
+      {{
+        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'in', [media_vm.name, 'media-server-' ~ site.id]) | list | length) > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
+        + (['GPU_ALREADY_ASSIGNED'] if (media_vm_gpu_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if (media_vm_sata_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
+        + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
+        + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
+      }}
+  changed_when: false
+
+- name: Report exact read-only hardware and provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      vmid: "{{ media_vm.vmid }}"
+      name: "{{ media_vm.name }}"
+      guest_exists: "{{ media_vm_existing_targets | length > 0 }}"
+      gpu:
+        bdf: "{{ media_vm.pci.gpu }}"
+        iommu_group: "{{ media_vm_gpu_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_gpu_owners }}"
+      sata_controller:
+        bdf: "{{ media_vm.pci.sata_controller }}"
+        iommu_group: "{{ media_vm_sata_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_sata_owners }}"
+      enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
+      blockers: "{{ media_vm_plan_blockers }}"
+      result: PLAN_ONLY
+      vm_created: false
+      pci_detached: false
+      existing_guests_changed: false
+)
+      - media_vm.backup_export.deferred_legacy_backup.resume_after == 'media_guest_accepted'
+      - media_vm.backup_export.deferred_legacy_backup.storage_id != media_vm.backup_export.storage_id
+    fail_msg: MEDIA_BACKUP_DEFERRAL_FLEET_CONTRACT_INVALID
+  when: media_vm.backup_export.deferred_legacy_backup is defined
+  changed_when: false
+
+- name: List exactly the legacy backup jobs declared for later migration
+  ansible.builtin.set_fact:
+    media_vm_deferred_backup_jobs: "{{ media_vm_active_backup_jobs | selectattr('storage', 'equalto', media_vm.backup_export.deferred_legacy_backup.storage_id) | list }}"
+  when: media_vm.backup_export.deferred_legacy_backup is defined
+  changed_when: false
+
+- name: Allow deferral only for existing VM keep+import and unrelated explicit VM job
+  ansible.builtin.set_fact:
+    media_vm_backup_deferral_safe: >-
+      {{
+        media_vm_action == 'keep'
+        and media_raw_disk_action == 'import'
+        and media_vm_existing_targets | length == 1
+        and media_vm_offline_backup_targets | length == 1
+        and media_vm_offline_backup_targets[0] == media_vm.backup_export.deferred_legacy_backup.storage_id
+        and media_vm_deferred_backup_jobs | length == 1
+        and media_vm_deferred_backup_jobs[0].id == media_vm.backup_export.deferred_legacy_backup.job_id
+        and media_vm_deferred_backup_jobs[0].vmid is defined
+        and (media_vm_deferred_backup_jobs[0].vmid | string) is match('^[0-9]+(,[0-9]+)*
+  ansible.builtin.set_fact:
+    media_vm_plan_blockers: >-
+      {{
+        (['TARGET_VMID_OCCUPIED'] if (media_vm_existing_targets | rejectattr('name', 'in', [media_vm.name, 'media-server-' ~ site.id]) | list | length) > 0 else [])
+        + (['ENABLED_BACKUP_TARGET_OFFLINE'] if media_vm_offline_backup_targets | length > 0 else [])
+        + (['PROVISION_NOT_APPROVED'] if not (media_vm.approvals.provision | default(false) | bool) else [])
+        + (['GPU_ALREADY_ASSIGNED'] if (media_vm_gpu_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['SATA_ALREADY_ASSIGNED'] if (media_vm_sata_owners | rejectattr('vmid', 'equalto', media_vm.vmid | int) | list | length) > 0 else [])
+        + (['STATIC_IP_NOT_VERIFIED'] if not (media_vm.network.static_ipv4_verified | default(false) | bool) else [])
+        + (['GPU_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.gpu_cutover | default(false) | bool) else [])
+        + (['SATA_CUTOVER_NOT_APPROVED'] if not (media_vm.approvals.sata_cutover | default(false) | bool) else [])
+      }}
+  changed_when: false
+
+- name: Report exact read-only hardware and provisioning plan
+  ansible.builtin.debug:
+    msg:
+      site: "{{ site.id }}"
+      vmid: "{{ media_vm.vmid }}"
+      name: "{{ media_vm.name }}"
+      guest_exists: "{{ media_vm_existing_targets | length > 0 }}"
+      gpu:
+        bdf: "{{ media_vm.pci.gpu }}"
+        iommu_group: "{{ media_vm_gpu_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_gpu_owners }}"
+      sata_controller:
+        bdf: "{{ media_vm.pci.sata_controller }}"
+        iommu_group: "{{ media_vm_sata_device.iommugroup }}"
+        currently_assigned_to: "{{ media_vm_sata_owners }}"
+      enabled_backup_jobs: "{{ media_vm_active_backup_jobs | map(attribute='id') | list }}"
+      unavailable_backup_storage: "{{ media_vm_offline_backup_targets }}"
+      blockers: "{{ media_vm_plan_blockers }}"
+      result: PLAN_ONLY
+      vm_created: false
+      pci_detached: false
+      existing_guests_changed: false
+)
+        and (media_vm.vmid | string) not in (media_vm_deferred_backup_jobs[0].vmid | string).split(',')
+        and media_vm_deferred_backup_jobs[0].get('all') is none
+        and media_vm_deferred_backup_jobs[0].get('pool') is none
+        and media_vm_deferred_backup_jobs[0].get('exclude') is none
+      }}
+  when: media_vm.backup_export.deferred_legacy_backup is defined
+  changed_when: false
+
+- name: Publish explicit backup migration warning without changing old scheduled jobs
+  ansible.builtin.set_fact:
+    media_vm_plan_warnings: "{{ ['PVE_LEGACY_BACKUP_MIGRATION_DEFERRED'] if (media_vm_backup_deferral_safe | default(false) | bool) else [] }}"
   changed_when: false
 
 - name: Calculate cutover and commissioning blockers without modifying PVE
