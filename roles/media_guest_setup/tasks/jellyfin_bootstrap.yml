@@ -17,7 +17,7 @@
     that:
       - media_jellyfin_admin_passport.stat.isreg | default(false)
       - media_jellyfin_admin_passport.stat.pw_name == 'root'
-      - media_jellyfin_admin_passport.stat.mode == '0600'
+      - media_jellyfin_admin_passport.stat.mode == '0640'
     fail_msg: MEDIA_JELLYFIN_ADMIN_CREDENTIALS_NOT_COMMISSIONED
   no_log: true
 
