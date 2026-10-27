@@ -8,6 +8,9 @@
       - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
       - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
       - media_storage_action in ['create', 'import']
+      - media_disk_policy is defined
+      - media_disk_policy in ['preserve', 'erase']
+      - media_storage_action != 'import' or media_disk_policy == 'preserve'
       - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}$')
       - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
       - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
@@ -145,6 +148,8 @@
       - /etc/digitalhouses/media-storage.json
       - --action
       - "{{ media_storage_action }}"
+      - --disk-policy
+      - "{{ media_disk_policy }}"
   register: media_zfs_reconcile
   changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
 
