@@ -28,7 +28,7 @@ def load_credential(path):
             "ACCOUNT_FILE_SCOPE_INVALID")
     st = path.lstat()
     require(stat.S_ISREG(st.st_mode) and st.st_uid == 0 and
-            stat.S_IMODE(st.st_mode) == 0o600 and st.st_nlink == 1,
+            stat.S_IMODE(st.st_mode) == 0o640 and st.st_nlink == 1,
             "ACCOUNT_FILE_UNSAFE")
     lines = path.read_text("ascii").splitlines()
     require(len(lines) == 2 and lines[0] == "username=serzhan_admin" and
