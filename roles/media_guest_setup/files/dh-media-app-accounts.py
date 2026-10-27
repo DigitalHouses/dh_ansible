@@ -35,7 +35,7 @@ def read_owner(root: Path, username: str):
     check(len(data) == 2 and data[0] == "username=" + username and
           data[1].startswith("password="), "OWNER_PASSPORT_INVALID")
     password = data[1].removeprefix("password=")
-    check(len(password) == 8 and all(c in ALPHABET for c in password),
+    check(6 <= len(password) <= 8 and all(c in ALPHABET for c in password),
           "OWNER_PASSWORD_POLICY_INVALID")
     return password
 
