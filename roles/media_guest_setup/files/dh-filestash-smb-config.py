@@ -119,9 +119,21 @@ def effective_admin_config(secret):
             result = json.loads(response.read(16384))
         require(isinstance(result, dict) and result.get("status") == "ok",
                 "FILESTASH_ADMIN_LOGIN_REJECTED")
-        require(bool(list(cookies)), "FILESTASH_ADMIN_COOKIE_NOT_SET")
+        # Native Filestash returns an access_token for an exact JSON Accept
+        # header. Its admin API explicitly accepts Authorization: Bearer.
+        # The session cookie alone can be rejected by admin route middleware.
+        session = result.get("result")
+        token = session.get("access_token") if isinstance(session, dict) else None
+        require(isinstance(token, str) and 16 <= len(token) <= 8192
+                and "\r" not in token and "\n" not in token,
+                "FILESTASH_ADMIN_ACCESS_TOKEN_UNAVAILABLE")
         stage = "ADMIN_CONFIG"
-        with opener.open(BASE + "/admin/api/config", timeout=12) as response:
+        config_request = urllib.request.Request(
+            BASE + "/admin/api/config",
+            headers={"Accept": "application/json",
+                     "Authorization": "Bearer " + token},
+            method="GET")
+        with opener.open(config_request, timeout=12) as response:
             result = json.loads(response.read(1024 * 1024))
         require(isinstance(result, dict) and isinstance(result.get("result"), dict),
                 "FILESTASH_RUNTIME_CONFIG_INVALID")

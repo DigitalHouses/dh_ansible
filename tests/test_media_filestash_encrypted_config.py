@@ -97,7 +97,7 @@ def test_live_admin_api_login_is_loopback_only_without_outbound_proxy():
             requests.append((url,timeout))
             if url.endswith("/admin/api/session"):
                 assert getattr(request,"data",None)
-                return Response({"status":"ok","result":{"access_token":"redacted"}})
+                return Response({"status":"ok","result":{"access_token":"fake-admin-access-token-12345"}})
             return Response({"status":"ok","result":mod.desired()})
     with mock.patch.object(mod.http.cookiejar,"CookieJar",return_value=["admin-session"]), \
          mock.patch.object(mod.urllib.request,"build_opener",return_value=FakeOpener()) as build:
