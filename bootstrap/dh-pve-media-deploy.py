@@ -424,10 +424,10 @@ def ensure_backup_storage(site, data, pve):
     storage_cfg = Path("/etc/pve/storage.cfg")
     need(storage_cfg.is_file(), "PVE_STORAGE_CONFIG_ABSENT")
     contents = storage_cfg.read_text()
-    headers = re.findall(r"(?m)^[a-z][a-z0-9]*:\\s+([^\\s]+)", contents)
+    headers = re.findall(r"(?m)^[a-z][a-z0-9]*:\s+([^\s]+)", contents)
     if storage_id in headers:
-        block = re.search(r"(?m)^nfs:\\s+" + re.escape(storage_id) +
-                          r"\\s*\\n((?:[ \\t]+[^\\n]*\\n)*)", contents)
+        block = re.search(r"(?m)^nfs:\s+" + re.escape(storage_id) +
+                          r"\s*\n((?:[ \t]+[^\n]*\n)*)", contents)
         need(block is not None, "BACKUP_STORAGE_ID_COLLISION")
         fields = dict(line.strip().split(None, 1)
                       for line in block.group(1).splitlines() if line.strip())
