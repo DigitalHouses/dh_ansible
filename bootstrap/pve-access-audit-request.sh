@@ -50,14 +50,16 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
     "ansible-linux@$PVE_IP" sudo -n /usr/local/sbin/dh-pve-media-deploy \
     --site "$SITE" --storage-action "$STORAGE_ACTION" \
     --vm-policy "$VM_POLICY" --disk-policy "$DISK_POLICY" --apply >> "$LOG" 2>&1
-  if grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_LEGACY" "$LOG" || \
+  if grep -Fxq "VM_CREATED=YES" "$LOG" || \
+     grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_LEGACY" "$LOG" || \
      grep -Fxq "VM_RECREATE=REMOVED_VERIFIED_MANAGED" "$LOG"; then
-    # The newly provisioned Debian VM generates a new host key.
+    # A newly created Debian VM has a different host key. Never reset
+    # an existing guest's SSH trust for an ordinary reconcile run.
     GUEST_IP="$(/opt/ansible/venv/bin/python -c 'import yaml,ipaddress,sys; x=yaml.safe_load(open(sys.argv[1]))["media_vm"]["network"]["ipv4"]; print(ipaddress.IPv4Interface(x).ip)' "$INV_ROOT/$SITE/media_vm.yml")"
     if [[ -f /root/.ssh/known_hosts ]]; then
       /usr/bin/ssh-keygen -R "$GUEST_IP" -f /root/.ssh/known_hosts >> "$LOG" 2>&1
     fi
-    echo "VM_SSH_IDENTITY=REINITIALIZED_AFTER_APPROVED_RECREATE" >> "$LOG"
+    echo "VM_SSH_IDENTITY=REINITIALIZED_AFTER_VERIFIED_VM_CREATION" >> "$LOG"
   fi
   GUEST_PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/setup-pve-media-guest.yml
   [[ -f "$GUEST_PLAY" && ! -L "$GUEST_PLAY" ]] || exit 2
