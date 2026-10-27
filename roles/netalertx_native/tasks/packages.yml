@@ -34,7 +34,6 @@
       - usbutils
       - traceroute
       - nbtscan
-      - avahi-daemon
       - avahi-utils
       - build-essential
       - git
