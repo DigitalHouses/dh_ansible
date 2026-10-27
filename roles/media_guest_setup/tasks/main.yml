@@ -703,3 +703,6 @@
 
 - name: Provision Filestash Sambee and Jellyfin
   ansible.builtin.import_tasks: apps.yml
+
+- name: Publish local media portal and LAN discovery
+  ansible.builtin.import_tasks: discovery_portal.yml
