@@ -85,7 +85,7 @@
     - name: Request fixed-purpose read-only media PCI plan
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_PLAN:{{ media_plan_nonce.stdout }}\n"
+        content: "MEDIA_PLAN_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_plan_nonce.stdout }}\n"
         mode: '0600'
       changed_when: false
 
@@ -128,6 +128,10 @@
           - media_plan_summary.name == media_vm.name
           - media_plan_summary.vmid | int == media_vm.vmid | int
           - media_plan_summary.result == 'PLAN_ONLY'
+          - media_plan_summary.requested_vm_action == media_vm_action
+          - media_plan_summary.requested_disk_action == media_raw_disk_action
+          - media_plan_summary.warnings is sequence
+          - media_plan_summary.warnings is not string
         fail_msg: "MEDIA_PVE_PLAN_PROVENANCE_MISMATCH: stale or foreign worker result."
 
     - name: Show audited current hardware and blockers
