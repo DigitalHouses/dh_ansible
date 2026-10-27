@@ -137,3 +137,20 @@ def test_pinned_installer_stages_reusable_role():
         assert relative in files
     assert '( "media_guest_setup", "tasks/main.yml")' not in source
     assert '("guest_network_discovery", "tasks/main.yml")' in source
+
+
+def test_fresh_runner_ct_uses_same_pinned_bonjour_role_without_retrofit():
+    installer = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    playbook = (ROOT / "playbooks/commission-new-runner-bonjour.yml").read_text()
+    assert '"playbooks/commission-new-runner-bonjour.yml"' in installer
+    assert 'def commission_new_runner_mdns(' in installer
+    assert 'if not (args.resume or args.resume_ansible or args.resume_semaphore):' in installer
+    assert 'commission_new_runner_mdns(args.site, args.runner_cidr, args.pve_ip)' in installer
+    assert 'NEW_RUNNER_BONJOUR=VERIFIED' in installer
+    plays = yaml.safe_load(playbook)
+    assert plays[0]["hosts"] == "localhost"
+    assert plays[0]["roles"][0]["role"] == "guest_network_discovery"
+    assert "StrictHostKeyChecking=yes" in playbook
+    assert "/var/lib/ansible/.ssh/pve_host_audit_known_hosts" in playbook
+    assert "dh_runner_mdns_first_boot" in playbook
+    assert "NEW_RUNNER_BONJOUR=VERIFIED" in playbook
