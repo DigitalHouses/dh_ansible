@@ -49,6 +49,11 @@ code{color:#e1f1ff;overflow-wrap:anywhere}
 <a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8989"><strong>Sonarr</strong><small>Сериалы</small></a>
 <a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:9696"><strong>Prowlarr</strong><small>Источники поиска</small></a>
 <a class="card" href="http://{{ media_vm.network.ipv4.split('/')[0] }}:8080"><strong>qBittorrent</strong><small>Загрузки</small></a>
+{% if media_vm.portal.admin_links is defined %}
+{% for link in media_vm.portal.admin_links %}
+<a class="card" href="{{ link.url | e }}"><strong>{{ link.label | e }}</strong><small>{{ link.description | default('Администрирование') | e }}</small></a>
+{% endfor %}
+{% endif %}
 </div>
 {% endif %}
 <p>Сетевой доступ: Windows — <code>{{ media_vm.discovery.netbios_name | e }}</code> в разделе «Сеть»; macOS — Finder → «Сеть» или <code>smb://{{ media_vm.network.ipv4.split('/')[0] }}/Media</code>.</p>
