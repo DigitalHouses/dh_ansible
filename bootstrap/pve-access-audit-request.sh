@@ -11,7 +11,7 @@ INV_ROOT=/var/lib/ansible/site-data
 [[ -f "$REQUEST" && ! -L "$REQUEST" ]] || exit 2
 [[ "$(stat -c '%U:%G:%a' "$REQUEST")" == 'semaphore:semaphore:600' ]] || exit 2
 REQUEST_DATA="$(cat "$REQUEST")"
-[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
+[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_NFS_ATTACH|MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
 ACTION="${BASH_REMATCH[1]}"
 NONCE="${BASH_REMATCH[6]}"
 rm -f -- "$REQUEST"
@@ -91,6 +91,14 @@ if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   # media application acceptance. Never modify PVE backup jobs or storage
   # merely because the guest NFS export was created successfully.
   echo "MEDIA_BACKUP_MIGRATION=DEFERRED_UNTIL_ACCEPTANCE" >> "$LOG"
+  report PASS
+  exit 0
+fi
+if [[ "$ACTION" == "MEDIA_NFS_ATTACH" ]]; then
+  NFS_PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/attach-pve-media-backup-nfs.yml
+  [[ -f "$NFS_PLAY" && ! -L "$NFS_PLAY" ]] || exit 2
+  [[ "$(stat -c '%U:%G:%a' "$NFS_PLAY")" == 'root:root:644' ]] || exit 2
+  /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$NFS_PLAY" >> "$LOG" 2>&1
   report PASS
   exit 0
 fi
