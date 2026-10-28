@@ -117,6 +117,7 @@ Workflow — граф крупных операторских этапов, а �
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
 | **80** | Media VM read-only plan + `site_inventory_prepare` + `fleet_secrets` | **Не готова к one-click**: нет гарантированной доставки `media_vm.yml` и источника secrets; создание VM не реализовано |
+| **90** | PVE NFS Backups: pinned host-write SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; не изменяет backup jobs, не запускает резервное копирование и не трогает существующие данные |
 
 **Этот реестр описывает наблюдаемую реализацию на дату написания; не служит автоматическим разрешением на запуск write-операций.** После изменения каталога или реализации обязан обновляться как часть того же PR.
 
