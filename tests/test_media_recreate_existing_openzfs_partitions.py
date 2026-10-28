@@ -50,7 +50,7 @@ def drive(config_data=None, *, source_guid=GUID, parts=None, policy="erase"):
     def command(*args, **kwargs):
         commands.append(args)
         if args[:5] == ("/usr/sbin/blkid", "-o", "value", "-s", "TYPE"):
-            return "zfs_member" if args[-1] == "/dev/sdb1" else None
+            return "zfs_member" if args[-1] == "/dev/sdb1" else ""
         if args[:2] == ("/usr/sbin/zpool", "import"):
             state["old"] = True
         if args[:2] == ("/usr/sbin/zpool", "destroy"):
@@ -136,3 +136,16 @@ def test_missing_source_declared_does_not_erase_unknown_partitions():
     _, error, calls, _, _ = drive(config_data=data)
     assert error == "UNKNOWN_EXISTING_PARTITIONS"
     assert writes(calls) == []
+
+
+def test_reserved_partition_foreign_filesystem_is_rejected():
+    def command(*args, **kwargs):
+        if args[-1] == "/dev/sdb1":
+            return "zfs_member"
+        if args[-1] == "/dev/sdb9":
+            return "ext4"
+        raise AssertionError("Unexpected command")
+    with patch.object(m, "physical_partitions", return_value=PARTS), \
+         patch.object(m, "command", side_effect=command):
+        with pytest.raises(m.Blocked, match="RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH"):
+            m.verify_prior_managed_partitions(PHYSICAL)

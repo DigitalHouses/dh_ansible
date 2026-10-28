@@ -203,8 +203,11 @@ def verify_prior_managed_partitions(physical):
     require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
                     children[0]["path"]) == "zfs_member",
             "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
+    # blkid returns exit 0 with empty stdout for the reserved sdb9
+    # partition on the installed util-linux version. Neither empty output
+    # nor absent signature is a filesystem; any named type is rejected.
     require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
-                    children[1]["path"], allow_failure=True) is None,
+                    children[1]["path"], allow_failure=True) in (None, ""),
             "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
 
 
