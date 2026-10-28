@@ -35,6 +35,6 @@ def test_idempotent_change_gated_service_restart_and_live_acceptance():
     tasks = yaml.safe_load(POLICY.read_text())
     by_name = {t["name"]: t for t in tasks}
     assert by_name["Restart media players only if their shared CPU policy changed"]["when"] == "dh_media_cpu_slice_file.changed or item.changed"
-    assert "cat, /sys/fs/cgroup/dhtranscode.slice/cpu.max" in str(tasks)
+    assert by_name["Inspect shared cgroup v2 quota"]["ansible.builtin.command"]["argv"] == ["cat", "/sys/fs/cgroup/dhtranscode.slice/cpu.max"]
     assert "150000 100000" in str(tasks)
     assert "MEDIA_TRANSCODE_SHARED_CPU_BUDGET_NOT_APPLIED" in str(tasks)
