@@ -1,0 +1,14 @@
+[Unit]
+Description=Renew DigitalHouses Media Account HTTPS certificate
+ConditionPathExists=/etc/digitalhouses/media-account-pki/ca.key
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/local/sbin/dh-media-account-cert-renew
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes

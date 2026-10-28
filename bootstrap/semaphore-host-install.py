@@ -89,9 +89,18 @@ CODE_FILES = (
     "roles/media_guest_setup/files/dh-media-arr-auth.py",
     "roles/media_guest_setup/tasks/file_access.yml",
     "roles/media_guest_setup/tasks/password_rotation.yml",
+    "roles/media_guest_setup/tasks/password_portal.yml",
+    "roles/media_guest_setup/files/dh-media-account-api.py",
+    "roles/media_guest_setup/files/dh-media-account-api.service",
+    "roles/media_guest_setup/files/dh-media-account-cert-renew.py",
+    "roles/media_guest_setup/files/dh-media-account-cert-renew.service",
+    "roles/media_guest_setup/files/dh-media-account-cert-renew.timer",
+    "roles/media_guest_setup/files/dh-media-account.html",
+    "roles/media_guest_setup/templates/media-account-nginx.conf.j2",
     "roles/media_guest_setup/files/dh-media-password-transaction.py",
     "roles/media_guest_setup/files/dh-media-password-adapters.py",
     "roles/media_guest_setup/files/dh-media-password-rotate.py",
+    "roles/media_guest_setup/files/dh-media-password-current.py",
     "roles/media_guest_setup/tasks/app_accounts.yml",
     "roles/media_guest_setup/tasks/jellyfin_bootstrap.yml",
     "roles/media_guest_setup/tasks/plex_agent.yml",
@@ -1136,9 +1145,18 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "files/dh-media-arr-auth.py"),
         ("media_guest_setup", "tasks/file_access.yml"),
         ("media_guest_setup", "tasks/password_rotation.yml"),
+        ("media_guest_setup", "tasks/password_portal.yml"),
+        ("media_guest_setup", "files/dh-media-account-api.py"),
+        ("media_guest_setup", "files/dh-media-account-api.service"),
+        ("media_guest_setup", "files/dh-media-account-cert-renew.py"),
+        ("media_guest_setup", "files/dh-media-account-cert-renew.service"),
+        ("media_guest_setup", "files/dh-media-account-cert-renew.timer"),
+        ("media_guest_setup", "files/dh-media-account.html"),
+        ("media_guest_setup", "templates/media-account-nginx.conf.j2"),
         ("media_guest_setup", "files/dh-media-password-transaction.py"),
         ("media_guest_setup", "files/dh-media-password-adapters.py"),
         ("media_guest_setup", "files/dh-media-password-rotate.py"),
+        ("media_guest_setup", "files/dh-media-password-current.py"),
         ("media_guest_setup", "tasks/app_accounts.yml"),
         ("media_guest_setup", "tasks/jellyfin_bootstrap.yml"),
         ("media_guest_setup", "tasks/plex_agent.yml"),
@@ -1226,6 +1244,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned media VM deploy helper missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(media_helper), "/usr/local/sbin/dh-pve-media-deploy")
+    password_read_helper = checkout / "bootstrap/dh-pve-media-password-show.py"
+    if password_read_helper.is_symlink() or not password_read_helper.is_file():
+        raise Blocked("Pinned PVE media password recovery helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(password_read_helper), "/usr/local/sbin/dh-media-password-show")
     runtime_helper = checkout / "bootstrap/dh-pve-media-runtime.py"
     if runtime_helper.is_symlink() or not runtime_helper.is_file():
         raise Blocked("Pinned PVE MQTT runtime helper missing")

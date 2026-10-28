@@ -82,6 +82,14 @@ footer{margin-top:42px;padding-top:20px;border-top:1px solid #314358;color:#aebe
 </div>
 </section>
 
+<section aria-labelledby="account">
+<h2 id="account">Управление доступом</h2>
+<p class="section-note">Владелец может самостоятельно изменить единый пароль приложений и SMB. Потребуется действующий пароль и доверенное HTTPS-соединение.</p>
+<div class="grid">
+<a class="card" href="https://{{ media_ip }}/account/"><strong>Сменить пароль</strong><small>Radarr, Sonarr, Prowlarr, qBittorrent, SMB, Jellyfin и веб-файловые менеджеры. Отдельный пароль Plex не изменяется.</small><span class="action">Защищённая страница HTTPS</span></a>
+</div>
+</section>
+
 {% if media_vm.portal is defined and media_vm.portal.links is defined and media_vm.portal.links | length > 0 %}
 <section aria-labelledby="other">
 <h2 id="other">Другие сервисы дома</h2>
