@@ -208,16 +208,22 @@
           register: dh_backup_write_probe
           changed_when: false
 
-        - name: Read back the disposable NFS probe
-          ansible.builtin.stat:
-            path: "{{ dh_backup_write_probe.path }}"
-          register: dh_backup_probe_stat
+        - name: Write real content into the temporary NFS probe
+          ansible.builtin.copy:
+            dest: "{{ dh_backup_write_probe.path }}"
+            content: "DIGITALHOUSES_MEDIA_NFS_BACKUP_ACCEPTANCE\\n"
+            mode: '0600'
+          changed_when: false
 
-        - name: Confirm a genuine NFS file was created and is readable
+        - name: Read back the complete temporary NFS probe
+          ansible.builtin.slurp:
+            src: "{{ dh_backup_write_probe.path }}"
+          register: dh_backup_probe_content
+
+        - name: Confirm NFS write and read match exactly
           ansible.builtin.assert:
             that:
-              - dh_backup_probe_stat.stat.isreg | default(false)
-              - dh_backup_probe_stat.stat.readable | default(false)
+              - (dh_backup_probe_content.content | b64decode) == "DIGITALHOUSES_MEDIA_NFS_BACKUP_ACCEPTANCE\\n"
             fail_msg: MEDIA_NFS_BACKUP_WRITE_PROBE_FAILED
       always:
         - name: Delete only this run's disposable acceptance file
