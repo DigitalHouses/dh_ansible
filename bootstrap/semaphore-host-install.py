@@ -1228,6 +1228,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned media VM deploy helper missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(media_helper), "/usr/local/sbin/dh-pve-media-deploy")
+    password_read_helper = checkout / "bootstrap/dh-pve-media-password-show.py"
+    if password_read_helper.is_symlink() or not password_read_helper.is_file():
+        raise Blocked("Pinned PVE media password recovery helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(password_read_helper), "/usr/local/sbin/dh-media-password-show")
     runtime_helper = checkout / "bootstrap/dh-pve-media-runtime.py"
     if runtime_helper.is_symlink() or not runtime_helper.is_file():
         raise Blocked("Pinned PVE MQTT runtime helper missing")
