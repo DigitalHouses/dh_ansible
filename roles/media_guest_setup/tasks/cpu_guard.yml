@@ -1,0 +1,87 @@
+---
+# Fixed approved host-protection policy for the two media transcoders.
+# Applies one SHARED slice quota; neither ZFS/NFS nor unrelated services are throttled.
+- name: Install persistent shared CPU budget for Plex and Jellyfin
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dhtranscode.slice
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=DigitalHouses shared CPU budget for Plex and Jellyfin
+
+      [Slice]
+      CPUAccounting=yes
+      CPUQuota=150%
+  register: dh_media_cpu_slice_file
+
+- name: Ensure systemd override directories for both players
+  ansible.builtin.file:
+    path: "/etc/systemd/system/{{ item }}.service.d"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - plexmediaserver
+    - jellyfin
+
+- name: Place Plex and Jellyfin in the same shared CPU slice
+  ansible.builtin.copy:
+    dest: "/etc/systemd/system/{{ item }}.service.d/40-dh-cpu-budget.conf"
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      Slice=dhtranscode.slice
+  loop:
+    - plexmediaserver
+    - jellyfin
+  register: dh_media_cpu_dropins
+
+- name: Reload systemd only when CPU guard configuration changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: >-
+    dh_media_cpu_slice_file.changed
+    or (dh_media_cpu_dropins.results | selectattr('changed') | list | length > 0)
+
+- name: Restart media players only if their shared CPU policy changed
+  ansible.builtin.systemd_service:
+    name: "{{ item.item }}.service"
+    state: restarted
+  loop: "{{ dh_media_cpu_dropins.results }}"
+  when: dh_media_cpu_slice_file.changed or item.changed
+
+- name: Inspect shared cgroup v2 quota
+  ansible.builtin.command:
+    argv: [cat, /sys/fs/cgroup/dhtranscode.slice/cpu.max]
+  register: dh_media_cpu_cgroup_max
+  changed_when: false
+
+- name: Inspect player CPU slice membership
+  ansible.builtin.command:
+    argv: [systemctl, show, "{{ item }}.service", --property=Slice, --value]
+  loop:
+    - plexmediaserver
+    - jellyfin
+  register: dh_media_cpu_service_slices
+  changed_when: false
+
+- name: Verify both players share exactly 150 percent of one CPU budget
+  ansible.builtin.assert:
+    that:
+      - dh_media_cpu_cgroup_max.stdout == '150000 100000'
+      - dh_media_cpu_service_slices.results | map(attribute='stdout') | unique | list == ['dhtranscode.slice']
+    fail_msg: MEDIA_TRANSCODE_SHARED_CPU_BUDGET_NOT_APPLIED
+
+- name: Report media transcode CPU protection
+  ansible.builtin.debug:
+    msg:
+      media_transcode_cpu_limit: PASS
+      shared_cpu_quota: '150%'
+      protected_services: [plexmediaserver, jellyfin]
+      other_guest_services: UNCHANGED
+      pve_cpulimit: UNCHANGED
