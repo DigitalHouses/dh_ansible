@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer"><meta http-equiv="Cache-Control" content="no-store">
+<title>DigitalHouses — Смена пароля</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color-scheme:dark;background:#101823;color:#eaf3fc}
+*{box-sizing:border-box}body{max-width:640px;margin:0 auto;padding:28px 20px 70px}
+a{color:#9acdf2}h1{font-size:2rem;margin:0 0 8px}p{color:#b7c8d9;line-height:1.6}
+.card{border:1px solid #36536b;border-radius:16px;background:#1b2b3e;padding:24px;margin-top:25px}
+label{display:block;margin:18px 0 8px;font-weight:650}input{width:100%;padding:12px 14px;font-size:1rem;background:#102132;color:#fff;border:1px solid #627a93;border-radius:8px}
+button{background:#80badf;color:#051828;border:0;border-radius:8px;font-size:1rem;padding:13px 20px;margin-top:23px;font-weight:750;cursor:pointer}
+button:disabled{opacity:.5;cursor:wait}.small{font-size:.88rem}#status{margin-top:18px;min-height:24px}#status.success{color:#8de0aa}#status.error{color:#ffc0b8}
+</style></head><body>
+<a href="http://192.168.11.238/">← Главная страница медиасервера</a>
+<div class="card"><h1>Сменить общий пароль</h1>
+<p>Учётная запись владельца <strong>serzhan</strong>. Пароль обновляется для Radarr, Sonarr, Prowlarr, qBittorrent, Samba, Jellyfin, Sambee и Filestash.</p>
+<p class="small">Не меняет отдельный аккаунт SMB-администратора <code>serzhan_admin</code>, учётную запись Plex или внутренние API-ключи.</p>
+<form id="change" autocomplete="off">
+<label for="old">Действующий пароль</label><input id="old" type="password" autocomplete="current-password" required minlength="6" maxlength="8" pattern="[A-Za-z0-9]{6,8}">
+<label for="new">Новый пароль</label><input id="new" type="password" autocomplete="new-password" required minlength="6" maxlength="8" pattern="[A-Za-z0-9]{6,8}">
+<label for="confirmation">Повторите новый пароль</label><input id="confirmation" type="password" autocomplete="new-password" required minlength="6" maxlength="8" pattern="[A-Za-z0-9]{6,8}">
+<p class="small">Текущая политика сервера: от 6 до 8 латинских букв или цифр. После смены потребуется войти в приложения и SMB заново.</p>
+<button id="submit" disabled>Изменить пароль</button><div id="status" role="status" aria-live="polite"></div>
+</form></div>
+<script>
+"use strict";
+const form=document.getElementById("change"),status=document.getElementById("status"),button=document.getElementById("submit");
+let csrf=null;
+function message(text,kind){status.textContent=text;status.className=kind||""}
+async function session(){
+  const r=await fetch("/account/api/session",{credentials:"same-origin",cache:"no-store"});
+  if(!r.ok)throw Error("session");
+  const data=await r.json();if(!data.csrf)throw Error("csrf");
+  csrf=data.csrf;button.disabled=false;
+}
+if(location.protocol!=="https:"){message("Для смены пароля требуется защищённое соединение HTTPS.","error")}
+else{session().catch(()=>message("Сервис смены пароля недоступен. Обратитесь к администратору.","error"))}
+form.addEventListener("submit",async(event)=>{
+  event.preventDefault();if(!csrf)return;
+  const old=document.getElementById("old"),next=document.getElementById("new"),confirmation=document.getElementById("confirmation");
+  if(next.value!==confirmation.value){message("Новые пароли не совпадают.","error");return}
+  if(old.value===next.value){message("Новый пароль должен отличаться от действующего.","error");return}
+  button.disabled=true;message("Проверка и обновление пароля…","");
+  try{
+    const r=await fetch("/account/api/change",{method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/json","X-CSRF":csrf},
+      body:JSON.stringify({old:old.value,new:next.value}),cache:"no-store"});
+    const data=await r.json();
+    old.value="";next.value="";confirmation.value="";csrf=null;
+    if(r.ok&&data.ok){message("Пароль изменён во всех поддерживаемых приложениях. Используйте новый пароль при следующем входе.","success")}
+    else if(r.status===429){message("Слишком много попыток. Повторите через 15 минут.","error")}
+    else{message("Изменение не завершено. Пароли очищены из формы; обратитесь к администратору.","error")}
+  }catch(_){message("Ошибка соединения. Проверьте результат у администратора, прежде чем повторять операцию.","error")}
+  finally{if(!status.classList.contains("success")){session().catch(()=>button.disabled=true)}}
+});
+</script></body></html>
