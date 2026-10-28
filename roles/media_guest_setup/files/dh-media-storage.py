@@ -184,6 +184,30 @@ def physical_partitions(physical):
     return children
 
 
+def verify_prior_managed_partitions(physical):
+    """Allow only the two GPT partitions made by a ZFS whole-disk pool.
+
+    These are on an already serial/WWN/size-verified physical SSD. A foreign
+    partition table, extra partition, or unknown filesystem still blocks erase.
+    """
+    children = physical_partitions(physical)
+    require(len(children) == 2
+            and [p["path"] for p in children] ==
+                [physical + "1", physical + "9"]
+            and all(isinstance(p.get("partuuid"), str)
+                    and re.fullmatch(r"[0-9a-fA-F-]{36}", p["partuuid"])
+                    for p in children)
+            and children[0]["partuuid"].lower() !=
+                children[1]["partuuid"].lower(),
+            "RECREATE_SOURCE_PARTITION_LAYOUT_MISMATCH")
+    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
+                    children[0]["path"]) == "zfs_member",
+            "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
+    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
+                    children[1]["path"], allow_failure=True) is None,
+            "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
+
+
 def ensure_create(data, disk, physical, disk_policy="preserve"):
     """Rebuild an empty or exactly identified approved pool (erase only at CLI)."""
     require(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
@@ -204,35 +228,68 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
         # The previously verified ZFS layout may have partitioned the SSD.
         # Continue only with the same strict WWN-verified disk path.
     else:
-        legacy = data.get("legacy_pool")
-        legacy_active = get_pool(legacy["name"]) if legacy else None
-        legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
-        if legacy_active or legacy_importable:
-            require(disk_policy == "erase", "LEGACY_POOL_ERASE_NOT_AUTHORIZED")
+        prior = data.get("recreate_source_pool")
+        require(prior is None or
+                (isinstance(prior, dict) and set(prior) == {"name", "guid"}
+                 and isinstance(prior["name"], str)
+                 and re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
+                                  prior["name"]) is not None
+                 and prior["name"] != name
+                 and isinstance(prior["guid"], str)
+                 and prior["guid"].isdecimal()),
+                "RECREATE_SOURCE_FLEET_INVALID")
+        prior_active = get_pool(prior["name"]) if prior else None
+        prior_importable = (imported_guid_visible(prior["name"])
+                            if prior and not prior_active else None)
+        if prior_active or prior_importable:
+            require(disk_policy == "erase", "RECREATE_SOURCE_ERASE_NOT_AUTHORIZED")
             require(data.get("destructive_without_backup") is True,
                     "DESTRUCTIVE_APPROVAL_MISSING")
-            observed = legacy_active or legacy_importable
-            require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
-            children = physical_partitions(physical)
-            require(len(children) == 1
-                    and isinstance(children[0].get("partuuid"), str)
-                    and children[0]["partuuid"].lower()
-                    == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
-            if not legacy_active:
+            require((prior_active or prior_importable) == prior["guid"],
+                    "RECREATE_SOURCE_GUID_MISMATCH")
+            # An OpenZFS whole-disk vdev creates partitions 1 (ZFS) and 9
+            # (reserved). Validate their exact shape and signatures first.
+            verify_prior_managed_partitions(physical)
+            if not prior_active:
                 command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
-                        "/dev/disk/by-id", legacy["name"])
-            require(get_pool(legacy["name"]) == str(legacy["guid"]),
-                    "LEGACY_POOL_IMPORTED_GUID_DRIFT")
-            verify_pool_disk(legacy["name"], physical)
-            command("/usr/sbin/zpool", "destroy", legacy["name"])
-            print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
+                        "/dev/disk/by-id", prior["name"])
+            require(get_pool(prior["name"]) == prior["guid"],
+                    "RECREATE_SOURCE_IMPORTED_GUID_DRIFT")
+            verify_pool_disk(prior["name"], physical)
+            command("/usr/sbin/zpool", "destroy", prior["name"])
+            require(get_pool(prior["name"]) is None,
+                    "RECREATE_SOURCE_STILL_ACTIVE")
+            print("RECREATE_SOURCE_POOL=DESTROYED_EXPLICITLY", flush=True)
         else:
-            # Never interpret arbitrary partitions as erase approval.
-            children = physical_partitions(physical)
-            require(not children, "UNKNOWN_EXISTING_PARTITIONS")
-            require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
-                    "UNKNOWN_EXISTING_SIGNATURE")
-            print("DATA_DISK=EMPTY", flush=True)
+            legacy = data.get("legacy_pool")
+            legacy_active = get_pool(legacy["name"]) if legacy else None
+            legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
+            if legacy_active or legacy_importable:
+                require(disk_policy == "erase", "LEGACY_POOL_ERASE_NOT_AUTHORIZED")
+                require(data.get("destructive_without_backup") is True,
+                        "DESTRUCTIVE_APPROVAL_MISSING")
+                observed = legacy_active or legacy_importable
+                require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
+                children = physical_partitions(physical)
+                require(len(children) == 1
+                        and isinstance(children[0].get("partuuid"), str)
+                        and children[0]["partuuid"].lower()
+                        == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
+                if not legacy_active:
+                    command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
+                            "/dev/disk/by-id", legacy["name"])
+                require(get_pool(legacy["name"]) == str(legacy["guid"]),
+                        "LEGACY_POOL_IMPORTED_GUID_DRIFT")
+                verify_pool_disk(legacy["name"], physical)
+                command("/usr/sbin/zpool", "destroy", legacy["name"])
+                print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
+            else:
+                # Never interpret arbitrary partitions as erase approval.
+                children = physical_partitions(physical)
+                require(not children, "UNKNOWN_EXISTING_PARTITIONS")
+                require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
+                        "UNKNOWN_EXISTING_SIGNATURE")
+                print("DATA_DISK=EMPTY", flush=True)
     # The physical disk was previously identified from serial+WWN+size.
     command("/usr/sbin/wipefs", "--all", physical)
     command("/usr/sbin/sgdisk", "--zap-all", physical)
