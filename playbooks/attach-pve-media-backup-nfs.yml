@@ -133,7 +133,7 @@
 
     - name: Audit any existing mount at the managed PVE path
       ansible.builtin.command:
-        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, SOURCE,FSTYPE]
+        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, "SOURCE,FSTYPE"]
       register: dh_existing_backup_mount
       changed_when: false
       failed_when: false
@@ -186,7 +186,7 @@
 
     - name: Verify mounted export identity and NFS filesystem
       ansible.builtin.command:
-        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, SOURCE,FSTYPE]
+        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, "SOURCE,FSTYPE"]
       register: dh_backup_mounted
       changed_when: false
 
