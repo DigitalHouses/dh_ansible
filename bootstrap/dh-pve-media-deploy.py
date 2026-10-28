@@ -289,10 +289,35 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     need(len(matches) == 1 and matches[0].get("name") != "sda",
          "LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH")
     if managed:
-        pool = storage["pool_name"]
-        expected_guid = None
         need(state.get("description") == MANAGED_MEDIA_DESCRIPTION,
              "MANAGED_VM_MARKER_MISSING")
+        # A recreated managed guest may still hold the previous pool name.
+        # The new pool name is used only *after* erase. Never infer or
+        # silently accept a foreign pool: the source must be Fleet-pinned
+        # by exact name and GUID, and the vdev must match the approved SSD.
+        available = {}
+        for line in guest_exec(vmid, "/usr/sbin/zpool", "list",
+                               "-H", "-o", "name,guid").splitlines():
+            parts = line.split()
+            need(len(parts) == 2 and parts[1].isdecimal(),
+                 "MANAGED_ZFS_INVENTORY_INVALID")
+            available[parts[0]] = parts[1]
+        desired = storage["pool_name"]
+        previous = storage.get("recreate_source_pool")
+        if desired in available:
+            pool, expected_guid = desired, None
+        else:
+            need(isinstance(previous, dict)
+                 and set(previous) == {"name", "guid"}
+                 and isinstance(previous["name"], str)
+                 and re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
+                                  previous["name"]) is not None
+                 and isinstance(previous["guid"], str)
+                 and previous["guid"].isdecimal()
+                 and previous["name"] != desired
+                 and available.get(previous["name"]) == previous["guid"],
+                 "MANAGED_ZFS_SOURCE_NOT_APPROVED")
+            pool, expected_guid = previous["name"], previous["guid"]
     else:
         old = storage["legacy_pool"]
         pool = old["name"]
