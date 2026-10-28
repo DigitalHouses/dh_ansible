@@ -48,20 +48,12 @@
     dh_media_cpu_slice_file.changed
     or (dh_media_cpu_dropins.results | selectattr('changed') | list | length > 0)
 
-- name: Restart both media players only when CPU slice membership changed
+- name: Restart media players only if their shared CPU policy changed
   ansible.builtin.systemd_service:
     name: "{{ item.item }}.service"
     state: restarted
   loop: "{{ dh_media_cpu_dropins.results }}"
-  when: item.changed
-
-- name: Apply changed quota to an already active shared CPU slice
-  ansible.builtin.systemd_service:
-    name: dhtranscode.slice
-    state: restarted
-  when:
-    - dh_media_cpu_slice_file.changed
-    - dh_media_cpu_dropins.results | selectattr('changed') | list | length == 0
+  when: dh_media_cpu_slice_file.changed or item.changed
 
 - name: Inspect shared cgroup v2 quota
   ansible.builtin.command:
