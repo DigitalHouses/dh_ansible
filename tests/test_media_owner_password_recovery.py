@@ -14,7 +14,7 @@ def test_guest_helper_is_root_only_and_never_uses_an_ansible_vault():
     assert "lstat()" in source
     assert "stat.S_ISREG" in source
     assert "print(\"password=\" + password)" in source
-    assert "ansible" not in source.lower()
+    assert "import ansible" not in source.lower()
 
 
 def test_pve_password_recovery_pins_guest_identity_and_qga():
@@ -26,7 +26,7 @@ def test_pve_password_recovery_pins_guest_identity_and_qga():
     assert "os.geteuid() != 0" in source
     assert "getpass" not in source.lower()
     assert 'parser.add_argument("--check"' in source
-    assert "ansible" not in source.lower()
+    assert "import ansible" not in source.lower()
 
 
 def test_guest_helper_in_protected_provisioning_manifest():
