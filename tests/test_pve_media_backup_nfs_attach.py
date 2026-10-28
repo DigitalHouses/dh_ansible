@@ -66,5 +66,8 @@ def test_native_nfs_backup_is_idempotent_and_write_tested():
         ]
     probe = tasks["Verify root-squashed NFS write, read and cleanup in backup directory"]
     assert "ansible.builtin.tempfile" in str(probe["block"])
+    assert "ansible.builtin.copy" in str(probe["block"])
+    assert "ansible.builtin.slurp" in str(probe["block"])
+    assert "dh_backup_probe_content.content | b64decode" in str(probe["block"])
     assert "ansible.builtin.file" in str(probe["always"])
     assert "dh_backup_write_probe.path" in str(probe["always"])
