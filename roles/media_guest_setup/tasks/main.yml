@@ -797,6 +797,9 @@
 - name: Deploy DigitalHouses Plex Agent with private MQTT settings
   ansible.builtin.import_tasks: plex_agent.yml
 
+- name: Enforce shared Plex and Jellyfin CPU budget
+  ansible.builtin.import_tasks: cpu_guard.yml
+
 - name: Commission shared Bonjour baseline after guest identity and service setup
   ansible.builtin.import_role:
     name: guest_network_discovery
