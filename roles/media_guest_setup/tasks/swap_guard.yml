@@ -1,0 +1,98 @@
+---
+# Emergency OOM safety net for media GPU workloads. Designed to preserve
+# memory for other processes during short spikes; this does NOT replace RAM.
+# The swap file is on the guest root ext4 volume (not on the ZFS media pool).
+- name: Check media guest system filesystem for safe swap provisioning
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, FSTYPE, -T, /]
+  register: dh_media_swap_root_fstype
+  changed_when: false
+
+- name: Require ext4 guest root before creating swapfile
+  ansible.builtin.assert:
+    that:
+      - dh_media_swap_root_fstype.stdout | trim == 'ext4'
+    fail_msg: MEDIA_SWAP_ROOT_NOT_EXT4
+
+- name: Inspect existing media swapfile
+  ansible.builtin.stat:
+    path: /swapfile
+    follow: false
+  register: dh_media_swap_file
+
+- name: Reject unsafe or replaced swapfile
+  ansible.builtin.assert:
+    that:
+      - not dh_media_swap_file.stat.exists or
+        (dh_media_swap_file.stat.isreg | default(false) and
+         dh_media_swap_file.stat.pw_name == 'root' and
+         dh_media_swap_file.stat.mode == '0600' and
+         dh_media_swap_file.stat.size == 2147483648)
+    fail_msg: MEDIA_SWAP_FILE_UNSAFE_OR_DRIFTED
+
+- name: Allocate emergency 2 GiB guest swap only when absent
+  ansible.builtin.command:
+    argv: [fallocate, -l, 2G, /swapfile]
+    creates: /swapfile
+  when: not dh_media_swap_file.stat.exists
+
+- name: Protect newly allocated root-only swapfile
+  ansible.builtin.file:
+    path: /swapfile
+    owner: root
+    group: root
+    mode: '0600'
+
+- name: Initialize newly created swapfile
+  ansible.builtin.command:
+    argv: [/sbin/mkswap, /swapfile]
+  when: not dh_media_swap_file.stat.exists
+
+- name: Read currently enabled swap devices
+  ansible.builtin.slurp:
+    src: /proc/swaps
+  register: dh_media_swap_status_before
+
+- name: Activate emergency media swap only if currently inactive
+  ansible.builtin.command:
+    argv: [/sbin/swapon, -p, '-5', /swapfile]
+  when: "'/swapfile' not in (dh_media_swap_status_before.content | b64decode)"
+
+- name: Persist emergency media swap across guest restart
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^/swapfile\s+'
+    line: '/swapfile none swap sw,pri=-5 0 0'
+    state: present
+
+- name: Prefer RAM over guest swap during normal video playback
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-dh-media-swap.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      vm.swappiness = 10
+  register: dh_media_swap_sysctl
+
+- name: Read effective swappiness policy
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/vm/swappiness]
+  register: dh_media_swap_swappiness
+  changed_when: false
+
+- name: Set the effective swap policy when not already applied
+  ansible.builtin.command:
+    argv: [/usr/sbin/sysctl, -w, vm.swappiness=10]
+  when: dh_media_swap_swappiness.stdout | trim != '10'
+
+- name: Confirm swapfile is active after configuration
+  ansible.builtin.slurp:
+    src: /proc/swaps
+  register: dh_media_swap_status_after
+
+- name: Require active 2 GiB OOM swap safety net
+  ansible.builtin.assert:
+    that:
+      - "'/swapfile' in (dh_media_swap_status_after.content | b64decode)"
+    fail_msg: MEDIA_SWAP_NOT_ACTIVE
