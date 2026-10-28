@@ -13,7 +13,7 @@ def test_semaphore_has_one_independent_backup_nfs_task():
     catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
     matching = [x for x in catalog["tasks"] if x["title"] == "90-PVE · Подключить NFS Backups"]
     assert len(matching) == 1
-    assert matching[0]["playbook"] == "playbooks/attach-pve-media-backup-nfs.yml"
+    assert matching[0]["playbook"] == "playbooks/request-pve-media-backup-nfs.yml"
     assert matching[0]["playbook"] != "playbooks/plan-pve-media-vm.yml"
     assert "survey_vars" not in matching[0]
 
@@ -71,3 +71,27 @@ def test_native_nfs_backup_is_idempotent_and_write_tested():
     assert "dh_backup_probe_content.content | b64decode" in str(probe["block"])
     assert "ansible.builtin.file" in str(probe["always"])
     assert "dh_backup_write_probe.path" in str(probe["always"])
+
+def test_semaphore_only_requests_a_pinned_root_worker_action():
+    request = ROOT / "playbooks/request-pve-media-backup-nfs.yml"
+    plays = yaml.safe_load(request.read_text())
+    assert len(plays) == 1
+    assert plays[0]["hosts"] == "site_runner"
+    assert plays[0]["become"] is False
+    source = request.read_text()
+    assert "MEDIA_NFS_ATTACH:{{ nfs_nonce.stdout }}" in source
+    assert "dh-pve-access-audit.path" in source
+    assert "PASS:" in source and "FAILED:" in source
+    assert "pve_host_write_ed25519" not in source
+    assert "ansible_ssh_private_key_file" not in source
+
+
+def test_protected_worker_has_only_fixed_root_owned_playbook():
+    worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
+    assert "AUDIT|MEDIA_NFS_ATTACH|MEDIA_PLAN_" in worker
+    assert 'if [[ "$ACTION" == "MEDIA_NFS_ATTACH" ]]; then' in worker
+    assert "/opt/digitalhouses/bootstrap/pve-access/playbooks/attach-pve-media-backup-nfs.yml" in worker
+    assert "'root:root:644'" in worker
+    assert 'report PASS' in worker
+    bootstrap = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
+    assert '"attach-pve-media-backup-nfs.yml"' in bootstrap
