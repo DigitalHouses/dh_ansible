@@ -74,6 +74,16 @@
       - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
   register: media_sambee_firstboot_recovery
   changed_when: false
+  # Fresh Sambee creates the DB before its migration/user tables exist.
+  # Retry ONLY that transient bootstrap state; all foreign/unsafe state
+  # errors must fail closed immediately without snapshot or DB replacement.
+  retries: 30
+  delay: 2
+  until: >-
+    media_sambee_firstboot_recovery.rc == 0 or
+    'SAMBEE_RECOVERY=BLOCKED_SAMBEE_RECOVERY_EXPECTED_TABLE_MISSING'
+    not in (media_sambee_firstboot_recovery.stderr | default(''))
+  failed_when: media_sambee_firstboot_recovery.rc != 0
   when: media_vm.applications.sambee | bool
 
 - name: Stop only empty preexisting Sambee bootstrap container for protected recovery
