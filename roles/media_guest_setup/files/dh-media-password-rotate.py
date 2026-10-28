@@ -96,10 +96,41 @@ def build_adapters(data, owner_path, engine, adapters):
     return steps
 
 
+def diagnose(path, engine, steps):
+    """Root-only non-mutating state inspection. Never emit credential material."""
+    journal_path = path.parent / engine.JOURNAL
+    engine.check_file(journal_path)
+    record = json.loads(journal_path.read_text("ascii"))
+    require(record.get("schema") == 1
+            and record.get("username") == path.stem
+            and record.get("steps") == list(steps)
+            and record.get("phase") in ("apply", "rollback", "commit")
+            and record.get("inflight") in (None, *steps),
+            "ROTATION_DIAGNOSTIC_JOURNAL_INVALID")
+    old, new = record.get("old"), record.get("new")
+    require(isinstance(old, str) and isinstance(new, str)
+            and engine.PASSWORD.fullmatch(old) is not None
+            and engine.PASSWORD.fullmatch(new) is not None,
+            "ROTATION_DIAGNOSTIC_CREDENTIAL_RECORD_INVALID")
+    print("MEDIA_OWNER_ROTATION=DIAGNOSIS")
+    print("PHASE=" + record["phase"])
+    print("INFLIGHT=" + (record["inflight"] or "none"))
+    print("APPLIED_COUNT=" + str(len(record.get("applied", []))))
+    for name, adapter in steps.items():
+        old_ok = engine.verify_only(adapter, old)
+        new_ok = engine.verify_only(adapter, new)
+        state = ("BOTH" if old_ok and new_ok else
+                 "OLD" if old_ok else "NEW" if new_ok else "NEITHER")
+        print("ADAPTER_" + name + "=" + state, flush=True)
+    return "DIAGNOSIS"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
-    parser.add_argument("--resume", action="store_true")
+    operations = parser.add_mutually_exclusive_group()
+    operations.add_argument("--resume", action="store_true")
+    operations.add_argument("--diagnose", action="store_true")
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROTATION_ROOT_REQUIRED")
     # Never allow ambient HTTP_PROXY/HTTPS_PROXY to receive local API credentials.
@@ -109,6 +140,8 @@ def main():
     engine = load("dh-media-password-transaction")
     adapters = load("dh-media-password-adapters")
     steps = build_adapters(data, path, engine, adapters)
+    if args.diagnose:
+        return diagnose(path, engine, steps)
     if args.resume:
         old = new = None
     else:
@@ -126,9 +159,14 @@ def main():
 if __name__ == "__main__":
     try:
         result = main()
-        print("MEDIA_OWNER_ROTATION=" + result)
-        sys.exit(0 if result == "COMMITTED" else 2)
+        if result != "DIAGNOSIS":
+            print("MEDIA_OWNER_ROTATION=" + result)
+        sys.exit(0 if result in ("COMMITTED", "DIAGNOSIS") else 2)
     except (OSError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
         # Codes only: passwords, raw API responses, tracebacks NEVER published.
-        print("MEDIA_OWNER_ROTATION=BLOCKED_" + type(exc).__name__, file=sys.stderr)
+        # Emit only vetted fixed-format reason codes from our internal engine.
+        reason = str(exc)
+        code = reason if (type(exc).__name__ == "Blocked"
+                          and re.fullmatch(r"ROTATION_[A-Z0-9_]{4,96}", reason)) else type(exc).__name__
+        print("MEDIA_OWNER_ROTATION=BLOCKED_" + code, file=sys.stderr)
         sys.exit(2)
