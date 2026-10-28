@@ -28,8 +28,9 @@
     path: /etc/digitalhouses_plex_agent
     state: directory
     owner: root
-    group: root
+    group: digitalhouses_plex_agent
     mode: '0750'
+  register: media_plex_agent_directory
 
 - name: Seed noninteractive Plex Agent configuration from protected Fleet
   ansible.builtin.template:
@@ -73,11 +74,35 @@
     'source = digitalhouses_plex_agent-v0.8.0' not in (media_plex_agent_installed_build.content | default('') | b64decode)
   no_log: true
 
+- name: Check service account can access its protected Plex Agent configuration
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - digitalhouses_plex_agent
+      - --
+      - test
+      - -r
+      - /etc/digitalhouses_plex_agent/digitalhouses_plex_agent.conf
+  changed_when: false
+
+- name: Check service account can access its protected Plex API token
+  ansible.builtin.command:
+    argv:
+      - runuser
+      - -u
+      - digitalhouses_plex_agent
+      - --
+      - test
+      - -r
+      - /etc/digitalhouses_plex_agent/plex_local_admin_token
+  changed_when: false
+
 - name: Enable active Plex Agent with reconciled site MQTT config
   ansible.builtin.systemd_service:
     name: digitalhouses_plex_agent.service
     enabled: true
-    state: "{{ 'restarted' if media_plex_agent_config.changed else 'started' }}"
+    state: "{{ 'restarted' if (media_plex_agent_config.changed or media_plex_agent_directory.changed) else 'started' }}"
 
 - name: Check canonical Plex Agent is active
   ansible.builtin.command:
