@@ -36,4 +36,4 @@ def test_discovery_change_is_idempotent_and_scope_is_limited():
     assert target
     assert all("smbd.service" not in str(t) for t in target)
     assert all("nmbd.service" not in str(t) for t in target)
-    assert any("systemctl, show, wsdd2.service" in str(t) for t in target)
+    assert any(t.get("ansible.builtin.command", {}).get("argv") == ["systemctl", "show", "wsdd2.service", "--property=ExecStart", "--value"] for t in target)
