@@ -26,7 +26,7 @@ SAFE_ERROR_CODES = frozenset({
     "JELLYFIN_MANAGED_LOGIN_FAILED", "JELLYFIN_MEDIA_PATH_MISSING",
     "JELLYFIN_MEDIA_ROOT_UNSAFE", "JELLYFIN_PUBLIC_STATUS_INVALID",
     "JELLYFIN_SETUP_ARGUMENTS_REQUIRED", "JELLYFIN_STARTUP_CONFIG_INVALID",
-    "JELLYFIN_STARTUP_NOT_CONFIRMED",
+    "JELLYFIN_STARTUP_FIRST_USER_INVALID", "JELLYFIN_STARTUP_NOT_CONFIRMED",
 })
 SAFE_STAGES = frozenset({"NOT_STARTED"}) | frozenset(
     method + "_" + route
@@ -198,6 +198,14 @@ def bootstrap(secret_file, media_root):
         initial = request("GET", "/Startup/Configuration")
         require(isinstance(initial, dict), "JELLYFIN_STARTUP_CONFIG_INVALID")
         request("POST", "/Startup/Configuration", initial)
+        # Jellyfin 12 does not implicitly create the initial user on POST.
+        # Its GET endpoint initializes the first user before the update.
+        # Never send the owner's password before confirming this account.
+        first_user = request("GET", "/Startup/User")
+        require(isinstance(first_user, dict)
+                and isinstance(first_user.get("Name"), str)
+                and bool(first_user["Name"]),
+                "JELLYFIN_STARTUP_FIRST_USER_INVALID")
         request("POST", "/Startup/User",
                 {"Name": credentials["username"], "Password": credentials["password"]})
         request("POST", "/Startup/RemoteAccess",
