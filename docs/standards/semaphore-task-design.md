@@ -21,7 +21,7 @@
 | Read-only аудит, которому нужны root-файлы, приватные SSH-ключи или API-токены | Semaphore → nonce request → фиксированный root-worker → независимый audit → status | Да; секреты остаются у доверенного исполнителя | **50** |
 | Установка/обновление локального привилегированного сервиса | Semaphore → nonce → root-worker; Ansible apply/verify внутри | Да | **40** |
 | Создание VM/LXC, PCI passthrough, конфигурация PVE и гостевой ОС | Декларативная роль + `audit/plan` → строго ограниченный worker → PVE API/проверенный SSH → `verify` | Да, если затрагивается PVE/устройства | **60** как действующий пример LXC; **80** пока только план и не готова к apply |
-| Подключение уже утверждённого NFS-экспорта медиасервера к PVE (backup-only) | Отдельный pinned-SSH Ansible playbook → аудит существующего storage → conditional create → проверка NFS mount и записи; без изменения заданий backup | Используется действующий ограниченный host-write SSH, отдельный root-worker не создаётся | **90** |
+| Подключение уже утверждённого NFS-экспорта медиасервера к PVE (backup-only) | Semaphore nonce request → существующий защищённый root-worker → pinned-SSH Ansible playbook → аудит/подключение NFS → проверка mount и записи; без изменения заданий backup | Секретный PVE SSH-ключ остаётся доступен только root-worker; Semaphore не выполняет SSH | **90** |
 | Облачные API, Cloudflare Tunnel, Access, mTLS | План и проверка защиты → root-worker со scoped credential → readback удалённого API | Да | **10**, **70** |
 | Управление самим каталогом Semaphore | Публичный `catalog/semaphore-tasks.json` → фиксированный root-worker → официальный localhost HTTPS Semaphore API | Да, поскольку управляющий API-токен root-only | **00** |
 | Много независимых жизненных циклов, требующих явных границ утверждения/отката | В будущем нативный Workflow со звеньями, построенными из утверждённых пользовательских задач или reusable этапов | По требованиям каждого звена | **Целевая архитектура; не считать внедрённой** |
@@ -117,7 +117,7 @@ Workflow — граф крупных операторских этапов, а �
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
 | **80** | Media VM read-only plan + `site_inventory_prepare` + `fleet_secrets` | **Не готова к one-click**: нет гарантированной доставки `media_vm.yml` и источника secrets; создание VM не реализовано |
-| **90** | PVE NFS Backups: pinned host-write SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; не изменяет backup jobs, не запускает резервное копирование и не трогает существующие данные |
+| **90** | PVE NFS Backups: Semaphore nonce → root-worker → pinned PVE SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; PVE SSH-ключ root-only; не изменяет backup jobs, не запускает резервное копирование и не трогает данные |
 
 **Этот реестр описывает наблюдаемую реализацию на дату написания; не служит автоматическим разрешением на запуск write-операций.** После изменения каталога или реализации обязан обновляться как часть того же PR.
 
