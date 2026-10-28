@@ -73,7 +73,10 @@ def test_portal_and_discovery_are_declared_without_secrets():
     assert any("wsdd2.service" in str(task) for task in discovery)
     page = (ROLE / "templates/media-portal-index.html.j2").read_text()
     assert "media_vm.portal.links" in page
-    assert "password" not in page.lower()
+    # The root-only CLI command contains the word "password", but no credential value.
+    assert "password=" not in page.lower()
+    assert "secret=" not in page.lower()
+    assert 'value="/usr/local/sbin/dh-media-password-show"' in page
     assert ":32400/web" in page
 
 

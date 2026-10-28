@@ -26,6 +26,11 @@ section{margin-top:36px}
 code{color:#e1f1ff;overflow-wrap:anywhere}
 a.inline{color:#a6d8ff}
 footer{margin-top:42px;padding-top:20px;border-top:1px solid #314358;color:#aebed0;font-size:.91rem;line-height:1.6}
+.admin-cli{margin-top:16px;display:flex;flex-wrap:wrap;align-items:center;gap:7px;font-size:.78rem;color:#91a7bd}
+.admin-cli input{width:325px;max-width:100%;padding:4px 6px;background:transparent;color:#b9cada;border:1px solid #314358;border-radius:5px;font:inherit;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+.admin-cli button{height:27px;width:30px;display:inline-flex;align-items:center;justify-content:center;padding:0;border:1px solid #40566b;border-radius:5px;color:#b8cfe2;background:#1b2b3e;cursor:pointer}
+.admin-cli button:hover,.admin-cli button:focus-visible{border-color:#9acdf2;color:#fff;outline-offset:2px}
+.admin-cli-status{min-width:90px;color:#a4c8df}
 </style>
 </head>
 <body>
@@ -117,6 +122,41 @@ footer{margin-top:42px;padding-top:20px;border-top:1px solid #314358;color:#aebe
 </section>
 {% endif %}
 </main>
-<footer>Портал работает внутри вашей локальной сети. Он помогает находить приложения, но не заменяет их авторизацию. Если сервис не открывается, обратитесь к администратору DigitalHouses.</footer>
+<footer>
+Портал работает внутри вашей локальной сети. Он помогает находить приложения, но не заменяет их авторизацию. Если сервис не открывается, обратитесь к администратору DigitalHouses.
+<div class="admin-cli">
+  <span>PVE · root:</span>
+  <input id="pve-root-cli" type="text" value="/usr/local/sbin/dh-media-password-show" readonly aria-label="Команда просмотра пароля владельца в root-консоли PVE" spellcheck="false">
+  <button type="button" id="pve-root-copy" title="Скопировать команду" aria-label="Скопировать команду для root PVE">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
+  </button>
+  <span id="pve-root-copy-status" class="admin-cli-status" role="status" aria-live="polite"></span>
+</div>
+</footer>
+<script>
+(function () {
+  "use strict";
+  const field = document.getElementById("pve-root-cli");
+  const copyButton = document.getElementById("pve-root-copy");
+  const status = document.getElementById("pve-root-copy-status");
+  field.addEventListener("click", function () { field.select(); });
+  copyButton.addEventListener("click", async function () {
+    let copied = false;
+    if (window.isSecureContext && navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(field.value);
+        copied = true;
+      } catch (_) {}
+    }
+    if (!copied) {
+      field.focus();
+      field.select();
+      field.setSelectionRange(0, field.value.length);
+      try { copied = document.execCommand("copy"); } catch (_) {}
+    }
+    status.textContent = copied ? "Скопировано" : "Выделено — Ctrl+C";
+  });
+}());
+</script>
 </body>
 </html>
