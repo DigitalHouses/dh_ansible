@@ -57,6 +57,13 @@ def test_native_nfs_backup_is_idempotent_and_write_tested():
     assert create["when"] == "dh_existing_backup_storages | length == 0"
     assert "Reject duplicate or drifting storage definitions" in tasks
     assert "Require the exact NFS source, not an ordinary local directory" in tasks
+    for name in (
+        "Audit any existing mount at the managed PVE path",
+        "Verify mounted export identity and NFS filesystem",
+    ):
+        assert tasks[name]["ansible.builtin.command"]["argv"][-2:] == [
+            "-o", "SOURCE,FSTYPE"
+        ]
     probe = tasks["Verify root-squashed NFS write, read and cleanup in backup directory"]
     assert "ansible.builtin.tempfile" in str(probe["block"])
     assert "ansible.builtin.file" in str(probe["always"])
