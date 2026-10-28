@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily DigitalHouses Media HTTPS certificate renewal check
+
+[Timer]
+OnCalendar=*-*-* 03:20:00
+RandomizedDelaySec=900
+Persistent=true
+Unit=dh-media-account-cert-renew.service
+
+[Install]
+WantedBy=timers.target
