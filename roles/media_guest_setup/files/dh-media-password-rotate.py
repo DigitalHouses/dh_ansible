@@ -125,12 +125,31 @@ def diagnose(path, engine, steps):
     return "DIAGNOSIS"
 
 
+def verify_current_samba(path, engine, steps):
+    """Read-only test of current committed owner's Samba credentials.
+
+    Never prints or stores secrets. Uses the existing SMB authentication adapter
+    to verify actual NTLM login and Media share access on the local server.
+    """
+    journal = path.parent / engine.JOURNAL
+    require(not journal.exists() and not journal.is_symlink(),
+            "ROTATION_PENDING_RECOVERY")
+    password = engine.owner_password(path)
+    samba = steps["samba"]
+    if not engine.verify_only(samba, password):
+        print("MEDIA_OWNER_SMB_AUTH=FAIL")
+        return "SMB_FAILED"
+    print("MEDIA_OWNER_SMB_AUTH=PASS")
+    return "SMB_VERIFIED"
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, default=MANIFEST)
     operations = parser.add_mutually_exclusive_group()
     operations.add_argument("--resume", action="store_true")
     operations.add_argument("--diagnose", action="store_true")
+    operations.add_argument("--verify-samba", action="store_true")
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROTATION_ROOT_REQUIRED")
     # Never allow ambient HTTP_PROXY/HTTPS_PROXY to receive local API credentials.
@@ -142,6 +161,8 @@ def main():
     steps = build_adapters(data, path, engine, adapters)
     if args.diagnose:
         return diagnose(path, engine, steps)
+    if args.verify_samba:
+        return verify_current_samba(path, engine, steps)
     if args.resume:
         old = new = None
     else:
@@ -159,9 +180,9 @@ def main():
 if __name__ == "__main__":
     try:
         result = main()
-        if result != "DIAGNOSIS":
+        if result not in ("DIAGNOSIS", "SMB_VERIFIED", "SMB_FAILED"):
             print("MEDIA_OWNER_ROTATION=" + result)
-        sys.exit(0 if result in ("COMMITTED", "DIAGNOSIS") else 2)
+        sys.exit(0 if result in ("COMMITTED", "DIAGNOSIS", "SMB_VERIFIED") else 2)
     except (OSError, ValueError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
         # Codes only: passwords, raw API responses, tracebacks NEVER published.
         # Emit only vetted fixed-format reason codes from our internal engine.
