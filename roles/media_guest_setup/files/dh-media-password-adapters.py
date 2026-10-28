@@ -278,3 +278,13 @@ class Filestash:
                 os.unlink(tmp)
         require(silent(["/usr/bin/systemctl", "restart", self.SERVICE],
                        timeout=40), "FILESTASH_RESTART_FAILED")
+        # systemctl restart returns before the spawned web process is
+        # necessarily ready. Immediate verification caused false failures,
+        # followed by unnecessary multi-service rollback.
+        import time
+        deadline = time.monotonic() + 20
+        while not self.verify(new):
+            require(time.monotonic() < deadline,
+                    "FILESTASH_NEW_HASH_NOT_READY")
+            time.sleep(0.35)
+
