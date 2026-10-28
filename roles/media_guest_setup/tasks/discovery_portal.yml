@@ -26,6 +26,74 @@
     enabled: true
     state: started
 
+- name: Ensure local Windows discovery and resolver override directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+  loop:
+    - /etc/systemd/system/wsdd2.service.d
+    - /etc/systemd/resolved.conf.d
+
+- name: Make Windows WSD and LLMNR use the canonical Samba NetBIOS identity
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/wsdd2.service.d/50-dh-media-identity.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      ExecStart=
+      ExecStart=/usr/sbin/wsdd2 -i {{ media_vm.network.guest_interface | default('eth0') }} -H {{ media_vm.discovery.netbios_name }} -N {{ media_vm.discovery.netbios_name }} -G {{ media_vm.discovery.workgroup }}
+  register: media_wsdd2_identity
+
+- name: Leave LLMNR responder port 5355 exclusively to wsdd2
+  ansible.builtin.copy:
+    dest: /etc/systemd/resolved.conf.d/50-dh-wsdd2-llmnr.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Resolve]
+      LLMNR=no
+  register: media_resolved_llmnr
+
+- name: Reload systemd for a changed Windows discovery identity
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: media_wsdd2_identity.changed
+
+- name: Release LLMNR sockets held by systemd-resolved
+  ansible.builtin.systemd_service:
+    name: systemd-resolved.service
+    state: restarted
+  when: media_resolved_llmnr.changed
+
+- name: Restart WSD discovery only if name or LLMNR policy changed
+  ansible.builtin.systemd_service:
+    name: wsdd2.service
+    enabled: true
+    state: restarted
+  when: media_wsdd2_identity.changed or media_resolved_llmnr.changed
+
+- name: Verify Windows discovery service is running after name reconciliation
+  ansible.builtin.command:
+    argv: [systemctl, is-active, wsdd2.service]
+  register: media_wsdd2_live
+  changed_when: false
+  failed_when: media_wsdd2_live.stdout | trim != 'active'
+
+- name: Verify WSD reports approved Samba identity
+  ansible.builtin.command:
+    argv: [systemctl, show, wsdd2.service, --property=ExecStart, --value]
+  register: media_wsdd2_identity_live
+  changed_when: false
+  failed_when: >-
+    ('-H ' ~ media_vm.discovery.netbios_name) not in media_wsdd2_identity_live.stdout
+    or ('-N ' ~ media_vm.discovery.netbios_name) not in media_wsdd2_identity_live.stdout
+
 - name: Create media welcome page directory
   ansible.builtin.file:
     path: /var/www/dh-media-portal
