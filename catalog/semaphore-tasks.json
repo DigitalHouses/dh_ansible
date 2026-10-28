@@ -85,6 +85,11 @@
           ]
         }
       ]
+    },
+    {
+      "title": "90-PVE · Подключить NFS Backups",
+      "playbook": "playbooks/attach-pve-media-backup-nfs.yml",
+      "view": "02 · Развёртывание"
     }
   ]
 }

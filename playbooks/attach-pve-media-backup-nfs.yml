@@ -1,0 +1,248 @@
+---
+# Independent, non-destructive step: connect the Media Server's existing NFS
+# backup export to PVE. Never touch VM lifecycle, backup jobs or stored backups.
+- name: Authorize exact Media Server NFS backup storage for PVE
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Load canonical site metadata
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load canonical PVE identity and pinned SSH transport
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load PVE host-access details
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+
+    - name: Load approved Media Server NFS export
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+
+    - name: Require approved site, host and exact backup-only NFS target
+      ansible.builtin.assert:
+        that:
+          - ansible_play_hosts_all | length == 1
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve.node is match('^[a-z][a-z0-9-]+$')
+          - pve.host == media_vm.backup_export.pve_host
+          - media_vm.backup_export.storage_id == 'dh_media_backups'
+          - media_vm.backup_export.path == '/' ~ media_vm.storage.pool_name ~ '/backups/pve'
+          - media_vm.network.ipv4.split('/')[0] is match('^[0-9.]+$')
+          - pve_access.host.user == 'ansible-linux'
+          - pve_access.host.identity_file is match('^/var/lib/ansible/\.ssh/[a-zA-Z0-9_-]+$')
+        fail_msg: MEDIA_NFS_BACKUP_PVE_FLEET_MISMATCH
+
+    - name: Register only the pinned PVE Linux host-write transport
+      ansible.builtin.add_host:
+        name: dh_media_nfs_pve_host
+        groups: dh_media_nfs_pve
+        ansible_host: "{{ pve.host }}"
+        ansible_port: "{{ pve_access.host.ssh_port }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_python_interpreter: /usr/bin/python3
+        dh_backup_node: "{{ pve.node }}"
+        dh_backup_server: "{{ media_vm.network.ipv4.split('/')[0] }}"
+        dh_backup_export: "{{ media_vm.backup_export.path }}"
+        dh_backup_storage_id: "{{ media_vm.backup_export.storage_id }}"
+      changed_when: false
+
+- name: Attach and verify the native PVE NFS backup storage
+  hosts: dh_media_nfs_pve
+  gather_facts: false
+  become: true
+  vars:
+    dh_backup_mount: "/mnt/pve/{{ dh_backup_storage_id }}"
+  tasks:
+    - name: Verify target is the exact authorized PVE node
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: dh_pve_hostname
+      changed_when: false
+      failed_when: dh_pve_hostname.stdout != dh_backup_node
+
+    - name: Require installed NFS client without changing PVE packages
+      ansible.builtin.stat:
+        path: /usr/sbin/mount.nfs
+      register: dh_pve_nfs_client
+
+    - name: Reject missing native PVE NFS client
+      ansible.builtin.assert:
+        that:
+          - dh_pve_nfs_client.stat.isreg | default(false)
+        fail_msg: MEDIA_NFS_BACKUP_CLIENT_MISSING
+
+    - name: Verify target media server is reachable on NFS TCP port
+      ansible.builtin.wait_for:
+        host: "{{ dh_backup_server }}"
+        port: 2049
+        state: started
+        timeout: 10
+
+    - name: Discover exports directly from the approved media guest
+      ansible.builtin.command:
+        argv: [pvesm, scan, nfs, "{{ dh_backup_server }}"]
+      register: dh_pve_nfs_scan
+      changed_when: false
+
+    - name: Require exact export before any PVE storage write
+      ansible.builtin.assert:
+        that:
+          - dh_backup_export in (dh_pve_nfs_scan.stdout_lines | map('split', ' ') | map('first') | list)
+        fail_msg: MEDIA_NFS_BACKUP_EXPORT_NOT_ADVERTISED
+
+    - name: Audit PVE registered storage definitions
+      ansible.builtin.command:
+        argv: [pvesh, get, /storage, --output-format, json]
+      register: dh_pve_storage_list
+      changed_when: false
+
+    - name: Select existing storage without mutating it
+      ansible.builtin.set_fact:
+        dh_existing_backup_storages: >-
+          {{ (dh_pve_storage_list.stdout | from_json)
+             | selectattr('storage', 'equalto', dh_backup_storage_id) | list }}
+
+    - name: Reject duplicate or drifting storage definitions
+      ansible.builtin.assert:
+        that:
+          - dh_existing_backup_storages | length <= 1
+          - >-
+            dh_existing_backup_storages | length == 0 or
+            (
+              dh_existing_backup_storages[0].type == 'nfs'
+              and dh_existing_backup_storages[0].server == dh_backup_server
+              and dh_existing_backup_storages[0].export == dh_backup_export
+              and dh_existing_backup_storages[0].content == 'backup'
+              and dh_existing_backup_storages[0].options == 'vers=4.1'
+              and dh_existing_backup_storages[0].nodes == dh_backup_node
+              and (dh_existing_backup_storages[0].disable | default(0) | int) == 0
+            )
+        fail_msg: MEDIA_NFS_BACKUP_STORAGE_ID_DRIFT
+
+    - name: Audit any existing mount at the managed PVE path
+      ansible.builtin.command:
+        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, "SOURCE,FSTYPE"]
+      register: dh_existing_backup_mount
+      changed_when: false
+      failed_when: false
+
+    - name: Refuse a mount owned by any different storage
+      ansible.builtin.assert:
+        that:
+          - dh_existing_backup_mount.rc != 0 or
+            (dh_existing_backup_mount.stdout.split() | length == 2
+            and dh_existing_backup_mount.stdout.split()[0] == dh_backup_server ~ ':' ~ dh_backup_export
+            and dh_existing_backup_mount.stdout.split()[1] in ['nfs', 'nfs4'])
+        fail_msg: MEDIA_NFS_BACKUP_FOREIGN_MOUNT
+
+    - name: Register native backup-only NFS storage when absent
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - add
+          - nfs
+          - "{{ dh_backup_storage_id }}"
+          - --server
+          - "{{ dh_backup_server }}"
+          - --export
+          - "{{ dh_backup_export }}"
+          - --content
+          - backup
+          - --nodes
+          - "{{ dh_backup_node }}"
+          - --options
+          - vers=4.1
+      when: dh_existing_backup_storages | length == 0
+      register: dh_backup_storage_created
+
+    - name: Check native PVE storage is active
+      ansible.builtin.command:
+        argv:
+          - pvesh
+          - get
+          - "/nodes/{{ dh_backup_node }}/storage/{{ dh_backup_storage_id }}/status"
+          - --output-format
+          - json
+      register: dh_backup_storage_status
+      changed_when: false
+      until: >-
+        dh_backup_storage_status.rc == 0
+        and (dh_backup_storage_status.stdout | from_json).active | int == 1
+        and (dh_backup_storage_status.stdout | from_json).enabled | int == 1
+      retries: 8
+      delay: 2
+
+    - name: Verify mounted export identity and NFS filesystem
+      ansible.builtin.command:
+        argv: [findmnt, -rn, -M, "{{ dh_backup_mount }}", -o, "SOURCE,FSTYPE"]
+      register: dh_backup_mounted
+      changed_when: false
+
+    - name: Require the exact NFS source, not an ordinary local directory
+      ansible.builtin.assert:
+        that:
+          - dh_backup_mounted.stdout.split() | length == 2
+          - dh_backup_mounted.stdout.split()[0] == dh_backup_server ~ ':' ~ dh_backup_export
+          - dh_backup_mounted.stdout.split()[1] in ['nfs', 'nfs4']
+        fail_msg: MEDIA_NFS_BACKUP_MOUNT_MISMATCH
+
+    - name: Verify root-squashed NFS write, read and cleanup in backup directory
+      block:
+        - name: Write a uniquely named disposable NFS probe
+          ansible.builtin.tempfile:
+            state: file
+            path: "{{ dh_backup_mount }}/dump"
+            prefix: .dh-pve-backup-acceptance-
+          register: dh_backup_write_probe
+          changed_when: false
+
+        - name: Write real content into the temporary NFS probe
+          ansible.builtin.copy:
+            dest: "{{ dh_backup_write_probe.path }}"
+            content: "DIGITALHOUSES_MEDIA_NFS_BACKUP_ACCEPTANCE\\n"
+            mode: '0600'
+          changed_when: false
+
+        - name: Read back the complete temporary NFS probe
+          ansible.builtin.slurp:
+            src: "{{ dh_backup_write_probe.path }}"
+          register: dh_backup_probe_content
+
+        - name: Confirm NFS write and read match exactly
+          ansible.builtin.assert:
+            that:
+              - (dh_backup_probe_content.content | b64decode) == "DIGITALHOUSES_MEDIA_NFS_BACKUP_ACCEPTANCE\\n"
+            fail_msg: MEDIA_NFS_BACKUP_WRITE_PROBE_FAILED
+      always:
+        - name: Delete only this run's disposable acceptance file
+          ansible.builtin.file:
+            path: "{{ dh_backup_write_probe.path }}"
+            state: absent
+          when: dh_backup_write_probe.path is defined
+          changed_when: false
+
+    - name: Report backup storage status without touching backup jobs
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          storage_id: "{{ dh_backup_storage_id }}"
+          action: "{{ 'CREATED' if dh_backup_storage_created is changed else 'VERIFIED_NOOP' }}"
+          nfs_server: "{{ dh_backup_server }}"
+          nfs_export: "{{ dh_backup_export }}"
+          mountpoint: "{{ dh_backup_mount }}"
+          backup_content_only: true
+          write_probe: PASS
+          backup_jobs: UNTOUCHED
+          backups_deleted: false
