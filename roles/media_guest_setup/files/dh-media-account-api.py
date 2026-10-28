@@ -23,8 +23,12 @@ import time
 from http.cookies import SimpleCookie
 
 SOCKET = Path("/run/dh-media-account/service.sock")
-ORIGIN = "https://192.168.11.238"
-LAN = ipaddress.ip_network("192.168.11.0/24")
+CONFIG = Path("/etc/digitalhouses/media-account-portal.json")
+settings = json.loads(CONFIG.read_text(encoding="ascii"))
+interface = ipaddress.ip_interface(settings["ipv4"])
+ORIGIN = "https://" + str(interface.ip)
+HOST = str(interface.ip)
+LAN = interface.network
 ROTATOR = "/usr/local/sbin/dh-media-password-rotate"
 SESSIONS = {}
 ATTEMPTS = collections.defaultdict(list)
@@ -54,7 +58,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def source(self):
         if self.headers.get("X-Forwarded-Proto") != "https":
             return None
-        if self.headers.get("Host") != "192.168.11.238":
+        if self.headers.get("Host") != HOST:
             return None
         raw = self.headers.get("X-Real-IP", "")
         try:
