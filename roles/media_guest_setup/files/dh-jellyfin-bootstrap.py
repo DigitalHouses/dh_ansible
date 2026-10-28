@@ -21,6 +21,8 @@ SAFE_ERROR_CODES = frozenset({
     "JELLYFIN_ACCESS_TOKEN_INVALID", "JELLYFIN_DIAGNOSTIC_INVALID",
     "JELLYFIN_DIAGNOSTIC_ROOT_REQUIRED", "JELLYFIN_DIAGNOSTIC_UNAVAILABLE",
     "JELLYFIN_DIAGNOSTIC_UNSAFE", "JELLYFIN_LIBRARY_CREATE_UNCONFIRMED",
+    "JELLYFIN_LIBRARY_OPTIONS_INVALID", "JELLYFIN_LIBRARY_ITEM_ID_INVALID",
+    "JELLYFIN_LIBRARY_MONITOR_UNCONFIRMED",
     "JELLYFIN_LIBRARY_DRIFT", "JELLYFIN_LIBRARY_DUPLICATE",
     "JELLYFIN_LIBRARY_LIST_INVALID", "JELLYFIN_LIBRARY_PATH_CONFLICT",
     "JELLYFIN_MANAGED_LOGIN_FAILED", "JELLYFIN_MEDIA_PATH_MISSING",
@@ -146,6 +148,7 @@ def reconcile_libraries(media_root, token):
     desired = (("Movies", "movies", "movies"),
                ("TV Shows", "tvshows", "tvshows"),
                ("Music", "music", "music"))
+    changed = False
     for name, kind, subdir in desired:
         destination = media_root / subdir
         require(destination.is_dir() and not destination.is_symlink(),
@@ -153,25 +156,56 @@ def reconcile_libraries(media_root, token):
         matching = [x for x in folders if x.get("Name") == name]
         require(len(matching) <= 1, "JELLYFIN_LIBRARY_DUPLICATE")
         if matching:
-            locations = matching[0].get("Locations") or []
+            folder = matching[0]
+            locations = folder.get("Locations") or []
             require(locations == [str(destination)] and
-                    matching[0].get("CollectionType") == kind,
+                    folder.get("CollectionType") == kind,
                     "JELLYFIN_LIBRARY_DRIFT")
-            print("JELLYFIN_LIBRARY_" + kind.upper() + "=UNCHANGED")
+            options = folder.get("LibraryOptions")
+            require(isinstance(options, dict),
+                    "JELLYFIN_LIBRARY_OPTIONS_INVALID")
+            if options.get("EnableRealtimeMonitor") is True:
+                print("JELLYFIN_LIBRARY_" + kind.upper() + "=UNCHANGED")
+                continue
+            item_id = folder.get("ItemId")
+            require(isinstance(item_id, str) and
+                    re.fullmatch(r"[0-9A-Fa-f-]{16,64}", item_id) is not None,
+                    "JELLYFIN_LIBRARY_ITEM_ID_INVALID")
+            updated_options = dict(options)
+            updated_options["EnableRealtimeMonitor"] = True
+            request("POST", "/Library/VirtualFolders/LibraryOptions",
+                    {"Id": item_id, "LibraryOptions": updated_options},
+                    token=token)
+            refreshed = request("GET", "/Library/VirtualFolders", token=token)
+            require(any(x.get("ItemId") == item_id and
+                        isinstance(x.get("LibraryOptions"), dict) and
+                        x["LibraryOptions"].get("EnableRealtimeMonitor") is True
+                        for x in refreshed),
+                    "JELLYFIN_LIBRARY_MONITOR_UNCONFIRMED")
+            folders = refreshed
+            changed = True
+            print("JELLYFIN_LIBRARY_" + kind.upper() + "=MONITOR_ENABLED")
             continue
         require(not any(str(destination) in (x.get("Locations") or [])
                         for x in folders), "JELLYFIN_LIBRARY_PATH_CONFLICT")
         params = urllib.parse.urlencode({
             "name": name, "collectionType": kind, "refreshLibrary": "false"})
         request("POST", "/Library/VirtualFolders?" + params,
-                {"LibraryOptions": {"PathInfos": [
-                    {"Path": str(destination)}]}}, token=token)
+                {"LibraryOptions": {
+                    "PathInfos": [{"Path": str(destination)}],
+                    "EnableRealtimeMonitor": True}}, token=token)
         refreshed = request("GET", "/Library/VirtualFolders", token=token)
         require(any(x.get("Name") == name and
-                    str(destination) in (x.get("Locations") or [])
+                    str(destination) in (x.get("Locations") or []) and
+                    isinstance(x.get("LibraryOptions"), dict) and
+                    x["LibraryOptions"].get("EnableRealtimeMonitor") is True
                     for x in refreshed), "JELLYFIN_LIBRARY_CREATE_UNCONFIRMED")
         folders = refreshed
+        changed = True
         print("JELLYFIN_LIBRARY_" + kind.upper() + "=CREATED")
+    if changed:
+        request("POST", "/Library/Refresh", token=token)
+        print("JELLYFIN_LIBRARY_SCAN=REQUESTED")
     print("JELLYFIN_LIBRARIES=READY")
 
 

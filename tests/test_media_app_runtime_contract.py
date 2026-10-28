@@ -183,18 +183,23 @@ def test_jellyfin_default_libraries_created_once():
         root = Path(scratch) / "serzhan-home-pool" / "media"
         for name in ("movies", "tvshows", "music"):
             (root / name).mkdir(parents=True, exist_ok=True)
-        folders, created = [], []
+        folders, created, scanned = [], [], []
 
         def endpoint(method, path, payload=None, token=None):
             assert token == "TEST_TOKEN"
             if method == "GET":
                 return list(folders)
+            if path == "/Library/Refresh":
+                scanned.append(True)
+                return {}
             import urllib.parse
             args = urllib.parse.parse_qs(urllib.parse.urlsplit(path).query)
             name, category = args["name"][0], args["collectionType"][0]
-            actual = payload["LibraryOptions"]["PathInfos"][0]["Path"]
+            options = payload["LibraryOptions"]
+            actual = options["PathInfos"][0]["Path"]
             folders.append({"Name": name, "Locations": [actual],
-                            "CollectionType": category})
+                            "CollectionType": category, "ItemId": "a" * 32,
+                            "LibraryOptions": options.copy()})
             created.append(name)
             return {}
 
@@ -202,6 +207,53 @@ def test_jellyfin_default_libraries_created_once():
             jellyfin.reconcile_libraries(root, "TEST_TOKEN")
             jellyfin.reconcile_libraries(root, "TEST_TOKEN")
         assert created == ["Movies", "TV Shows", "Music"]
+        assert len(scanned) == 1
+        assert all(x["LibraryOptions"]["EnableRealtimeMonitor"] is True
+                   for x in folders)
+
+
+def test_jellyfin_existing_libraries_enable_monitor_once_without_losing_options():
+    jellyfin = module("roles/media_guest_setup/files/dh-jellyfin-bootstrap.py",
+                     "jellyfin_existing")
+    with tempfile.TemporaryDirectory() as scratch:
+        root = Path(scratch) / "serzhan-home-pool" / "media"
+        folders = []
+        for i, (name, category, directory) in enumerate((
+                ("Movies", "movies", "movies"),
+                ("TV Shows", "tvshows", "tvshows"),
+                ("Music", "music", "music"))):
+            folder = root / directory
+            folder.mkdir(parents=True, exist_ok=True)
+            folders.append({"Name": name, "CollectionType": category,
+                            "Locations": [str(folder)],
+                            "ItemId": str(i + 1) * 32,
+                            "LibraryOptions": {"EnableRealtimeMonitor": False,
+                                               "SaveLocalMetadata": False,
+                                               "PathInfos": [{"Path": str(folder)}]}})
+        updated, scanned = [], []
+
+        def endpoint(method, path, payload=None, token=None):
+            assert token == "TEST_TOKEN"
+            if method == "GET":
+                return [dict(f, LibraryOptions=dict(f["LibraryOptions"]))
+                        for f in folders]
+            if path == "/Library/Refresh":
+                scanned.append(True)
+                return {}
+            assert path == "/Library/VirtualFolders/LibraryOptions"
+            target = next(x for x in folders if x["ItemId"] == payload["Id"])
+            assert payload["LibraryOptions"]["SaveLocalMetadata"] is False
+            target["LibraryOptions"] = dict(payload["LibraryOptions"])
+            updated.append(target["Name"])
+            return {}
+
+        with mock.patch.object(jellyfin, "request", side_effect=endpoint):
+            jellyfin.reconcile_libraries(root, "TEST_TOKEN")
+            jellyfin.reconcile_libraries(root, "TEST_TOKEN")
+        assert updated == ["Movies", "TV Shows", "Music"]
+        assert len(scanned) == 1
+        assert all(f["LibraryOptions"]["EnableRealtimeMonitor"] is True
+                   for f in folders)
 
 
 def test_admin_can_read_credentials_without_root_only_directory():
