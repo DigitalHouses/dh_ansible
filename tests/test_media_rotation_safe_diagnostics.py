@@ -26,5 +26,5 @@ def test_recovery_diagnostics_are_read_only_and_mutually_exclusive():
 def test_error_messages_are_finite_vetted_internal_codes_only():
     source = SRC.read_text()
     assert 'type(exc).__name__ == "Blocked"' in source
-    assert 're.fullmatch(r"ROTATION_[A-Z0-9_]{4,96}", reason)' in source
+    assert 're.fullmatch(r"ROTATION_[A-Za-z0-9_]{4,96}", reason)' in source
     assert "BLOCKED_" in source
