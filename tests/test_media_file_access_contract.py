@@ -88,6 +88,44 @@ def test_plex_agent_pinned_release_and_mqtt_is_fleet_only():
     assert "DigitalHouses/Global/digitalhouses_plex_agent" in conf
 
 
+
+def test_plex_agent_service_can_traverse_protected_config_directory():
+    tasks = yaml.safe_load((ROLE / "tasks/plex_agent.yml").read_text())
+    by_name = {task["name"]: task for task in tasks}
+    directory = by_name["Create protected Plex Agent configuration directory"]
+    assert directory["ansible.builtin.file"] == {
+        "path": "/etc/digitalhouses_plex_agent",
+        "state": "directory",
+        "owner": "root",
+        "group": "digitalhouses_plex_agent",
+        "mode": "0750",
+    }
+    assert directory["register"] == "media_plex_agent_directory"
+    config = by_name["Seed noninteractive Plex Agent configuration from protected Fleet"]
+    assert config["ansible.builtin.template"]["group"] == "digitalhouses_plex_agent"
+    assert config["ansible.builtin.template"]["mode"] == "0640"
+    for name, filename in [
+        ("Check service account can access its protected Plex Agent configuration",
+         "digitalhouses_plex_agent.conf"),
+        ("Check service account can access its protected Plex API token",
+         "plex_local_admin_token"),
+    ]:
+        check = by_name[name]
+        assert check["ansible.builtin.command"]["argv"] == [
+            "runuser", "-u", "digitalhouses_plex_agent", "--", "test", "-r",
+            "/etc/digitalhouses_plex_agent/" + filename
+        ]
+        assert check["changed_when"] is False
+    start = by_name["Enable active Plex Agent with reconciled site MQTT config"]
+    state = start["ansible.builtin.systemd_service"]["state"]
+    assert "media_plex_agent_directory.changed" in state
+    assert "media_plex_agent_config.changed" in state
+    names = list(by_name)
+    assert names.index("Check service account can access its protected Plex API token") < names.index(
+        "Enable active Plex Agent with reconciled site MQTT config")
+
+
+
 def test_pve_legacy_rename_protected_and_non_destructive():
     code = (ROOT / "bootstrap/dh-pve-media-deploy.py").read_text()
     ast.parse(code)
