@@ -167,6 +167,6 @@ if __name__ == "__main__":
         # Emit only vetted fixed-format reason codes from our internal engine.
         reason = str(exc)
         code = reason if (type(exc).__name__ == "Blocked"
-                          and re.fullmatch(r"ROTATION_[A-Z0-9_]{4,96}", reason)) else type(exc).__name__
+                          and re.fullmatch(r"ROTATION_[A-Za-z0-9_]{4,96}", reason)) else type(exc).__name__
         print("MEDIA_OWNER_ROTATION=BLOCKED_" + code, file=sys.stderr)
         sys.exit(2)
