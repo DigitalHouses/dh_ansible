@@ -819,3 +819,6 @@
 
 - name: Stage local root-only customer password recovery tools
   ansible.builtin.import_tasks: password_rotation.yml
+
+- name: Configure independent HTTPS media password management page
+  ansible.builtin.import_tasks: password_portal.yml
