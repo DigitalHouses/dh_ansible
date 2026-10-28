@@ -1,0 +1,59 @@
+---
+- name: Request protected NFS attachment audit and verification
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Require correct runner site
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - ansible_play_hosts_all | length == 1
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+    - name: Check protected PVE request watcher
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-pve-access-audit.path]
+      register: nfs_watcher
+      changed_when: false
+    - name: Require protected worker
+      ansible.builtin.assert:
+        that:
+          - nfs_watcher.stdout == 'active'
+  tasks:
+    - name: Generate independent request ID
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: nfs_nonce
+      changed_when: false
+    - name: Ask protected PVE worker to attach approved NFS storage
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-pve-access-audit.request
+        content: "MEDIA_NFS_ATTACH:{{ nfs_nonce.stdout }}\n"
+        mode: '0600'
+    - name: Wait for this request's result
+      ansible.builtin.command:
+        argv: [cat, /run/dh-pve-access-audit.status]
+      register: nfs_status
+      changed_when: false
+      failed_when: false
+      until: >-
+        nfs_status.stdout in ['PASS:' ~ nfs_nonce.stdout, 'FAILED:' ~ nfs_nonce.stdout]
+      retries: 100
+      delay: 3
+    - name: Require successful NFS acceptance
+      ansible.builtin.assert:
+        that:
+          - nfs_status.stdout == 'PASS:' ~ nfs_nonce.stdout
+        fail_msg: "PVE_NFS_ATTACH_FAILED: inspect protected PVE worker log"
+    - name: Report independent backup-only NFS storage acceptance
+      ansible.builtin.debug:
+        msg:
+          result: PASS
+          storage_id: dh_media_backups
+          backup_jobs: UNTOUCHED
+          guest_vms: UNTOUCHED
+          request_id: "{{ nfs_nonce.stdout }}"
