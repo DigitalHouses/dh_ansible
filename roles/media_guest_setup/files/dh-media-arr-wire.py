@@ -4,7 +4,8 @@
 No external tokens. Reads already-generated application API keys from the
 guest's own XML config, never prints/stores them elsewhere. Only manages
 DigitalHouses's explicit connections, root folders and qBittorrent categories.
-Never enables downloads, adds trackers/indexers, formats or writes to ZFS.
+Never enables downloads, adds trackers/indexers, or formats ZFS.
+Moves only empty qBittorrent staging paths to the preapproved same-dataset root.
 """
 from __future__ import annotations
 
@@ -94,11 +95,50 @@ def qbt(path: str, *, method="GET", data=None):
     return request(QBT + "/api/v2/" + path, method=method, data=data, form=data is not None)
 
 
-def ensure_qbt_access():
+def safe_empty_previous_staging():
+    old = Path("/srv/downloads")
+    require(old.is_dir() and not old.is_symlink(),
+            "QBT_PREVIOUS_STAGING_UNSAFE")
+    require(not any(entry.is_file() or entry.is_symlink()
+                    for entry in old.rglob("*")),
+            "QBT_PREVIOUS_DOWNLOADS_NOT_EMPTY")
+    torrents = qbt("torrents/info")
+    require(isinstance(torrents, list) and not torrents,
+            "QBT_DOWNLOAD_MIGRATION_TORRENTS_PRESENT")
+
+
+def ensure_qbt_access(download_root: str):
     p = qbt("app/preferences")
     require(isinstance(p, dict), "QBT_AUTH_NOT_CONFIGURED")
     require(bool(p.get("bypass_local_auth")), "QBT_LOOPBACK_API_NOT_ALLOWED")
-    require(p.get("save_path", "").rstrip("/") == "/srv/downloads",
+    current = str(p.get("save_path", "")).rstrip("/")
+    temp = str(p.get("temp_path", "")).rstrip("/")
+    require(p.get("temp_path_enabled") is True,
+            "QBT_TEMP_PATH_NOT_ENABLED")
+    if current != download_root:
+        require(download_root != "/srv/downloads"
+                and current == "/srv/downloads"
+                and temp == "/srv/downloads/incomplete",
+                "QBT_DOWNLOAD_PATH_UNEXPECTED")
+        safe_empty_previous_staging()
+        categories = qbt("torrents/categories")
+        require(isinstance(categories, dict), "QBT_CATEGORIES_INVALID")
+        for name, relative in (("radarr", "complete/movies"),
+                               ("tv-sonarr", "complete/series"),
+                               ("prowlarr", "complete/prowlarr")):
+            require(name in categories and
+                    categories[name].get("savePath", "").rstrip("/") ==
+                    "/srv/downloads/" + relative,
+                    "QBT_CATEGORY_MIGRATION_DRIFT_" + name.upper().replace("-", "_"))
+        qbt("app/setPreferences", method="POST", data={
+            "json": json.dumps({"save_path": download_root,
+                                "temp_path": download_root + "/incomplete",
+                                "temp_path_enabled": True})})
+        p = qbt("app/preferences")
+        require(isinstance(p, dict), "QBT_POST_MIGRATION_PREFS_INVALID")
+        print("QBT_DOWNLOAD_ROOT=MIGRATED", flush=True)
+    require(str(p.get("save_path", "")).rstrip("/") == download_root
+            and str(p.get("temp_path", "")).rstrip("/") == download_root + "/incomplete",
             "QBT_DOWNLOAD_PATH_UNEXPECTED")
     print("QBT_LOCAL_API=PASS", flush=True)
 
@@ -116,8 +156,16 @@ def ensure_categories(download_root: str):
             print("QBT_CATEGORY_" + name.upper().replace("-", "_") + "=CREATED", flush=True)
         else:
             current = categories[name].get("savePath", "").rstrip("/")
-            require(current == target, "QBT_CATEGORY_DRIFT_" + name)
-            print("QBT_CATEGORY_" + name.upper().replace("-", "_") + "=UNCHANGED", flush=True)
+            if current != target:
+                require(download_root != "/srv/downloads"
+                        and current == "/srv/downloads/" + relative,
+                        "QBT_CATEGORY_DRIFT_" + name)
+                safe_empty_previous_staging()
+                qbt("torrents/editCategory", method="POST",
+                    data={"category": name, "savePath": target})
+                print("QBT_CATEGORY_" + name.upper().replace("-", "_") + "=MIGRATED", flush=True)
+            else:
+                print("QBT_CATEGORY_" + name.upper().replace("-", "_") + "=UNCHANGED", flush=True)
     current = qbt("torrents/categories")
     require(all(k in current for k in ("radarr", "tv-sonarr", "prowlarr")),
             "QBT_CATEGORY_VERIFICATION_FAILED")
@@ -201,13 +249,18 @@ def main():
     root = Path(args.downloads)
     library = Path(args.library_root)
     require(library.is_dir() and not library.is_symlink(), "ZFS_MEDIA_LIBRARY_MISSING")
-    require(str(root) == "/srv/downloads", "NONCANONICAL_DOWNLOAD_ROOT")
+    require(str(root) in ("/srv/downloads", str(library / "downloads")),
+            "NONCANONICAL_DOWNLOAD_ROOT")
     require(root.is_dir() and not root.is_symlink(), "DOWNLOAD_ROOT_MISSING")
+    if str(root) != "/srv/downloads":
+        require(root.parent == library
+                and os.stat(root).st_dev == os.stat(library).st_dev,
+                "DOWNLOAD_ROOT_NOT_SAME_FILESYSTEM")
     require(os.geteuid() == 0, "ROOT_GUEST_ONLY")
     # Manage only OS-system-disk staging; protected ZFS media is not changed.
     for path in ("complete/movies", "complete/series", "complete/prowlarr"):
         require((root / path).is_dir(), "STAGING_FOLDER_MISSING_" + path.replace("/", "_"))
-    ensure_qbt_access()
+    ensure_qbt_access(str(root))
     ensure_categories(str(root))
     for app, folder in (("radarr", "movies"), ("sonarr", "tvshows")):
         ensure_root(app, str(library / folder))
