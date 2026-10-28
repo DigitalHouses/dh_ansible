@@ -1165,6 +1165,7 @@ def stage_pve_access_audit(checkout: Path) -> None:
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
     for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml",
+                     "attach-pve-media-backup-nfs.yml",
                      "commission-new-runner-bonjour.yml"):
         source = checkout / "playbooks" / playbook
         if not source.is_file() or source.is_symlink():
