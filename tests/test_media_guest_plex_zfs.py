@@ -113,25 +113,29 @@ def test_guest_smartmontools_is_provisioned_for_dh_pve_agent():
     assert probe["changed_when"] is False
 
 
-def test_native_qbittorrent_and_staging_only_downloads():
+def test_native_qbittorrent_and_approved_staging_or_shared_zfs_downloads():
     tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     names = {task["name"] for task in tasks}
     required = {
         "Install Debian qBittorrent headless client",
         "Create qBittorrent native service user",
-        "Ensure temporary download directory is not on ZFS",
-        "Set staging-only qBittorrent defaults on first installation",
+        "Detect filesystem type and source of declared download root",
+        "Require declared filesystem is exactly the authorized storage target",
+        "Set declared qBittorrent defaults on first installation",
         "Enable and start qBittorrent WebUI",
         "Verify qBittorrent WebUI startup",
     }
     assert required.issubset(names)
     assert "qbittorrent-nox" in str(tasks)
-    assert "media_vm.downloads.mode == 'staging-only'" in str(tasks)
+    assert "shared-zfs" in str(tasks)
+    assert "media_vm.storage.media_dataset" in str(tasks)
+    assert "DOWNLOAD_ROOT_FILESYSTEM_MISMATCH" in str(tasks)
     template = (ROOT / "roles/media_guest_setup/templates/media-qbittorrent.conf.j2").read_text()
     assert "Session\\DefaultSavePath={{ media_vm.downloads.path }}/" in template
     assert "Session\\TempPath={{ media_vm.downloads.path }}/incomplete/" in template
     unit = (ROOT / "roles/media_guest_setup/templates/media-qbittorrent.service.j2").read_text()
     assert "User=qbittorrent" in unit
+    assert "UMask=0002" in unit
     assert "--webui-port=8080" in unit
     assert "Restart=on-failure" in unit
     setup = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
@@ -156,10 +160,10 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
     role = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     named = {r["name"]: r for r in role}
     assert "Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys" in named
-    assert "Check staging-only automation outcome" in named
+    assert "Check media download automation outcome" in named
     assert "Verify LAN authentication is mandatory while loopback API remains available" in named
     assert "Apply persistent qBittorrent LAN administrator from ZFS credential file" in named
-    assert "Create separate writable download and staging roots on system disk" in named
+    assert "Create approved writable download and category roots" in named
     assert named["Link Prowlarr Radarr Sonarr and qBittorrent using generated local API keys"]["ansible.builtin.command"]["argv"][0] == '/usr/local/sbin/dh-media-arr-wire'
     assert '("media_guest_setup", "files/dh-media-arr-wire.py")' in (ROOT / "bootstrap/semaphore-host-install.py").read_text()
 

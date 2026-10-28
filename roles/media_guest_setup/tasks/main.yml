@@ -400,9 +400,14 @@
       - media_vm.applications.prowlarr is boolean
       - media_vm.applications.qbittorrent is boolean
       - media_vm.downloads is mapping
-      - media_vm.downloads.mode == 'staging-only'
-      - media_vm.downloads.path is match('^/srv/[a-z][a-z0-9_-]+$')
-      - not media_vm.downloads.path.startswith('/' ~ media_vm.storage.pool_name)
+      - media_vm.downloads.mode in ['staging-only', 'shared-zfs']
+      - >-
+        (media_vm.downloads.mode == 'staging-only' and
+         media_vm.downloads.path == '/srv/downloads')
+        or
+        (media_vm.downloads.mode == 'shared-zfs' and
+         media_vm.storage.mode == 'readwrite' and
+         media_vm.downloads.path == '/' ~ media_vm.storage.media_dataset ~ '/downloads')
 
 - name: Create shared media application group
   ansible.builtin.group:
@@ -530,7 +535,7 @@
     fail_msg: "DOWNLOAD_ROOT_SYMLINK_NOT_ALLOWED"
   when: media_vm.applications.qbittorrent | bool
 
-- name: Create temporary media download directory on system disk
+- name: Create declared qBittorrent download root on approved filesystem
   ansible.builtin.file:
     path: "{{ media_vm.downloads.path }}"
     state: directory
@@ -539,18 +544,24 @@
     mode: '2775'
   when: media_vm.applications.qbittorrent | bool
 
-- name: Ensure temporary download directory is not on ZFS
+- name: Detect filesystem type and source of declared download root
   ansible.builtin.command:
-    argv: [findmnt, -n, -o, FSTYPE, -T, "{{ media_vm.downloads.path }}"]
+    argv: [findmnt, -n, -o, "SOURCE,FSTYPE", -T, "{{ media_vm.downloads.path }}"]
   register: media_downloads_fs
   changed_when: false
   when: media_vm.applications.qbittorrent | bool
 
-- name: Require separate writable staging filesystem
+- name: Require declared filesystem is exactly the authorized storage target
   ansible.builtin.assert:
     that:
-      - media_downloads_fs.stdout != 'zfs'
-    fail_msg: "DOWNLOAD_ROOT_MUST_NOT_BE_ZFS"
+      - >-
+        (media_vm.downloads.mode == 'staging-only'
+         and media_downloads_fs.stdout.split()[-1] != 'zfs')
+        or
+        (media_vm.downloads.mode == 'shared-zfs'
+         and media_downloads_fs.stdout.split()[0] == media_vm.storage.media_dataset
+         and media_downloads_fs.stdout.split()[-1] == 'zfs')
+    fail_msg: "DOWNLOAD_ROOT_FILESYSTEM_MISMATCH"
   when: media_vm.applications.qbittorrent | bool
 
 - name: Create incomplete download directory
@@ -571,7 +582,7 @@
     mode: '0750'
   when: media_vm.applications.qbittorrent | bool
 
-- name: Set staging-only qBittorrent defaults on first installation
+- name: Set declared qBittorrent defaults on first installation
   ansible.builtin.template:
     src: media-qbittorrent.conf.j2
     dest: /var/lib/qbittorrent/.config/qBittorrent/qBittorrent.conf
@@ -588,6 +599,7 @@
     owner: root
     group: root
     mode: '0644'
+  register: media_qbittorrent_service_unit
   when: media_vm.applications.qbittorrent | bool
 
 - name: Enable and start qBittorrent WebUI
@@ -595,7 +607,7 @@
     name: qbittorrent.service
     daemon_reload: true
     enabled: true
-    state: started
+    state: "{{ 'restarted' if media_qbittorrent_service_unit.changed else 'started' }}"
   when: media_vm.applications.qbittorrent | bool
 
 - name: Wait for qBittorrent WebUI to respond
@@ -618,8 +630,13 @@
   ansible.builtin.assert:
     that:
       - media_vm.network.lan_cidr is match('^[0-9.]+/[0-9]{1,2}$')
-      - media_vm.downloads.mode == 'staging-only'
-      - media_vm.downloads.path == '/srv/downloads'
+      - media_vm.downloads.mode in ['staging-only', 'shared-zfs']
+      - >-
+        (media_vm.downloads.mode == 'staging-only' and
+         media_vm.downloads.path == '/srv/downloads')
+        or
+        (media_vm.downloads.mode == 'shared-zfs' and
+         media_vm.downloads.path == '/' ~ media_vm.storage.media_dataset ~ '/downloads')
       - media_vm.applications.radarr | bool
       - media_vm.applications.sonarr | bool
       - media_vm.applications.prowlarr | bool
@@ -705,7 +722,7 @@
   changed_when: "'QBT_ADMIN=COMMISSIONED' in media_qbt_admin.stdout"
   no_log: true
 
-- name: Create separate writable download and staging roots on system disk
+- name: Create approved writable download and category roots
   ansible.builtin.file:
     path: "{{ media_vm.downloads.path }}/{{ item.path }}"
     state: directory
@@ -758,7 +775,7 @@
   register: media_arr_wiring
   changed_when: "'=CREATED' in media_arr_wiring.stdout"
 
-- name: Check staging-only automation outcome
+- name: Check media download automation outcome
   ansible.builtin.assert:
     that:
       - "'MEDIA_APPLICATIONS_WIRING=PASS' in media_arr_wiring.stdout_lines"
