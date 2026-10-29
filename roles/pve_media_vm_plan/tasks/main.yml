@@ -93,16 +93,31 @@
     media_vm_offline_backup_targets: "{{ (media_vm_active_backup_jobs | map(attribute='storage') | list | unique | list) | difference(media_vm_active_storage_names) }}"
   changed_when: false
 
-- name: Read exact self-hosted PVE NFS target for in-place guest recovery
-  ansible.builtin.uri:
-    url: "https://{{ pve.host }}:{{ pve.port }}/api2/json/storage/{{ media_vm.backup_export.storage_id }}"
-    method: GET
-    headers:
-      Authorization: "PVEAPIToken={{ pve.auth.user }}!{{ pve.auth.token_id }}={{ pve_audit_secret }}"
-    validate_certs: false
-    status_code: 200
-    return_content: true
-    timeout: 20
+- name: Read exact self-hosted PVE NFS target via pinned read-only SSH query
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -T
+      - -o
+      - BatchMode=yes
+      - -o
+      - IdentitiesOnly=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - "UserKnownHostsFile={{ pve_access.host.known_hosts_file }}"
+      - -o
+      - ConnectTimeout=8
+      - -i
+      - "{{ pve_access.host.identity_file }}"
+      - "{{ pve_access.host.user }}@{{ pve.host }}"
+      - sudo
+      - -n
+      - /usr/bin/pvesh
+      - get
+      - /storage/dh_media_backups
+      - --output-format
+      - json
   register: media_vm_self_hosted_storage
   changed_when: false
   no_log: true
@@ -128,10 +143,10 @@
         and media_vm.backup_export.storage_id == 'dh_media_backups'
         and media_vm.backup_export.pve_host == pve.host
         and media_vm.backup_export.path == '/' ~ media_vm.storage.pool_name ~ '/backups/pve'
-        and (media_vm_self_hosted_storage.json.data | default({})).get('type') == 'nfs'
-        and (media_vm_self_hosted_storage.json.data | default({})).get('server') == media_vm.network.ipv4.split('/')[0]
-        and (media_vm_self_hosted_storage.json.data | default({})).get('export') == media_vm.backup_export.path
-        and (media_vm_self_hosted_storage.json.data | default({})).get('content') == 'backup'
+        and (media_vm_self_hosted_storage.stdout | default('{}') | from_json).get('type') == 'nfs'
+        and (media_vm_self_hosted_storage.stdout | default('{}') | from_json).get('server') == media_vm.network.ipv4.split('/')[0]
+        and (media_vm_self_hosted_storage.stdout | default('{}') | from_json).get('export') == media_vm.backup_export.path
+        and (media_vm_self_hosted_storage.stdout | default('{}') | from_json).get('content') == 'backup'
         and media_vm_self_backup_jobs | length == 1
         and media_vm_self_backup_jobs[0].id == media_vm.backup_export.deferred_legacy_backup.job_id
         and media_vm_self_backup_jobs[0].vmid is defined
