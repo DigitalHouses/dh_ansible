@@ -201,11 +201,23 @@ def ensure_disk(vmid, image, disk_gb):
         qm("set", vmid, "--ide2", "local-lvm:cloudinit")
 
 
+def media_display(data):
+    """Prefer reliable PVE xterm.js when a GPU is passed into the media guest.
+
+    A PCI GPU console cannot be mirrored in noVNC; using VGA std with
+    passthrough freezes the PVE framebuffer during i915 init.
+    Existing site data may still request std, but the effective safety
+    policy for this managed GPU VM is serial0.
+    """
+    requested = data.get("lifecycle", {}).get("display", "serial0")
+    need(requested in ("std", "serial0"), "DISPLAY_INVALID")
+    return "serial0" if data.get("pci", {}).get("gpu") else requested
+
+
 def ensure_lifecycle(vmid, data):
     """Reconcile requested autostart and console even for a running VM."""
     lifecycle = data.get("lifecycle", {})
-    display = lifecycle.get("display", "serial0")
-    need(display in ("std", "serial0"), "DISPLAY_INVALID")
+    display = media_display(data)
     wanted_boot = "1" if lifecycle.get("onboot", False) else "0"
     current = config(vmid)
     if current.get("onboot", "0") != wanted_boot:
@@ -417,7 +429,7 @@ def apply(site, vm_action, disk_action):
            "--memory", str(data.get("resources", {}).get("memory_mb", 4096)),
            "--scsihw", "virtio-scsi-single",
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
-           "--vga", data.get("lifecycle", {}).get("display", "serial0"),
+           "--vga", media_display(data),
            "--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0",
            "--description", MANAGED_MEDIA_DESCRIPTION)
         print("VM_CREATED=YES", flush=True)
