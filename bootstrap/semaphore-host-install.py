@@ -43,6 +43,7 @@ CODE_FILES = (
     "playbooks/audit-pve-access.yml",
     "playbooks/request-pve-access-audit.yml",
     "bootstrap/pve-access-audit-request.sh",
+    "bootstrap/dh-pve-media-release-verify.py",
     "bootstrap/dh-pve-access-audit.service",
     "bootstrap/dh-pve-access-audit.path",
     "roles/pve_audit/defaults/main.yml",
@@ -1120,9 +1121,12 @@ def stage_runner_remote_commander(site, checkout):
     print("REMOTE_COMMANDER_ON_DEMAND=READY (not automatically installed)", flush=True)
 
 
-def stage_pve_access_audit(checkout: Path) -> None:
-    """Stage only a fixed read-only root executor, activated by Semaphore."""
+def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
+    """Stage one pinned release of all privileged Media worker dependencies."""
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        raise Blocked("Invalid pinned code revision for Media worker")
     folder = "/opt/digitalhouses/bootstrap/pve-access"
+    assets = {}
     stage_guest_root_directory(folder, stage="pve_access")
     stage_guest_root_directory(folder + "/playbooks", stage="pve_access")
     for role, relative in (
@@ -1190,6 +1194,7 @@ def stage_pve_access_audit(checkout: Path) -> None:
         origin = checkout / "roles" / role / relative
         if not origin.is_file() or origin.is_symlink():
             raise Blocked("Pinned generic PVE audit role absent")
+        assets["roles/" + role + "/" + relative] = hashlib.sha256(origin.read_bytes()).hexdigest()
         destination = role_dir + "/" + relative
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
@@ -1200,11 +1205,14 @@ def stage_pve_access_audit(checkout: Path) -> None:
         if not source.is_file() or source.is_symlink():
             raise Blocked("Pinned PVE/media playbook missing")
         target = folder + "/playbooks/" + playbook
+        assets["playbooks/" + playbook] = hashlib.sha256(source.read_bytes()).hexdigest()
         run("pct", "push", str(CTID), str(source), target, timeout=30)
         pct_guest("chmod", "0644", target)
     handoff = (
         ("bootstrap/pve-access-audit-request.sh",
          "/usr/local/sbin/dh-pve-access-audit", "0700"),
+        ("bootstrap/dh-pve-media-release-verify.py",
+         "/usr/local/sbin/dh-pve-media-release-verify", "0700"),
         ("bootstrap/dh-pve-access-audit.service",
          "/etc/systemd/system/dh-pve-access-audit.service", "0644"),
         ("bootstrap/dh-pve-access-audit.path",
@@ -1216,6 +1224,24 @@ def stage_pve_access_audit(checkout: Path) -> None:
             raise Blocked("Pinned PVE access audit worker missing")
         run("pct", "push", str(CTID), str(item), destination, timeout=30)
         pct_guest("chmod", mode, destination)
+        if relative in ("bootstrap/pve-access-audit-request.sh",
+                        "bootstrap/dh-pve-media-release-verify.py"):
+            assets[relative] = hashlib.sha256(item.read_bytes()).hexdigest()
+    # Publish the new release stamp LAST: an interrupted staging operation
+    # must never make a mixed release appear valid to Task 80.
+    payload = json.dumps({"schema": 1, "commit": expected_commit, "assets": assets},
+                         sort_keys=True) + "\n"
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8") as temp:
+        temp.write(payload)
+        temp.flush()
+        target = folder + "/.media-worker-release.json"
+        run("pct", "push", str(CTID), temp.name, target, timeout=30)
+        pct_guest("chmod", "0600", target)
+    check = pct_guest("/usr/bin/python3",
+                      "/usr/local/sbin/dh-pve-media-release-verify",
+                      "--expected-commit", expected_commit)
+    if "MEDIA_WORKER_RELEASE=PASS" not in check:
+        raise Blocked("Media worker pinned asset integrity check failed")
     pct_guest("systemctl", "daemon-reload")
     pct_guest("systemctl", "enable", "--now", "dh-pve-access-audit.path")
     if pct_guest("systemctl", "is-active", "dh-pve-access-audit.path") != "active":
@@ -1619,7 +1645,7 @@ def apply(args, template):
         stage_semaphore_catalog_sync(checkout)
         seed_semaphore(args.site, project_title)
         stage_runner_remote_commander(args.site, checkout)
-        stage_pve_access_audit(checkout)
+        stage_pve_access_audit(checkout, args.expected_commit)
         stage_site_data_provider(checkout)
         # Fresh creation and resume-fresh both build a NEW empty runner.
         # Restore its original SSH private key from encrypted Fleet Vault.

@@ -158,10 +158,24 @@
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool
 
+    - name: Read immutable Semaphore checkout commit
+      ansible.builtin.command:
+        argv: [git, -C, "{{ playbook_dir }}/..", rev-parse, HEAD]
+      register: media_checkout_sha
+      changed_when: false
+      when: media_vm.approvals.provision | default(false) | bool
+
+    - name: Require a complete pinned repository identity before VM writes
+      ansible.builtin.assert:
+        that:
+          - media_checkout_sha.stdout is match('^[0-9a-f]{40}$')
+        fail_msg: MEDIA_DEPLOY_REPOSITORY_PIN_MISSING
+      when: media_vm.approvals.provision | default(false) | bool
+
     - name: Submit fixed-purpose media deploy to existing PVE root worker
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}\n"
+        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}:{{ media_checkout_sha.stdout }}\n"
         mode: '0600'
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool

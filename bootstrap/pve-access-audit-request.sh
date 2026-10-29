@@ -11,9 +11,19 @@ INV_ROOT=/var/lib/ansible/site-data
 [[ -f "$REQUEST" && ! -L "$REQUEST" ]] || exit 2
 [[ "$(stat -c '%U:%G:%a' "$REQUEST")" == 'semaphore:semaphore:600' ]] || exit 2
 REQUEST_DATA="$(cat "$REQUEST")"
-[[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_NFS_ATTACH|MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)|MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$ ]] || exit 2
-ACTION="${BASH_REMATCH[1]}"
-NONCE="${BASH_REMATCH[6]}"
+# The code version used by Semaphore must match the complete root-owned
+# guest worker bundle. No VM action may start with a mixed/obsolete release.
+UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
+if [[ "$REQUEST_DATA" =~ ^(MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):($UUID_RE):([0-9a-f]{40})$ ]]; then
+  ACTION="${BASH_REMATCH[1]}"
+  NONCE="${BASH_REMATCH[4]}"
+  SOURCE_SHA="${BASH_REMATCH[5]}"
+elif [[ "$REQUEST_DATA" =~ ^(AUDIT|MEDIA_NFS_ATTACH|MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):($UUID_RE)$ ]]; then
+  ACTION="${BASH_REMATCH[1]}"
+  NONCE="${BASH_REMATCH[4]}"
+else
+  exit 2
+fi
 rm -f -- "$REQUEST"
 report() { printf '%s:%s\n' "$1" "$NONCE" > "$STATUS"; chmod 0644 "$STATUS"; }
 MEDIA_RUNTIME_FILE=
@@ -40,6 +50,8 @@ report RUNNING
 : > "$LOG"; chmod 0600 "$LOG"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
 if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
+  /usr/bin/python3 /usr/local/sbin/dh-pve-media-release-verify \
+    --expected-commit "$SOURCE_SHA" >> "$LOG" 2>&1
   [[ "$ACTION" =~ ^MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)$ ]] || exit 2
   VM_ACTION="${BASH_REMATCH[1],,}"
   RAW_DISK_ACTION="${BASH_REMATCH[2],,}"
