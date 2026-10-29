@@ -51,10 +51,11 @@ def test_guest_role_provisions_idempotently_without_leaking():
     assert "dh-media-password-show" in pin
 
 
-def test_pve_gpu_guest_always_uses_serial_display_even_with_legacy_std_site_policy():
+def test_pve_gpu_guest_preserves_site_vga_to_isolate_xterm_from_novnc():
     source = (ROOT / "bootstrap/dh-pve-media-deploy.py").read_text()
     assert "def media_display(data):" in source
-    assert 'return "serial0" if data.get("pci", {}).get("gpu") else requested' in source
-    assert 'display = media_display(data)' in source
+    assert "return requested" in source
     assert '"--vga", media_display(data)' in source
-    assert source.index("def media_display(data):") < source.index("def ensure_lifecycle(vmid, data):")
+    assert "display = media_display(data)" in source
+    assert 'return "serial0" if data.get("pci", {}).get("gpu") else requested' not in source
+    assert "serial0" in source and '"std"' in source

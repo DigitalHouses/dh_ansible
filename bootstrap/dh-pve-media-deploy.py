@@ -202,16 +202,17 @@ def ensure_disk(vmid, image, disk_gb):
 
 
 def media_display(data):
-    """Prefer reliable PVE xterm.js when a GPU is passed into the media guest.
+    """Honor explicit site display choice; keep serial0 as a separate console.
 
-    A PCI GPU console cannot be mirrored in noVNC; using VGA std with
-    passthrough freezes the PVE framebuffer during i915 init.
-    Existing site data may still request std, but the effective safety
-    policy for this managed GPU VM is serial0.
+    In PVE 8.x, VGA serial0 makes built-in noVNC bridge to the same serial
+    port as xterm.js, causing multiple competing qm terminal sessions.
+    For a GPU passthrough VM with display: std, noVNC has a separate VGA
+    framebuffer, while xterm.js remains available over serial0: socket.
+    Do not override site choices based on GPU presence.
     """
     requested = data.get("lifecycle", {}).get("display", "serial0")
     need(requested in ("std", "serial0"), "DISPLAY_INVALID")
-    return "serial0" if data.get("pci", {}).get("gpu") else requested
+    return requested
 
 
 def ensure_lifecycle(vmid, data):
