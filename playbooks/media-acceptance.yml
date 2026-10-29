@@ -1,0 +1,63 @@
+---
+# Task 81: independent read-only acceptance. Not an installation or repair job.
+- name: Media Server · Acceptance E2E (read-only)
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load PVE identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Read approved media VM declaration
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+
+    - name: Refuse wrong runner or missing deployment identity
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - ansible_play_hosts_all | length == 1
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - media_vm.vmid | int >= 2000
+          - media_vm.name == 'mediaserver-' ~ site.owner_slug
+          - media_vm.network.ipv4.split('/')[0] is match('^[0-9.]+$')
+          - pve.host is match('^[0-9.]+$')
+          - media_vm.storage.pool_name is match('^[a-z][a-z0-9_-]+$')
+        fail_msg: MEDIA81_SITE_IDENTITY_INVALID
+
+  tasks:
+    - name: Run independent read-only media acceptance
+      ansible.builtin.command:
+        argv:
+          - python3
+          - "{{ playbook_dir }}/../scripts/media-acceptance.py"
+          - --guest-ip
+          - "{{ media_vm.network.ipv4.split('/')[0] }}"
+          - --pve-ip
+          - "{{ pve.host }}"
+          - --vmid
+          - "{{ media_vm.vmid | string }}"
+          - --hostname
+          - "{{ media_vm.name }}"
+          - --pool
+          - "{{ media_vm.storage.pool_name }}"
+      register: media81_result
+      changed_when: false
+      failed_when: false
+
+    - name: Publish acceptance checklist with PASS FAIL and SKIP
+      ansible.builtin.debug:
+        msg: "{{ media81_result.stdout_lines | default([]) }}"
+
+    - name: Mark acceptance failed when any critical check failed
+      ansible.builtin.assert:
+        that:
+          - media81_result.rc == 0
+          - "'MEDIA81_RESULT=PASS CRITICAL_FAILURES=0' in media81_result.stdout_lines"
+        fail_msg: MEDIA81_ACCEPTANCE_FAILED_READ_REPORT_ABOVE
