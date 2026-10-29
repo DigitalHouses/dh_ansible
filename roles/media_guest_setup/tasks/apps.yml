@@ -154,7 +154,7 @@
       - --compose-file
       - /opt/dh-sambee/docker-compose.yml
   register: media_sambee_owner
-  changed_when: "'SAM_BEE_OWNER=COMMISSIONED' in media_sambee_owner.stdout"
+  changed_when: "'SAM_BEE_OWNER=COMMISSIONED' in media_sambee_owner.stdout or 'SAM_BEE_OWNER=RESTORED' in media_sambee_owner.stdout"
   no_log: true
   when: media_vm.applications.sambee | default(true) | bool
 
