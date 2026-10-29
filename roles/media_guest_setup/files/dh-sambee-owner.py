@@ -112,17 +112,23 @@ def reconcile(owner_file, compose_path):
             stamp_file(stamp, sha + "\n")
         print("SAM_BEE_OWNER=READY")
         return
-    require(not stamp.exists(), "SAM_BEE_OWNER_CREDENTIAL_DRIFT")
+    # After recreate+import, the owner stamp survives on ZFS while Sambee
+    # starts from a fresh OS-backed SQLite database. Only a currently valid
+    # firstboot account from this very container authorizes rehydration.
+    # A rotated/foreign account cannot authenticate with the initial secret.
+    existed = stamp.exists()
     first_user, first_password = first_credentials(compose_path)
     require(first_user == user, "SAM_BEE_INITIAL_USER_MISMATCH")
     initial_token = token(first_user, first_password)
-    require(bool(initial_token), "SAM_BEE_INITIAL_LOGIN_FAILED")
+    require(bool(initial_token),
+            "SAM_BEE_OWNER_CREDENTIAL_DRIFT" if existed else "SAM_BEE_INITIAL_LOGIN_FAILED")
     request("/api/auth/change-password", {
         "current_password": first_password,
         "new_password": password}, bearer=initial_token)
     require(bool(token(user, password)), "SAM_BEE_SHARED_LOGIN_NOT_VERIFIED")
-    stamp_file(stamp, sha + "\n")
-    print("SAM_BEE_OWNER=COMMISSIONED")
+    if not existed:
+        stamp_file(stamp, sha + "\n")
+    print("SAM_BEE_OWNER=" + ("RESTORED" if existed else "COMMISSIONED"))
 
 
 if __name__ == "__main__":
