@@ -48,23 +48,50 @@
         msg: "MEDIA_JELLYFIN_BOOTSTRAP_BLOCKED {{ media_jellyfin_stage_diagnostic.stdout if media_jellyfin_stage_diagnostic.rc == 0 else 'JELLYFIN_STAGE_UNAVAILABLE' }}"
 
 
-# A configured QSV encoder alone does not enable HEVC hardware decoding.
-# Keep approved existing codecs and opt into the N100's HEVC Main10 decoder.
+# On a fresh Jellyfin 12 install, acceleration is "none" even with Intel
+# renderD128 present. Reconcile only an owner-authenticated untouched factory
+# codec list; other foreign or unexpected accelerator settings fail closed.
 - name: Read current Jellyfin video acceleration configuration
   ansible.builtin.slurp:
     src: /etc/jellyfin/encoding.xml
   register: media_jellyfin_hevc_config
 
-- name: Require Jellyfin QSV and hardware codec list before modification
+- name: Verify Jellyfin hardware codec structure and managed accelerator
   ansible.builtin.assert:
     that:
-      - "'<HardwareAccelerationType>qsv</HardwareAccelerationType>' in (media_jellyfin_hevc_config.content | b64decode)"
       - "'<HardwareDecodingCodecs>' in (media_jellyfin_hevc_config.content | b64decode)"
       - "'</HardwareDecodingCodecs>' in (media_jellyfin_hevc_config.content | b64decode)"
+      - >-
+        '<HardwareAccelerationType>qsv</HardwareAccelerationType>' in
+        (media_jellyfin_hevc_config.content | b64decode)
+        or
+        (
+          '<HardwareAccelerationType>none</HardwareAccelerationType>' in
+          (media_jellyfin_hevc_config.content | b64decode)
+          and 'JELLYFIN_ADMIN_AUTH=PASS' in media_jellyfin_bootstrap.stdout
+          and (media_jellyfin_hevc_config.content | b64decode |
+          regex_search('(?s)<HardwareDecodingCodecs>\s*<string>h264</string>\s*<string>vc1</string>\s*</HardwareDecodingCodecs>')) is not none
+        )
     fail_msg: MEDIA_JELLYFIN_QSV_CONFIGURATION_DRIFT
 
-- name: Enable only missing Jellyfin HEVC hardware decoder
-  when: "'<string>hevc</string>' not in (media_jellyfin_hevc_config.content | b64decode)"
+- name: Require Intel render device for Jellyfin QSV
+  ansible.builtin.stat:
+    path: /dev/dri/renderD128
+    follow: false
+  register: media_jellyfin_render_device
+
+- name: Reject missing or unexpected render device before Jellyfin configuration changes
+  ansible.builtin.assert:
+    that:
+      - media_jellyfin_render_device.stat.ischr | default(false)
+      - media_jellyfin_render_device.stat.pw_name == 'root'
+    fail_msg: MEDIA_JELLYFIN_QSV_RENDER_DEVICE_MISSING
+
+- name: Enable Jellyfin QSV on untouched factory defaults and only missing HEVC decoder
+  when: >-
+    '<HardwareAccelerationType>none</HardwareAccelerationType>' in
+    (media_jellyfin_hevc_config.content | b64decode)
+    or '<string>hevc</string>' not in (media_jellyfin_hevc_config.content | b64decode)
   block:
     - name: Check there are no active Jellyfin FFmpeg sessions to interrupt
       ansible.builtin.command:
@@ -78,6 +105,22 @@
         name: jellyfin.service
         state: stopped
 
+    - name: Enable QSV only when the managed installation still has factory acceleration
+      ansible.builtin.replace:
+        path: /etc/jellyfin/encoding.xml
+        regexp: '(<HardwareAccelerationType>)none(</HardwareAccelerationType>)'
+        replace: '\1qsv\2'
+        backup: true
+      register: media_jellyfin_qsv_rewrite
+      when: "'<HardwareAccelerationType>none</HardwareAccelerationType>' in (media_jellyfin_hevc_config.content | b64decode)"
+
+    - name: Require factory QSV configuration was actually updated
+      ansible.builtin.assert:
+        that:
+          - media_jellyfin_qsv_rewrite.changed
+        fail_msg: MEDIA_JELLYFIN_QSV_REWRITE_NOT_APPLIED
+      when: "'<HardwareAccelerationType>none</HardwareAccelerationType>' in (media_jellyfin_hevc_config.content | b64decode)"
+
     - name: Preserve existing decoder selections and add HEVC
       ansible.builtin.replace:
         path: /etc/jellyfin/encoding.xml
@@ -85,12 +128,14 @@
         replace: '\1    <string>hevc</string>\n'
         backup: true
       register: media_jellyfin_hevc_rewrite
+      when: "'<string>hevc</string>' not in (media_jellyfin_hevc_config.content | b64decode)"
 
     - name: Require HEVC decoder config was actually updated
       ansible.builtin.assert:
         that:
           - media_jellyfin_hevc_rewrite.changed
         fail_msg: MEDIA_JELLYFIN_HEVC_DECODER_REWRITE_NOT_APPLIED
+      when: "'<string>hevc</string>' not in (media_jellyfin_hevc_config.content | b64decode)"
   always:
     - name: Ensure Jellyfin is started after configuration work
       ansible.builtin.systemd_service:
@@ -102,9 +147,10 @@
     src: /etc/jellyfin/encoding.xml
   register: media_jellyfin_hevc_after
 
-- name: Require HEVC hardware decoding to be enabled
+- name: Require QSV HEVC hardware decoding to be enabled
   ansible.builtin.assert:
     that:
+      - "'<HardwareAccelerationType>qsv</HardwareAccelerationType>' in (media_jellyfin_hevc_after.content | b64decode)"
       - "'<string>hevc</string>' in (media_jellyfin_hevc_after.content | b64decode)"
       - "'<string>h264</string>' in (media_jellyfin_hevc_after.content | b64decode)"
     fail_msg: MEDIA_JELLYFIN_HEVC_QSV_DECODE_NOT_ENABLED
