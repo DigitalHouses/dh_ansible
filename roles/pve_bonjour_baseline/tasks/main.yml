@@ -1,0 +1,88 @@
+---
+# Publish only the PVE management bridge on the site LAN. No changes to
+# bridge topology, host DNS, IP configuration, Tailscale, or Proxmox API.
+- name: Check canonical Proxmox identity for Bonjour provisioning
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: dh_pve_bonjour_hostname
+  changed_when: false
+
+- name: Check management bridge IPv4 address
+  ansible.builtin.command:
+    argv: [ip, -o, -4, addr, show, dev, vmbr0]
+  register: dh_pve_bonjour_bridge
+  changed_when: false
+
+- name: Refuse Bonjour writes on unexpected PVE or bridge
+  ansible.builtin.assert:
+    that:
+      - dh_pve_bonjour_hostname.stdout | trim == pve_bonjour_node
+      - pve_bonjour_ipv4 is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+      - pve_bonjour_ipv4 ~ '/' in dh_pve_bonjour_bridge.stdout
+    fail_msg: PVE_BONJOUR_BRIDGE_OR_IDENTITY_DRIFT
+
+- name: Install dedicated Bonjour announcement utilities without recommendations
+  ansible.builtin.apt:
+    name:
+      - avahi-daemon
+      - avahi-utils
+    state: present
+    install_recommends: false
+    update_cache: false
+
+- name: Publish PVE hostname and workstation service on vmbr0 only
+  ansible.builtin.lineinfile:
+    path: /etc/avahi/avahi-daemon.conf
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    insertafter: "{{ item.after }}"
+  loop:
+    - regexp: '^#?use-ipv4='
+      line: use-ipv4=yes
+      after: '^\\[server\\]$'
+    - regexp: '^#?use-ipv6='
+      line: use-ipv6=no
+      after: '^\\[server\\]$'
+    - regexp: '^#?allow-interfaces='
+      line: allow-interfaces=vmbr0
+      after: '^\\[server\\]$'
+    - regexp: '^#?publish-addresses='
+      line: publish-addresses=yes
+      after: '^\\[publish\\]$'
+    - regexp: '^#?publish-workstation='
+      line: publish-workstation=yes
+      after: '^\\[publish\\]$'
+    - regexp: '^#?enable-reflector='
+      line: enable-reflector=no
+      after: '^\\[reflector\\]$'
+  notify: Restart PVE Bonjour advertiser
+
+- name: Enable persistent PVE Bonjour service
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    state: started
+    enabled: true
+
+- name: Apply updated Bonjour configuration before verifying discovery
+  ansible.builtin.meta: flush_handlers
+
+- name: Resolve the published PVE hostname through mDNS
+  ansible.builtin.command:
+    argv: [avahi-resolve, -4, -n, "{{ pve_bonjour_node }}.local"]
+  register: dh_pve_bonjour_resolve
+  changed_when: false
+
+- name: Verify PVE DNS-SD workstation advertisement
+  ansible.builtin.command:
+    argv: [avahi-browse, -rpt, _workstation._tcp]
+  register: dh_pve_bonjour_workstation
+  changed_when: false
+
+- name: Require expected site-only PVE Bonjour announcement
+  ansible.builtin.assert:
+    that:
+      - "pve_bonjour_node ~ '.local' in dh_pve_bonjour_resolve.stdout"
+      - "pve_bonjour_ipv4 in dh_pve_bonjour_resolve.stdout"
+      - "pve_bonjour_node ~ '.local' in dh_pve_bonjour_workstation.stdout"
+      - "pve_bonjour_ipv4 in dh_pve_bonjour_workstation.stdout"
+    fail_msg: PVE_BONJOUR_ANNOUNCEMENT_NOT_VERIFIED

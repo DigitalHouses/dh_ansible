@@ -1,0 +1,53 @@
+---
+- name: Register the canonical PVE host for LAN-only Bonjour advertisement
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Load this site's canonical identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Load declared Proxmox endpoint
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Load pinned, least-privilege PVE host SSH identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve_access.yml"
+
+    - name: Verify PVE host-write transport and expected node
+      ansible.builtin.assert:
+        that:
+          - site.id is defined
+          - pve.host is match('^[0-9]{1,3}(\\.[0-9]{1,3}){3}$')
+          - pve.node is match('^[a-z][a-z0-9-]{1,63}$')
+          - pve_access.host.user == 'ansible-linux'
+          - pve_access.host.identity_file is defined
+          - pve_access.host.known_hosts_file is defined
+        fail_msg: PVE_BONJOUR_SITE_IDENTITY_NOT_DECLARED
+
+    - name: Register verified PVE host as single Bonjour target
+      ansible.builtin.add_host:
+        name: dh_bonjour_pve
+        groups: dh_bonjour_pve_hosts
+        ansible_host: "{{ pve.host }}"
+        ansible_user: "{{ pve_access.host.user }}"
+        ansible_port: "{{ pve_access.host.ssh_port }}"
+        ansible_ssh_private_key_file: "{{ pve_access.host.identity_file }}"
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile={{ pve_access.host.known_hosts_file }}
+        ansible_become: true
+        ansible_become_method: sudo
+        ansible_python_interpreter: /usr/bin/python3
+        pve_bonjour_ipv4: "{{ pve.host }}"
+        pve_bonjour_node: "{{ pve.node }}"
+      changed_when: false
+
+- name: Configure only Bonjour on the verified PVE management bridge
+  hosts: dh_bonjour_pve_hosts
+  gather_facts: false
+  serial: 1
+  roles:
+    - pve_bonjour_baseline
