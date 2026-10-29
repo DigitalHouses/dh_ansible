@@ -168,51 +168,14 @@
     - name: Require a complete pinned repository identity before VM writes
       ansible.builtin.assert:
         that:
-          - media_checkout_sha.stdout is match('^[0-9a-f]{40}
-      ansible.builtin.copy:
-        dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}:{{ media_checkout_sha.stdout }}\n"
-        mode: '0600'
-      changed_when: false
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Await media VM provisioning on PVE
-      ansible.builtin.command:
-        argv: [cat, /run/dh-pve-access-audit.status]
-      register: media_deploy_worker
-      changed_when: false
-      failed_when: false
-      retries: 240
-      delay: 5
-      until: >-
-        media_deploy_worker.stdout in [
-          'PASS:' ~ media_deploy_nonce.stdout,
-          'FAILED:' ~ media_deploy_nonce.stdout
-        ]
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Require successful VM deployment
-      ansible.builtin.assert:
-        that:
-          - media_deploy_worker.stdout == 'PASS:' ~ media_deploy_nonce.stdout
-        fail_msg: "MEDIA_DEPLOY_FAILED: inspect dh-pve-access-audit root-worker log."
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Report media VM provisioning status
-      ansible.builtin.debug:
-        msg:
-          vmid: "{{ media_vm.vmid }}"
-          name: "{{ media_vm.name }}"
-          ipv4: "{{ media_vm.network.ipv4 }}"
-          result: "{{ 'DEPLOYED' if media_vm.approvals.provision | default(false) | bool else 'AUDIT_ONLY' }}"
-)
+          - media_checkout_sha.stdout is match('^[0-9a-f]{40}$')
         fail_msg: MEDIA_DEPLOY_REPOSITORY_PIN_MISSING
       when: media_vm.approvals.provision | default(false) | bool
 
     - name: Submit fixed-purpose media deploy to existing PVE root worker
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}\n"
+        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}:{{ media_checkout_sha.stdout }}\n"
         mode: '0600'
       changed_when: false
       when: media_vm.approvals.provision | default(false) | bool
