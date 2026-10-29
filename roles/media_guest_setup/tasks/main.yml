@@ -753,7 +753,7 @@
       - --credentials-file
       - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role','equalto','owner') | map(attribute='name') | first }}.txt"
   register: media_arr_auth
-  changed_when: "'=COMMISSIONED' in media_arr_auth.stdout"
+  changed_when: "'=COMMISSIONED' in media_arr_auth.stdout or '=RESTORED' in media_arr_auth.stdout"
   no_log: true
 
 - name: Install native idempotent Arr API integration helper

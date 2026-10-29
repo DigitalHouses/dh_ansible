@@ -100,13 +100,23 @@ def configure_one(app, credential_path, username, password):
             "ARR_HOST_CONFIG_INVALID")
     method = str(config.get("authenticationMethod", "")).lower()
     required = str(config.get("authenticationRequired", "")).lower()
-    if state_file.exists():
-        require(method == "forms" and required == "enabled" and
-                config.get("username") == username,
+    existed = state_file.exists()
+    if existed and method == "forms":
+        require(required == "enabled" and config.get("username") == username,
                 "ARR_MANAGED_LOGIN_DRIFT")
         print("ARR_AUTH_" + app.upper() + "=UNCHANGED")
         return
-    require(method in ("none", "0", ""), "ARR_PREEXISTING_LOGIN_UNMANAGED")
+    # A recreated guest has a fresh Servarr config, but its immutable
+    # approved-owner stamp remains on imported ZFS. Rehydrate only when
+    # the service is truly unclaimed and the existing stamp was validated.
+    if existed:
+        require(method in ("none", "0", "") and
+                config.get("username") in ("", None),
+                "ARR_MANAGED_LOGIN_DRIFT")
+    else:
+        require(method in ("none", "0", "") and
+                config.get("username") in ("", None),
+                "ARR_PREEXISTING_LOGIN_UNMANAGED")
     desired = dict(config)
     desired.update(authenticationMethod="forms",
                    authenticationRequired="enabled",
@@ -118,8 +128,9 @@ def configure_one(app, credential_path, username, password):
     require(str(actual.get("authenticationMethod", "")).lower() == "forms" and
             str(actual.get("authenticationRequired", "")).lower() == "enabled" and
             actual.get("username") == username, "ARR_MANAGED_LOGIN_NOT_VERIFIED")
-    stamp(state_file, wanted)
-    print("ARR_AUTH_" + app.upper() + "=COMMISSIONED")
+    if not existed:
+        stamp(state_file, wanted)
+    print("ARR_AUTH_" + app.upper() + ("=RESTORED" if existed else "=COMMISSIONED"))
 
 
 def main(path):
