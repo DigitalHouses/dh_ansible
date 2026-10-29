@@ -91,7 +91,8 @@ def reconcile(path):
     if not first:
         require(prefs.get("bypass_auth_subnet_whitelist_enabled") is False,
                 "QBT_MANAGED_LAN_AUTH_BYPASS_DRIFT")
-    if first:
+    restore_default = (not first and prefs.get("web_ui_username") == "admin")
+    if first or restore_default:
         call("/api/v2/app/setPreferences", {
             "web_ui_username": username,
             "web_ui_password": password,
@@ -107,6 +108,8 @@ def reconcile(path):
     if first:
         atomic_stamp(stamp, desired_hash + "\n")
         print("QBT_ADMIN=COMMISSIONED")
+    elif restore_default:
+        print("QBT_ADMIN=RESTORED")
     else:
         print("QBT_ADMIN=UNCHANGED")
 
