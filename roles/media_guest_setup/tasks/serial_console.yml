@@ -1,0 +1,29 @@
+---
+- name: Ensure Debian serial console login is available on PVE web console
+  ansible.builtin.systemd_service:
+    name: serial-getty@ttyS0.service
+    state: started
+    enabled: true
+
+- name: Install root-only independent serial console login provisioning tool
+  ansible.builtin.copy:
+    src: dh-media-serial-console-login.py
+    dest: /usr/local/sbin/dh-media-serial-console-login
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Provision serial console access without exposing its password
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-media-serial-console-login, --ensure]
+  register: dh_media_console_login_setup
+  changed_when: "'MEDIA_SERIAL_CONSOLE=CREATED' in dh_media_console_login_setup.stdout"
+  no_log: true
+
+- name: Require serial console login provisioning succeeded
+  ansible.builtin.assert:
+    that:
+      - "dh_media_console_login_setup.rc == 0"
+      - "('MEDIA_SERIAL_CONSOLE=READY' in dh_media_console_login_setup.stdout) or ('MEDIA_SERIAL_CONSOLE=CREATED' in dh_media_console_login_setup.stdout)"
+    fail_msg: MEDIA_SERIAL_CONSOLE_LOGIN_NOT_READY
+  no_log: true
