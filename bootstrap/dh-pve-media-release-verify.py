@@ -43,6 +43,8 @@ def verify(expected_commit, *, root=WORKER_ROOT, manifest=MANIFEST, external=Non
     require("roles/media_guest_setup/tasks/apps.yml" in assets, "MISSING_APPS")
     require("roles/media_guest_setup/files/dh-sambee-owner.py" in assets, "MISSING_SAMBEE")
     require("playbooks/setup-pve-media-guest.yml" in assets, "MISSING_PLAYBOOK")
+    require("scripts/media-acceptance.py" in assets, "MISSING_MEDIA81_SCRIPT")
+    require("playbooks/media-acceptance-worker.yml" in assets, "MISSING_MEDIA81_WORKER")
     for relative, digest in assets.items():
         require(isinstance(relative, str) and
                 re.fullmatch(r"[a-zA-Z0-9_./-]+", relative) and
