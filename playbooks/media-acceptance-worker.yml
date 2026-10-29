@@ -1,0 +1,62 @@
+---
+# Invoked ONLY by root-owned watcher after full release SHA256 verification.
+# Probe reads runtime state; report file is sanitized and owned by root.
+- name: Protected Media 81 guest and PVE read-only acceptance
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Load trusted PVE metadata
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+    - name: Load trusted media target metadata
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/media_vm.yml"
+    - name: Verify protected media acceptance nonce and site
+      ansible.builtin.assert:
+        that:
+          - media81_nonce is defined
+          - media81_nonce is match('^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$')
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - media_vm.name == 'mediaserver-' ~ site.owner_slug
+        fail_msg: MEDIA81_WORKER_TARGET_INVALID
+  tasks:
+    - name: Execute pinned read-only media acceptance probes
+      ansible.builtin.command:
+        argv:
+          - python3
+          - /opt/digitalhouses/bootstrap/pve-access/scripts/media-acceptance.py
+          - --guest-ip
+          - "{{ media_vm.network.ipv4.split('/')[0] }}"
+          - --pve-ip
+          - "{{ pve.host }}"
+          - --vmid
+          - "{{ media_vm.vmid | string }}"
+          - --hostname
+          - "{{ media_vm.name }}"
+          - --pool
+          - "{{ media_vm.storage.pool_name }}"
+      changed_when: false
+      failed_when: false
+      register: media81_probe
+
+    - name: Store only a bounded sanitized read-only acceptance report
+      ansible.builtin.copy:
+        dest: "/run/dh-media81-report-{{ media81_nonce }}.txt"
+        owner: root
+        group: semaphore
+        mode: '0640'
+        content: "{{ media81_probe.stdout[:16000] }}\n"
+      changed_when: false
+
+    - name: Require critical PASS before returning success to Semaphore
+      ansible.builtin.assert:
+        that:
+          - media81_probe.rc == 0
+          - "'MEDIA81_RESULT=PASS CRITICAL_FAILURES=0' in media81_probe.stdout_lines"
+        fail_msg: MEDIA81_ACCEPTANCE_FAILED_SEE_SANITIZED_REPORT
