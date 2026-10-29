@@ -51,3 +51,40 @@
   when:
     - dh_media_novnc_i915.rc == 0
     - dh_media_novnc_bochs.rc == 0
+
+# A clean text login is the expected stable state of Linux tty1 after boot.
+# With kernel.printk at 7, later Docker/NFS/audit INFO messages overwrite
+# the agetty prompt and falsely resemble a frozen native PVE console.
+# Suppress only routine INFO/NOTICE console output, not journal logging;
+# retain WARNING and more severe messages on tty1.
+- name: Keep native PVE VGA login readable after background services start
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/90-dh-media-vga-console.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      kernel.printk = 4 4 1 7
+
+- name: Read current kernel console message levels
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/kernel/printk]
+  register: dh_media_novnc_printk_before
+  changed_when: false
+
+- name: Apply quieter native VGA kernel console without restarting services
+  ansible.builtin.command:
+    argv: [/usr/sbin/sysctl, -w, 'kernel.printk=4 4 1 7']
+  when: (dh_media_novnc_printk_before.stdout | regex_replace('\\s+', ' ') | trim) != '4 4 1 7'
+
+- name: Verify live kernel console message levels
+  ansible.builtin.command:
+    argv: [cat, /proc/sys/kernel/printk]
+  register: dh_media_novnc_printk_after
+  changed_when: false
+
+- name: Require kernel VGA console message policy
+  ansible.builtin.assert:
+    that:
+      - "(dh_media_novnc_printk_after.stdout | regex_replace('\\s+', ' ') | trim) == '4 4 1 7'"
+    fail_msg: MEDIA_NOVNC_CONSOLE_LOGLEVEL_NOT_APPLIED

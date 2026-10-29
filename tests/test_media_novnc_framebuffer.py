@@ -35,3 +35,15 @@ def test_boot_depends_order_and_guard_only_when_drivers_exist():
     boot = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
     assert '"roles/media_guest_setup/tasks/novnc_framebuffer.yml"' in boot
     assert '("media_guest_setup", "tasks/novnc_framebuffer.yml")' in boot
+
+
+def test_native_vga_login_is_not_overwritten_by_routine_kernel_messages():
+    tasks = yaml.safe_load(TASK.read_text())
+    assert "Keep native PVE VGA login readable after background services start" in [t["name"] for t in tasks]
+    cfg = next(t for t in tasks if t["name"].startswith("Keep native PVE VGA login"))
+    assert cfg["ansible.builtin.copy"]["dest"] == "/etc/sysctl.d/90-dh-media-vga-console.conf"
+    assert cfg["ansible.builtin.copy"]["content"] == "kernel.printk = 4 4 1 7\n"
+    assert "MEDIA_NOVNC_CONSOLE_LOGLEVEL_NOT_APPLIED" in TASK.read_text()
+    assert "journalctl" not in TASK.read_text()
+    assert "systemctl restart getty" not in TASK.read_text()
+    assert "kernel.printk=4 4 1 7" in TASK.read_text()
