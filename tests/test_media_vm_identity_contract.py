@@ -35,7 +35,7 @@ def test_no_implicit_legacy_guest_cutover():
     role = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
     for forbidden in (
         "qm stop", "qm set", "qm destroy", "qm create",
-        "ansible.builtin.command", "ansible.builtin.shell",
+        "ansible.builtin.shell",
         "method: POST", "method: PUT", "method: DELETE",
     ):
         assert forbidden not in role
@@ -43,3 +43,17 @@ def test_no_implicit_legacy_guest_cutover():
     assert "GPU_ALREADY_ASSIGNED" in role
     assert "SATA_ALREADY_ASSIGNED" in role
     assert "ENABLED_BACKUP_TARGET_OFFLINE" in role
+
+def test_only_explicit_read_only_storage_query_can_use_pve_ssh():
+    tasks = yaml.safe_load((ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text())
+    commands = [t for t in tasks if "ansible.builtin.command" in t]
+    assert len(commands) == 1
+    task = commands[0]
+    assert task["name"] == "Read exact self-hosted PVE NFS target via pinned read-only SSH query"
+    argv = task["ansible.builtin.command"]["argv"]
+    assert argv[-7:] == ["sudo", "-n", "/usr/bin/pvesh", "get",
+                         "/storage/dh_media_backups", "--output-format", "json"]
+    assert "StrictHostKeyChecking=yes" in argv
+    assert "IdentitiesOnly=yes" in argv
+    assert task["changed_when"] is False
+    assert task["no_log"] is True

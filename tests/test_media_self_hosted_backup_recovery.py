@@ -1,5 +1,6 @@
 """Self-hosted NFS deferral must only allow the known guest to repair its own export."""
 from pathlib import Path
+import json
 import re
 from jinja2 import Environment
 import yaml
@@ -11,6 +12,7 @@ def test_self_hosted_backup_deferral_rejects_foreign_drift():
     tasks = yaml.safe_load(TASKS.read_text())
     task = next(t for t in tasks if t["name"] == "Permit exact owned NFS backup target to recover during keep import")
     env = Environment()
+    env.filters["from_json"] = json.loads
     env.tests["match"] = lambda s, p: re.fullmatch(p, str(s)) is not None
     expr = env.from_string(task["ansible.builtin.set_fact"]["media_vm_self_hosted_backup_deferral_safe"])
     vm = {"name": "mediaserver-serzhan", "vmid": 2238, "network": {"ipv4": "192.168.11.238/24"},
@@ -23,9 +25,10 @@ def test_self_hosted_backup_deferral_rejects_foreign_drift():
     data = {"media_vm_action": "keep", "media_raw_disk_action": "import",
             "media_vm_existing_targets": [{"name": "mediaserver-serzhan", "vmid": 2238}],
             "media_vm_offline_backup_targets": ["dh_media_backups"],
-            "media_vm_self_hosted_storage": {"json": {"data": cfg}},
+            "media_vm_self_hosted_storage": {"stdout": json.dumps(cfg)},
             "media_vm_self_backup_jobs": [job], "media_vm": vm, "pve": {"host": "192.168.11.30"}}
     def allowed():
+        data["media_vm_self_hosted_storage"]["stdout"] = json.dumps(cfg)
         return expr.render(**data).strip() == "True"
     assert allowed()
     data["media_vm_action"] = "recreate"
@@ -45,7 +48,9 @@ def test_self_hosted_backup_deferral_rejects_foreign_drift():
 
 def test_self_hosted_backup_verifies_actual_pve_storage():
     source = TASKS.read_text()
-    assert "/api2/json/storage/{{ media_vm.backup_export.storage_id }}" in source
+    assert "/storage/dh_media_backups" in source
+    assert "pve_access.host.known_hosts_file" in source
+    assert "pve_access.host.identity_file" in source
     assert "media_vm_self_hosted_backup_deferral_safe" in source
     assert "ENABLED_BACKUP_TARGET_OFFLINE" in source
     assert "PVE_SELF_HOSTED_NFS_RECOVERY_DEFERRED" in source
