@@ -1,0 +1,53 @@
+---
+# The optional VGA display used by PVE noVNC is independent from the
+# passthrough Intel iGPU. With bochs bound first, noVNC can stop updating
+# after i915 probes the passthrough GPU even while Debian boots normally.
+# Keep Intel's render node for Plex/Jellyfin; do not blacklist i915,
+# disable KMS globally, or touch GPU passthrough ownership.
+- name: Check Intel DRM module availability for the media VM
+  ansible.builtin.command:
+    argv: [/sbin/modinfo, -F, filename, i915]
+  register: dh_media_novnc_i915
+  failed_when: false
+  changed_when: false
+
+- name: Check virtual VGA DRM module availability
+  ansible.builtin.command:
+    argv: [/sbin/modinfo, -F, filename, bochs]
+  register: dh_media_novnc_bochs
+  failed_when: false
+  changed_when: false
+
+- name: Load the passthrough Intel GPU driver before the virtual VGA driver
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/90-dh-bochs-after-i915.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Keep Proxmox noVNC VGA on bochs and Quick Sync render on i915.
+      # Experimental order for Proxmox 8 media GPU passthrough; reversible.
+      softdep bochs pre: i915
+  when:
+    - dh_media_novnc_i915.rc == 0
+    - dh_media_novnc_bochs.rc == 0
+
+- name: Inspect effective virtual VGA DRM module dependencies
+  ansible.builtin.command:
+    argv: [/sbin/modprobe, --show-depends, bochs]
+  register: dh_media_novnc_order
+  changed_when: false
+  when:
+    - dh_media_novnc_i915.rc == 0
+    - dh_media_novnc_bochs.rc == 0
+
+- name: Require Intel driver precedes virtual VGA in modprobe simulation
+  ansible.builtin.assert:
+    that:
+      - "dh_media_novnc_order.stdout.find('/i915.ko') >= 0"
+      - "dh_media_novnc_order.stdout.find('/bochs.ko') >= 0"
+      - "dh_media_novnc_order.stdout.find('/i915.ko') < dh_media_novnc_order.stdout.find('/bochs.ko')"
+    fail_msg: MEDIA_NOVNC_MODULE_ORDER_NOT_APPLIED
+  when:
+    - dh_media_novnc_i915.rc == 0
+    - dh_media_novnc_bochs.rc == 0
