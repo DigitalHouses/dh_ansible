@@ -12,6 +12,7 @@ def test_self_hosted_backup_deferral_rejects_foreign_drift():
     tasks = yaml.safe_load(TASKS.read_text())
     task = next(t for t in tasks if t["name"] == "Permit exact owned NFS backup target to recover during keep import")
     env = Environment()
+    env.filters["from_json"] = json.loads
     env.tests["match"] = lambda s, p: re.fullmatch(p, str(s)) is not None
     expr = env.from_string(task["ansible.builtin.set_fact"]["media_vm_self_hosted_backup_deferral_safe"])
     vm = {"name": "mediaserver-serzhan", "vmid": 2238, "network": {"ipv4": "192.168.11.238/24"},
