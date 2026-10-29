@@ -791,6 +791,9 @@
       pool_mode: "{{ media_vm.storage.mode }}"
       agent: active
 
+- name: Ensure authenticated PVE serial terminal for Intel iGPU passthrough guest
+  ansible.builtin.import_tasks: serial_console.yml
+
 - name: Protect media services from guest OOM during concurrent 4K work
   ansible.builtin.import_tasks: swap_guard.yml
 
