@@ -124,6 +124,9 @@ CODE_FILES = (
     "roles/media_guest_setup/templates/media-portal-index.html.j2",
     "roles/media_guest_setup/templates/media-pve-nfs.exports.j2",
     "playbooks/setup-pve-media-guest.yml",
+    "playbooks/media-acceptance.yml",
+    "playbooks/media-acceptance-worker.yml",
+    "scripts/media-acceptance.py",
     "playbooks/commission-new-runner-bonjour.yml",
     "bootstrap/dh-pve-media-deploy.py",
 )
@@ -1129,6 +1132,7 @@ def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
     assets = {}
     stage_guest_root_directory(folder, stage="pve_access")
     stage_guest_root_directory(folder + "/playbooks", stage="pve_access")
+    stage_guest_root_directory(folder + "/scripts", stage="pve_access")
     for role, relative in (
         ("pve_audit", "defaults/main.yml"),
         ("pve_audit", "tasks/main.yml"),
@@ -1199,6 +1203,7 @@ def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
         run("pct", "push", str(CTID), str(origin), destination, timeout=30)
         pct_guest("chmod", "0644", destination)
     for playbook in ("audit-pve-access.yml", "setup-pve-media-guest.yml",
+                     "media-acceptance-worker.yml",
                      "attach-pve-media-backup-nfs.yml",
                      "commission-new-runner-bonjour.yml"):
         source = checkout / "playbooks" / playbook
@@ -1208,6 +1213,14 @@ def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
         assets["playbooks/" + playbook] = hashlib.sha256(source.read_bytes()).hexdigest()
         run("pct", "push", str(CTID), str(source), target, timeout=30)
         pct_guest("chmod", "0644", target)
+    # Publish only the reviewed, bounded read-only acceptance probe.
+    acceptance_source = checkout / "scripts/media-acceptance.py"
+    if not acceptance_source.is_file() or acceptance_source.is_symlink():
+        raise Blocked("Pinned media acceptance probe missing")
+    acceptance_target = folder + "/scripts/media-acceptance.py"
+    assets["scripts/media-acceptance.py"] = hashlib.sha256(acceptance_source.read_bytes()).hexdigest()
+    run("pct", "push", str(CTID), str(acceptance_source), acceptance_target, timeout=30)
+    pct_guest("chmod", "0644", acceptance_target)
     handoff = (
         ("bootstrap/pve-access-audit-request.sh",
          "/usr/local/sbin/dh-pve-access-audit", "0700"),
