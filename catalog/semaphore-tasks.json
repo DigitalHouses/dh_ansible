@@ -87,6 +87,11 @@
       ]
     },
     {
+      "title": "81-Медиасервер · Acceptance E2E",
+      "playbook": "playbooks/media-acceptance.yml",
+      "view": "04 · Приёмка"
+    },
+    {
       "title": "90-PVE · Подключить NFS Backups",
       "playbook": "playbooks/request-pve-media-backup-nfs.yml",
       "view": "02 · Развёртывание"

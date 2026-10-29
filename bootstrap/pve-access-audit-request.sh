@@ -14,7 +14,11 @@ REQUEST_DATA="$(cat "$REQUEST")"
 # The code version used by Semaphore must match the complete root-owned
 # guest worker bundle. No VM action may start with a mixed/obsolete release.
 UUID_RE='[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}'
-if [[ "$REQUEST_DATA" =~ ^(MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):($UUID_RE):([0-9a-f]{40})$ ]]; then
+if [[ "$REQUEST_DATA" =~ ^MEDIA_ACCEPTANCE:($UUID_RE):([0-9a-f]{40})$ ]]; then
+  ACTION="MEDIA_ACCEPTANCE"
+  NONCE="${BASH_REMATCH[1]}"
+  SOURCE_SHA="${BASH_REMATCH[2]}"
+elif [[ "$REQUEST_DATA" =~ ^(MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)):($UUID_RE):([0-9a-f]{40})$ ]]; then
   ACTION="${BASH_REMATCH[1]}"
   NONCE="${BASH_REMATCH[4]}"
   SOURCE_SHA="${BASH_REMATCH[5]}"
@@ -49,6 +53,26 @@ done
 report RUNNING
 : > "$LOG"; chmod 0600 "$LOG"
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
+if [[ "$ACTION" == "MEDIA_ACCEPTANCE" ]]; then
+  # Strictly read-only against the PVE host, guest, and all customer data.
+  # Never run a Semaphore checkout as root; use only the pinned staged worker.
+  /usr/bin/python3 /usr/local/sbin/dh-pve-media-release-verify \
+    --expected-commit "$SOURCE_SHA" >> "$LOG" 2>&1
+  MEDIA="$INV_ROOT/$SITE/media_vm.yml"
+  PVE_FILE="$INV_ROOT/$SITE/pve.yml"
+  ACCEPT_PLAY=/opt/digitalhouses/bootstrap/pve-access/playbooks/media-acceptance-worker.yml
+  ACCEPT_SCRIPT=/opt/digitalhouses/bootstrap/pve-access/scripts/media-acceptance.py
+  [[ -f "$MEDIA" && ! -L "$MEDIA" ]] || exit 2
+  [[ -f "$PVE_FILE" && ! -L "$PVE_FILE" ]] || exit 2
+  [[ "$(stat -c '%U:%G:%a' "$MEDIA")" == 'root:semaphore:640' ]] || exit 2
+  [[ "$(stat -c '%U:%G:%a' "$ACCEPT_PLAY")" == 'root:root:644' ]] || exit 2
+  [[ "$(stat -c '%U:%G:%a' "$ACCEPT_SCRIPT")" == 'root:root:644' ]] || exit 2
+  /opt/ansible/venv/bin/ansible-playbook -i "$INV" "$ACCEPT_PLAY" \
+    -e "media81_nonce=$NONCE" >> "$LOG" 2>&1
+  report PASS
+  exit 0
+fi
+
 if [[ "$ACTION" == MEDIA_DEPLOY_* ]]; then
   /usr/bin/python3 /usr/local/sbin/dh-pve-media-release-verify \
     --expected-commit "$SOURCE_SHA" >> "$LOG" 2>&1
