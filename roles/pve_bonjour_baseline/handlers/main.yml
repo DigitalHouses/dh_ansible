@@ -1,0 +1,5 @@
+---
+- name: Restart PVE Bonjour advertiser
+  ansible.builtin.systemd_service:
+    name: avahi-daemon.service
+    state: restarted
