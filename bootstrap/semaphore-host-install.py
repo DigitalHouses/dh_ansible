@@ -108,6 +108,9 @@ CODE_FILES = (
     "roles/media_guest_setup/tasks/nfs_backups.yml",
     "roles/media_guest_setup/tasks/cpu_guard.yml",
     "roles/media_guest_setup/tasks/swap_guard.yml",
+    "roles/media_guest_setup/tasks/serial_console.yml",
+    "roles/media_guest_setup/files/dh-media-serial-console-login.py",
+    "bootstrap/dh-pve-media-console-password-show.py",
     "roles/media_guest_setup/files/dh-media-accounts.py",
     "roles/media_guest_setup/files/dh-media-app-accounts.py",
     "roles/media_guest_setup/files/dh-qbt-admin.py",
@@ -1165,6 +1168,8 @@ def stage_pve_access_audit(checkout: Path) -> None:
         ("media_guest_setup", "tasks/nfs_backups.yml"),
         ("media_guest_setup", "tasks/cpu_guard.yml"),
         ("media_guest_setup", "tasks/swap_guard.yml"),
+        ("media_guest_setup", "tasks/serial_console.yml"),
+        ("media_guest_setup", "files/dh-media-serial-console-login.py"),
         ("media_guest_setup", "files/dh-media-accounts.py"),
         ("media_guest_setup", "files/dh-media-app-accounts.py"),
         ("media_guest_setup", "files/dh-qbt-admin.py"),
@@ -1251,6 +1256,11 @@ def stage_site_data_provider(checkout: Path) -> None:
         raise Blocked("Pinned PVE media password recovery helper missing")
     run("install", "-o", "root", "-g", "root", "-m", "0700",
         str(password_read_helper), "/usr/local/sbin/dh-media-password-show")
+    console_password_helper = checkout / "bootstrap/dh-pve-media-console-password-show.py"
+    if console_password_helper.is_symlink() or not console_password_helper.is_file():
+        raise Blocked("Pinned PVE media console credential helper missing")
+    run("install", "-o", "root", "-g", "root", "-m", "0700",
+        str(console_password_helper), "/usr/local/sbin/dh-media-console-password-show")
     runtime_helper = checkout / "bootstrap/dh-pve-media-runtime.py"
     if runtime_helper.is_symlink() or not runtime_helper.is_file():
         raise Blocked("Pinned PVE MQTT runtime helper missing")
