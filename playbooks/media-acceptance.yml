@@ -1,5 +1,6 @@
 ---
-# Task 81: independent read-only acceptance. Not an installation or repair job.
+# Independent acceptance: run trusted, pinned READ-ONLY probes via the
+# pre-existing root worker. Semaphore cannot read the PVE SSH private key.
 - name: Media Server · Acceptance E2E (read-only)
   hosts: site_runner
   gather_facts: false
@@ -8,16 +9,13 @@
     - name: Load site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
-
     - name: Load PVE identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/pve.yml"
-
     - name: Read approved media VM declaration
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/media_vm.yml"
-
-    - name: Refuse wrong runner or missing deployment identity
+    - name: Verify exact site and target identity
       ansible.builtin.assert:
         that:
           - inventory_hostname == 'runner'
@@ -32,32 +30,83 @@
         fail_msg: MEDIA81_SITE_IDENTITY_INVALID
 
   tasks:
-    - name: Run independent read-only media acceptance
+    - name: Require running fixed-purpose protected worker
       ansible.builtin.command:
-        argv:
-          - python3
-          - "{{ playbook_dir }}/../scripts/media-acceptance.py"
-          - --guest-ip
-          - "{{ media_vm.network.ipv4.split('/')[0] }}"
-          - --pve-ip
-          - "{{ pve.host }}"
-          - --vmid
-          - "{{ media_vm.vmid | string }}"
-          - --hostname
-          - "{{ media_vm.name }}"
-          - --pool
-          - "{{ media_vm.storage.pool_name }}"
-      register: media81_result
+        argv: [systemctl, is-active, dh-pve-access-audit.path]
+      register: media81_watcher
       changed_when: false
-      failed_when: false
 
-    - name: Publish acceptance checklist with PASS FAIL and SKIP
-      ansible.builtin.debug:
-        msg: "{{ media81_result.stdout_lines | default([]) }}"
-
-    - name: Mark acceptance failed when any critical check failed
+    - name: Verify watcher is commissioned
       ansible.builtin.assert:
         that:
-          - media81_result.rc == 0
-          - "'MEDIA81_RESULT=PASS CRITICAL_FAILURES=0' in media81_result.stdout_lines"
-        fail_msg: MEDIA81_ACCEPTANCE_FAILED_READ_REPORT_ABOVE
+          - media81_watcher.stdout == 'active'
+        fail_msg: MEDIA81_PROTECTED_WORKER_MISSING
+
+    - name: Generate unique acceptance request
+      ansible.builtin.command:
+        argv: [cat, /proc/sys/kernel/random/uuid]
+      register: media81_nonce
+      changed_when: false
+
+    - name: Read immutable checkout SHA for trusted report worker
+      ansible.builtin.command:
+        argv: [git, -C, "{{ playbook_dir }}/..", rev-parse, HEAD]
+      register: media81_sha
+      changed_when: false
+
+    - name: Require exact pinned release
+      ansible.builtin.assert:
+        that:
+          - media81_sha.stdout is match('^[0-9a-f]{40}$')
+        fail_msg: MEDIA81_RELEASE_SHA_INVALID
+
+    - name: Request read-only acceptance on protected worker
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/dh-pve-access-audit.request
+        content: "MEDIA_ACCEPTANCE:{{ media81_nonce.stdout }}:{{ media81_sha.stdout }}\n"
+        mode: '0600'
+      changed_when: false
+
+    - name: Wait for matching acceptance result
+      ansible.builtin.command:
+        argv: [cat, /run/dh-pve-access-audit.status]
+      register: media81_status
+      changed_when: false
+      failed_when: false
+      retries: 160
+      delay: 3
+      until: >-
+        media81_status.stdout in [
+          'PASS:' ~ media81_nonce.stdout,
+          'FAILED:' ~ media81_nonce.stdout
+        ]
+
+    - name: Inspect protected sanitized acceptance report
+      ansible.builtin.stat:
+        path: "/run/dh-media81-report-{{ media81_nonce.stdout }}.txt"
+        follow: false
+      register: media81_report_stat
+      changed_when: false
+
+    - name: Read only this request's report
+      ansible.builtin.slurp:
+        src: "/run/dh-media81-report-{{ media81_nonce.stdout }}.txt"
+      register: media81_report_data
+      when:
+        - media81_report_stat.stat.isreg | default(false)
+        - media81_report_stat.stat.pw_name == 'root'
+        - media81_report_stat.stat.gr_name == 'semaphore'
+        - media81_report_stat.stat.mode == '0640'
+      changed_when: false
+
+    - name: Print independent PASS FAIL SKIP checklist
+      ansible.builtin.debug:
+        msg: "{{ (media81_report_data.content | b64decode).splitlines() if media81_report_data is not skipped else ['MEDIA81_REPORT_UNAVAILABLE'] }}"
+
+    - name: Fail acceptance on any critical failure or missing report
+      ansible.builtin.assert:
+        that:
+          - media81_status.stdout == 'PASS:' ~ media81_nonce.stdout
+          - media81_report_data is not skipped
+          - "'MEDIA81_RESULT=PASS CRITICAL_FAILURES=0' in (media81_report_data.content | b64decode).splitlines()"
+        fail_msg: MEDIA81_ACCEPTANCE_FAILED_SEE_CHECKLIST_ABOVE
