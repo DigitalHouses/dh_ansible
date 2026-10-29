@@ -82,7 +82,7 @@ def ensure():
         CREDENTIAL.unlink(missing_ok=True)
         raise
     login_ready()
-    print("MEDIA_SERIAL_CONSOLE=READY")
+    print("MEDIA_SERIAL_CONSOLE=CREATED")
 
 
 def main():
