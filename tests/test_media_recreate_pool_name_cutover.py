@@ -106,7 +106,7 @@ def test_recreate_rejects_changed_existing_pool_guid_before_vm_delete():
     item = data()
     item["storage"]["import_pool_guid"] = "1111111111111111"
     try:
-        check(item, "demo-pool\\t" + NEW_GUID)
+        check(item, "demo-pool\t" + NEW_GUID)
         assert False
     except m.Blocked as error:
         assert str(error) == "MANAGED_ZFS_IMPORT_GUID_DRIFT"
