@@ -4,9 +4,9 @@ set -Eeuo pipefail
 umask 077
 
 SITE=""
-CODE_RELEASE="bc6ced273ec665e87e95c429845f00c3776972e4"
-CODE_INSTALLER_BLOB="0ef55b02d42101c3416541db793db653ebe45474"
-FLEET_RELEASE="deb6e49ab9f0295391088070467476fffdada68e"
+CODE_RELEASE="412a3424b873cc2f6015b4d930d62d7b40486f98"
+CODE_INSTALLER_BLOB="76dee72d03d2840441893666c60e182f71cd6eaf"
+FLEET_RELEASE="5e143d237620e702d9e6d7794816fddcfd1c56de"
 GH_VERSION="2.102.0"
 GH_SHA256="bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
 
@@ -198,6 +198,19 @@ try:
             or desired_gateway != observed_gateway
             or desired_gateway not in bridge.network):
         raise ValueError("Runner/PVE network mismatch")
+    # Original behavior is .231 for every ordinary site. A different
+    # address requires two explicit declarations in the pinned PRIVATE Fleet.
+    standard_ip = ipaddress.IPv4Address(int(bridge.network.network_address) + 231)
+    exceptions = re.findall(r"(?m)^    runner_ipv4_exception: ([0-9./]+)$", content)
+    reasons = [line.partition(": ")[2].strip().strip(chr(34))
+               for line in content.splitlines()
+               if line.startswith("    runner_ipv4_exception_reason: ")]
+    if runner.ip == standard_ip:
+        if exceptions or reasons:
+            raise ValueError("Standard .231 runner must not declare an exception")
+    elif (exceptions != [str(runner)] or len(reasons) != 1
+          or not 16 <= len(reasons[0]) <= 200):
+        raise ValueError("Nonstandard runner requires a documented Fleet exception")
 except (IndexError, KeyError, ValueError, AssertionError, UnicodeError) as exc:
     raise SystemExit("BLOCKED: cannot verify site-scoped runner address: " + str(exc))
 print(bridge.ip)
