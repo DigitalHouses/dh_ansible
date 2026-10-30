@@ -342,7 +342,13 @@ def old_guest_matches(vmid, site, data, *, managed=False):
         desired = storage["pool_name"]
         previous = storage.get("recreate_source_pool")
         if desired in available:
-            pool, expected_guid = desired, None
+            # Imported data pool identity must be Fleet-pinned even when
+            # name and physical WWN already match.
+            pinned_guid = storage.get("import_pool_guid")
+            need(isinstance(pinned_guid, str) and pinned_guid.isdecimal()
+                 and available[desired] == pinned_guid,
+                 "MANAGED_ZFS_IMPORT_GUID_DRIFT")
+            pool, expected_guid = desired, pinned_guid
         else:
             need(isinstance(previous, dict)
                  and set(previous) == {"name", "guid"}
