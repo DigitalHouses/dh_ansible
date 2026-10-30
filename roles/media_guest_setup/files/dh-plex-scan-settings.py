@@ -33,7 +33,7 @@ def main():
         raise RuntimeError("MEDIA_PLEX_PREFERENCES_OWNERSHIP_DRIFT")
     tree=ET.parse(PREF)
     root=tree.getroot()
-    if root.tag!="PlexMediaServer":
+    if root.tag!="Preferences":
         raise RuntimeError("MEDIA_PLEX_PREFERENCES_FORMAT_DRIFT")
     needs={k:v for k,v in EXPECTED.items() if root.get(k)!=v}
     if args.mode=="check":
