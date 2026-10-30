@@ -6,6 +6,8 @@
 
 **Обязательно прочитать [Единый операционный runbook для AI-агентов](docs/runbooks/ai-agent-execution.md) до любой инфраструктурной операции**, до фразы «я не могу запустить» и до попытки запуска. В нём зафиксированы: Remote Desktop Commander, пользователь `semaphore`, прямой запуск Ansible без Semaphore API, публикация pinned release защищённого worker, preflight, approval, независимый acceptance и STOP при security-deny.
 
+**Стандартный запуск всех задач:** использовать один root-owned pinned `scripts/dh-task-runner.py` по [runbook](docs/runbooks/ai-agent-execution.md): `PLAN_ONLY` по умолчанию, `--execute` после разрешения, запуск playbook строго из каталога от `semaphore`. Ни №81, ни новые задачи не требуют собственного AI-launcher. Публикация кода не означает установки launcher; security-deny конкретного вызова не обходить.
+
 **Не искать процедуру в истории чатов и не создавать альтернативный исполнитель.** История — только свидетельство, а актуальная инструкция — единственный нормативный источник. Для специфики медиасервера после неё читать [media runbook](docs/runbooks/media-semaphore-launch.md). Не дублировать команды запуска в верхних документах.
 
 ## Non-negotiable
