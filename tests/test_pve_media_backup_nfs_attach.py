@@ -53,7 +53,7 @@ def test_native_nfs_backup_is_idempotent_and_write_tested():
     args = create["ansible.builtin.command"]["argv"]
     assert args[:4] == ["pvesm", "add", "nfs", "{{ dh_backup_storage_id }}"]
     assert args[args.index("--content") + 1] == "backup"
-    assert args[args.index("--options") + 1] == "vers=4.1"
+    assert args[args.index("--options") + 1] == "vers=3"
     assert create["when"] == "dh_existing_backup_storages | length == 0"
     assert "Reject duplicate or drifting storage definitions" in tasks
     assert "Require the exact NFS source, not an ordinary local directory" in tasks
