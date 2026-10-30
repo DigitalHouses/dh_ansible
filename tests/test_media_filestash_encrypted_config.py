@@ -197,8 +197,8 @@ def test_repair_exact_broken_idp_preserves_unrelated_config_and_root_only_backup
         before=path.read_bytes()
         current_uid=path.stat().st_uid
         fake=SimpleNamespace(pw_uid=current_uid,pw_gid=path.stat().st_gid)
-        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=True), \\
-             mock.patch.object(mod.pwd,"getpwnam",return_value=fake), \\
+        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=True), \
+             mock.patch.object(mod.pwd,"getpwnam",return_value=fake), \
              mock.patch.object(mod,"effective_admin_config",side_effect=AssertionError("repair should not login")):
             mod.reconcile(path=path,credential=Path(temp)/"unused",
                           repair_broken_idp=True)
@@ -233,8 +233,8 @@ def test_repair_mode_preserves_healthy_encrypted_middleware():
     with tempfile.TemporaryDirectory() as temp:
         mod,path=seed(temp,True)
         initial=path.read_bytes()
-        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=False), \\
-             mock.patch.object(mod,"passport",return_value="sample88"), \\
+        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=False), \
+             mock.patch.object(mod,"passport",return_value="sample88"), \
              mock.patch.object(mod,"effective_admin_config",
                                return_value=native_form(mod.desired())):
             mod.reconcile(path=path,credential=Path(temp)/"unused",
