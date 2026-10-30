@@ -232,6 +232,7 @@
   ansible.builtin.command:
     argv:
       - /usr/local/sbin/dh-filestash-smb-config
+      - --repair-broken-idp
       - --credential-file
       - "/{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}.txt"
   register: media_filestash_smb
@@ -285,6 +286,29 @@
   register: media_filestash_http
   until: media_filestash_http.status in [200, 301, 302, 307, 401]
   changed_when: false
+  when: media_vm.applications.filestash | default(true) | bool
+
+# An HTTP 200 on "/" is not proof: encrypted IDP drift can render only
+# a 307 to "/?error=Not Valid&trace=unpacking idp" for every user.
+- name: Verify actual Filestash SMB username and password entrypoint
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:8334/api/session/auth/?action=redirect&label=DigitalHouses%20SMB"
+    follow_redirects: none
+    status_code: 200
+    return_content: true
+  register: media_filestash_auth_entrypoint
+  retries: 5
+  delay: 2
+  until: media_filestash_auth_entrypoint.status == 200
+  changed_when: false
+  when: media_vm.applications.filestash | default(true) | bool
+
+- name: Refuse Filestash login page without SMB owner credential fields
+  ansible.builtin.assert:
+    that:
+      - "'name=\"user\"' in media_filestash_auth_entrypoint.content"
+      - "'name=\"password\"' in media_filestash_auth_entrypoint.content"
+    fail_msg: FILESTASH_SMB_IDP_LOGIN_BROKEN
   when: media_vm.applications.filestash | default(true) | bool
 
 - name: Download official Jellyfin APT signing key
