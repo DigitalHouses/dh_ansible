@@ -237,6 +237,24 @@ echo "TERMINAL STAYS OPEN"
 - Не считать `EXIT_STATUS=0`, `PLAY RECAP failed=0`, `HTTP 200`, `DEPLOYED` или старую запись Semaphore достаточным доказательством полной приёмки. При неизменённом состоянии проверить idempotency повторным разрешённым apply (`changed=0` для идемпотентных этапов).
 - Результаты различать: `AUDIT_PASS`, `PLAN_ONLY`, `APPLY_CHANGED`, `APPLY_UNCHANGED`, `VERIFY_PASS`, `BLOCKED`, `UNKNOWN`.
 
+**Проверенный запуск независимого read-only Acceptance №81** при уже проверенных `SITE_ID`, `CODE_DIR`, `EXPECTED_SHA` и `INV` из §4 (тот же pinned worker, без смены прав и без PVE SSH у `semaphore`):
+
+```bash
+set -euo pipefail
+test "$(runuser -u semaphore -- git -C "$CODE_DIR" rev-parse HEAD)" = "$EXPECTED_SHA"
+python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED_SHA"
+LOG81="/var/log/dh-media81-direct-$(date -u +%Y%m%dT%H%M%SZ).log"
+(
+  cd "$CODE_DIR"
+  runuser -u semaphore -- env "ANSIBLE_ROLES_PATH=$CODE_DIR/roles" \
+    /opt/ansible/venv/bin/ansible-playbook \
+    -i "$INV" playbooks/media-acceptance.yml
+) 2>&1 | tee "$LOG81"
+echo "MEDIA81_LOG=$LOG81"
+```
+
+Этот пример допустим только при подтверждённом отсутствии параллельного worker request и разрешённом доступе. Вывод `MEDIA81_RESULT=PASS CRITICAL_FAILURES=0` означает успешность **определённых acceptance checks**, а не подтверждает неохваченные ими сценарии; `FAIL` и `SKIP` разбирать отдельно.
+
 ## 6. Карта отказов — действия без потери времени
 
 | Симптом | Что означает | Действие |
