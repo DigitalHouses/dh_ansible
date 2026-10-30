@@ -1,0 +1,37 @@
+---
+# Kernel ARC parameter is writable after the already approved ZFS pool is mounted.
+- name: Require loaded ZFS parameter before setting runtime ARC budget
+  ansible.builtin.stat:
+    path: /sys/module/zfs/parameters/zfs_arc_max
+    follow: false
+  register: media_arc_sysfs
+
+- name: Refuse missing ZFS ARC module parameter
+  ansible.builtin.assert:
+    that:
+      - media_arc_sysfs.stat.exists | default(false)
+    fail_msg: MEDIA_ZFS_ARC_KERNEL_PARAMETER_MISSING
+
+- name: Inspect effective live ARC ceiling
+  ansible.builtin.command:
+    argv: [cat, /sys/module/zfs/parameters/zfs_arc_max]
+  register: media_arc_before
+  changed_when: false
+
+- name: Restrict current ARC ceiling to approved 768 MiB
+  ansible.builtin.command:
+    argv: [/usr/bin/tee, /sys/module/zfs/parameters/zfs_arc_max]
+    stdin: '805306368'
+  when: media_arc_before.stdout | trim != '805306368'
+
+- name: Confirm live ZFS ARC ceiling
+  ansible.builtin.command:
+    argv: [cat, /sys/module/zfs/parameters/zfs_arc_max]
+  register: media_arc_after
+  changed_when: false
+
+- name: Reject incomplete ARC limit
+  ansible.builtin.assert:
+    that:
+      - media_arc_after.stdout | trim == '805306368'
+    fail_msg: MEDIA_ZFS_ARC_LIMIT_NOT_APPLIED
