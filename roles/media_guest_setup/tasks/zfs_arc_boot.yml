@@ -1,0 +1,25 @@
+---
+# Persist the ARC ceiling in both modprobe and initramfs before GPU reboot.
+# ARC is not the entirety of ZFS kernel memory use.
+- name: Require commissioned ZFS ARC policy for the 4 GiB media VM
+  ansible.builtin.assert:
+    that:
+      - media_vm.resources.memory_mb | int == 4096
+      - media_vm.resources.zfs_arc_max_mb | int == 768
+    fail_msg: MEDIA_ZFS_ARC_POLICY_INVALID
+
+- name: Persist safe ZFS ARC ceiling across first and subsequent boots
+  ansible.builtin.copy:
+    dest: /etc/modprobe.d/90-dh-media-zfs-arc.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # DigitalHouses dedicated 4 GiB media guest: 768 MiB ARC ceiling.
+      options zfs zfs_arc_max=805306368
+  register: media_arc_modprobe
+
+- name: Include persistent ARC ceiling in Debian boot initramfs
+  ansible.builtin.command:
+    argv: [/usr/sbin/update-initramfs, -u]
+  when: media_arc_modprobe.changed
