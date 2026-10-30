@@ -1231,6 +1231,16 @@ def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
     assets["scripts/media-acceptance.py"] = hashlib.sha256(acceptance_source.read_bytes()).hexdigest()
     run("pct", "push", str(CTID), str(acceptance_source), acceptance_target, timeout=30)
     pct_guest("chmod", "0644", acceptance_target)
+    # One root-owned launcher for every public catalog task. Its child
+    # process always runs as the unprivileged semaphore user; the launcher
+    # does not grant new access, publish releases or bypass tool policy.
+    launcher_source = checkout / "scripts/dh-task-runner.py"
+    if not launcher_source.is_file() or launcher_source.is_symlink():
+        raise Blocked("Pinned generic Semaphore task launcher missing")
+    launcher_target = folder + "/scripts/dh-task-runner.py"
+    assets["scripts/dh-task-runner.py"] = hashlib.sha256(launcher_source.read_bytes()).hexdigest()
+    run("pct", "push", str(CTID), str(launcher_source), launcher_target, timeout=30)
+    pct_guest("chmod", "0644", launcher_target)
     handoff = (
         ("bootstrap/pve-access-audit-request.sh",
          "/usr/local/sbin/dh-pve-access-audit", "0700"),
