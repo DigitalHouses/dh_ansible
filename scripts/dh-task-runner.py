@@ -21,9 +21,9 @@ import subprocess
 import sys
 import uuid
 
-SITE_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\\Z")
-SHA_RE = re.compile(r"[0-9a-f]{40}\\Z")
-PLAYBOOK_RE = re.compile(r"playbooks/[a-z0-9-]+\\.yml\\Z")
+SITE_RE = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)+\Z")
+SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
+PLAYBOOK_RE = re.compile(r"playbooks/[a-z0-9-]+\.yml\Z")
 ROOT = Path("/var/lib/semaphore")
 SITE_DATA = Path("/var/lib/ansible/site-data")
 ANSIBLE = Path("/opt/ansible/venv/bin/ansible-playbook")
@@ -67,7 +67,7 @@ def resolve_task(catalog: dict, task_id: str) -> dict:
     titles = [item.get("title") for item in items if isinstance(item, dict)]
     require(len(titles) == len(items) and
             all(isinstance(title, str) and
-                re.fullmatch(r"[0-9]{2}-[^\\r\\n]{3,90}", title)
+                re.fullmatch(r"[0-9]{2}-[^\r\n]{3,90}", title)
                 for title in titles) and
             len(set(titles)) == len(titles), "CATALOG_DUPLICATE_OR_INVALID")
     if re.fullmatch(r"[0-9]{2}", task_id):
@@ -157,7 +157,7 @@ def active_ansible_sessions() -> bool:
         if not proc.name.isdecimal() or int(proc.name) == os.getpid():
             continue
         try:
-            args = (proc / "cmdline").read_bytes().split(b"\\0")
+            args = (proc / "cmdline").read_bytes().split(b"\0")
         except (OSError, PermissionError):
             continue
         if any(arg and Path(os.fsdecode(arg)).name == "ansible-playbook"
