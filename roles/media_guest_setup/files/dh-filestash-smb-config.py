@@ -220,7 +220,9 @@ def _write_config(path, data):
     fd, stage = tempfile.mkstemp(prefix=".dh-smb-", dir=path.parent)
     try:
         os.fchmod(fd, 0o600)
-        os.fchown(fd, user.pw_uid, user.pw_gid)
+        meta = os.fstat(fd)
+        if (meta.st_uid, meta.st_gid) != (user.pw_uid, user.pw_gid):
+            os.fchown(fd, user.pw_uid, user.pw_gid)
         with os.fdopen(fd, "wb") as stream:
             stream.write(output)
             stream.flush()
@@ -277,7 +279,6 @@ def _repair_broken_idp(path, data, target):
                                   suffix=".json", dir=BACKUP_ROOT)
     try:
         os.fchmod(fd, 0o600)
-        os.fchown(fd, os.geteuid(), os.getegid())
         with os.fdopen(fd, "wb") as stream:
             stream.write(original)
             stream.flush()
