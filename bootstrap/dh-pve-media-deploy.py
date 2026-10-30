@@ -421,6 +421,16 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
     if disk_action == "erase":
         need(data["storage"].get("destructive_without_backup") is True,
              "DISK_ERASE_NOT_APPROVED_IN_FLEET")
+    # The VM itself serves Proxmox's NFS backup storage. Refuse to remove it
+    # during a running vzdump job. The job schedule is left untouched.
+    active_pve_tasks = json.loads(run("/usr/sbin/pvesh", "get",
+                                       "/nodes/" + run("/usr/bin/hostname", "-s") + "/tasks",
+                                       "--source", "active",
+                                       "--output-format", "json"))
+    need(isinstance(active_pve_tasks, list), "PVE_ACTIVE_TASKS_INVALID")
+    need(not any(t.get("type") in ("vzdump", "backup")
+                 for t in active_pve_tasks if isinstance(t, dict)),
+         "ACTIVE_PVE_BACKUP_BLOCKS_MEDIA_RECREATE")
     # Only the exact VM's PVE disks are deleted. Raw PCI disk is untouched
     # here regardless of the independently chosen raw-disk action.
     try:
