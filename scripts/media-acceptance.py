@@ -20,7 +20,7 @@ import ssl
 
 SSH_KEY = "/var/lib/ansible/.ssh/pve_host_write_ed25519"
 PVE_KNOWN = "/var/lib/ansible/.ssh/pve_host_audit_known_hosts"
-GUEST_KNOWN = "/var/lib/ansible/.ssh/pve_host_write_known_hosts"
+GUEST_KNOWN = "/root/.ssh/known_hosts"
 TIMEOUT = 20
 
 # Runs under root inside the *already running* media guest, strictly read-only.
@@ -141,9 +141,9 @@ print(json.dumps(result,ensure_ascii=True,separators=(",",":")))
 """
 
 def ssh(host: str, account: str, argv: list[str], *, pve=False):
-    known=PVE_KNOWN if pve else "/var/lib/ansible/.ssh/known_hosts"
+    known=PVE_KNOWN if pve else GUEST_KNOWN
     opts=["-i",SSH_KEY,"-o","BatchMode=yes","-o","IdentitiesOnly=yes",
-          "-o","StrictHostKeyChecking=yes" if pve else "StrictHostKeyChecking=accept-new",
+          "-o","StrictHostKeyChecking=yes",
           "-o","UserKnownHostsFile="+known,"-o","ConnectTimeout=7"]
     cmd=["ssh",*opts,account+"@"+host," ".join(map(shlex.quote,argv))]
     return subprocess.run(cmd,text=True,capture_output=True,timeout=TIMEOUT)
