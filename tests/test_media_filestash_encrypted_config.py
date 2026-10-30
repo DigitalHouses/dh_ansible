@@ -174,7 +174,7 @@ def test_firstboot_seeds_stable_crypto_key_before_filestash_saves_middleware():
         mod=helper()
         path=Path(temp)/"config.json"
         path.write_text(json.dumps({"general":{"keep":"owner-choice"}}))
-        fake=SimpleNamespace(pw_uid=0,pw_gid=0)
+        fake=SimpleNamespace(pw_uid=path.stat().st_uid,pw_gid=path.stat().st_gid)
         with mock.patch.object(mod.pwd,"getpwnam",return_value=fake):
             mod.reconcile(path=path)
             first=json.loads(path.read_text())
@@ -199,13 +199,14 @@ def test_repair_exact_broken_idp_preserves_unrelated_config_and_root_only_backup
         fake=SimpleNamespace(pw_uid=current_uid,pw_gid=path.stat().st_gid)
         with mock.patch.object(mod,"broken_idp_entrypoint",return_value=True), \
              mock.patch.object(mod.pwd,"getpwnam",return_value=fake), \
+             mock.patch.object(mod,"BACKUP_ROOT",Path(temp)/"backups"), \
              mock.patch.object(mod,"effective_admin_config",side_effect=AssertionError("repair should not login")):
             mod.reconcile(path=path,credential=Path(temp)/"unused",
                           repair_broken_idp=True)
         after=json.loads(path.read_text())
         assert mod.semantic_config(after,mod.desired())
         assert after["general"]==original["general"]
-        backups=list(Path(temp).glob(".dh-filestash-idp-backup-*.json"))
+        backups=list((Path(temp)/"backups").glob(".dh-filestash-idp-backup-*.json"))
         assert len(backups)==1
         assert backups[0].read_bytes()==before
         assert backups[0].stat().st_mode & 0o777==0o600
