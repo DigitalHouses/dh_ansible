@@ -15,6 +15,8 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
+**Единый механизм для всех задач:** `scripts/dh-task-runner.py`, устанавливаемый только как root-owned pinned asset через Bootstrap. Он выполняет задачи из `catalog/semaphore-tasks.json` от пользователя `semaphore` с проверкой SHA, site и survey. Это не расширяет разрешения ChatGPT или Remote Desktop Commander. 
+
 **Сначала открыть [единый операционный runbook](docs/runbooks/ai-agent-execution.md)** (также обязателен [AGENTS.md](AGENTS.md)). Здесь описаны штатная задача Semaphore, прямой запуск от `semaphore`, публикация pinned worker release, preflight и независимый verify. Не начинать с истории чатов, нового инструмента или просьбы к владельцу повторить рутинный запуск. При явном security-deny останавливать именно заблокированную операцию, не обходить ограничения подключения.
 
 ## Единая точка входа
