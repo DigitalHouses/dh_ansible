@@ -13,10 +13,13 @@ import os
 from pathlib import Path
 import pwd
 import re
+import secrets
 import stat
+import string
 import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 
 PATH = Path("/opt/dh-filestash/data/state/config/config.json")
@@ -181,7 +184,106 @@ def effective_admin_config(secret):
         raise Blocked("FILESTASH_" + stage + "_TIMEOUT") from None
 
 
-def reconcile(path=PATH, credential=None):
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def broken_idp_entrypoint():
+    """Observe only the exact local failure; never login as a web user."""
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirect())
+    url = BASE + "/api/session/auth/?action=redirect&label=DigitalHouses%20SMB"
+    try:
+        with opener.open(url, timeout=5):
+            return False
+    except urllib.error.HTTPError as error:
+        if error.code != 307:
+            return False
+        location = urllib.parse.urlsplit(error.headers.get("Location", ""))
+        query = urllib.parse.parse_qs(location.query)
+        return (location.path == "/" and
+                query.get("error") == ["Not Valid"] and
+                query.get("trace", [""])[0].startswith(
+                    "unpacking idp - invalid character"))
+    except (OSError, TimeoutError, urllib.error.URLError):
+        return False
+
+
+def _write_config(path, data):
+    output = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode()
+    if path.exists() and path.read_bytes() == output:
+        return False
+    user = pwd.getpwnam("filestash")
+    fd, stage = tempfile.mkstemp(prefix=".dh-smb-", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, user.pw_uid, user.pw_gid)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(output)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(stage, path)
+    finally:
+        if os.path.exists(stage):
+            os.unlink(stage)
+    return True
+
+
+def _repair_broken_idp(path, data, target):
+    """Recover only our exact broken passthrough; preserve a root-only backup."""
+    require(data.get("connections") == target["connections"],
+            "FILESTASH_RECOVERY_FOREIGN_CONNECTION")
+    general = data.get("general", {})
+    require(isinstance(general, dict) and
+            re.fullmatch(r"[a-zA-Z0-9]{16}", general.get("secret_key", "")),
+            "FILESTASH_RECOVERY_SECRET_KEY_UNKNOWN")
+    middleware = data.get("middleware", {})
+    require(isinstance(middleware, dict) and
+            set(middleware) == set(target["middleware"]),
+            "FILESTASH_RECOVERY_FOREIGN_MIDDLEWARE")
+    for name, expected in target["middleware"].items():
+        current = middleware.get(name)
+        require(isinstance(current, dict) and
+                set(current) == set(expected),
+                "FILESTASH_RECOVERY_FOREIGN_MIDDLEWARE")
+        static_key = ("type" if name == "identity_provider"
+                      else "related_backend")
+        require(current.get(static_key) == expected[static_key],
+                "FILESTASH_RECOVERY_FOREIGN_MIDDLEWARE")
+        opaque = current.get("params")
+        require(isinstance(opaque, str) and len(opaque) >= 32 and
+                not opaque.lstrip().startswith(("{", "[")),
+                "FILESTASH_RECOVERY_UNEXPECTED_PARAMS")
+    require(broken_idp_entrypoint(), "FILESTASH_RECOVERY_NO_PROVEN_IDP_FAILURE")
+    meta = path.lstat()
+    user = pwd.getpwnam("filestash")
+    require(stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1 and
+            meta.st_uid == user.pw_uid,
+            "FILESTASH_RECOVERY_FILE_UNSAFE")
+    original = path.read_bytes()
+    # The original opaque state is never overwritten without a retained copy.
+    fd, backup = tempfile.mkstemp(prefix=".dh-filestash-idp-backup-",
+                                  suffix=".json", dir=path.parent)
+    try:
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, 0, 0)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(original)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        os.unlink(backup)
+        raise
+    for name, expected in target["middleware"].items():
+        data["middleware"][name]["params"] = expected["params"]
+    require(_write_config(path, data), "FILESTASH_RECOVERY_NO_CHANGE")
+    # Filestash must restart to load plaintext and encrypt with the
+    # already-persisted general.secret_key; Ansible handles the restart.
+    print("FILESTASH_SMB=RECONCILED")
+
+def reconcile(path=PATH, credential=None, repair_broken_idp=False):
     require(not path.is_symlink() and not path.parent.is_symlink()
             and path.parent.is_dir(), "FILESTASH_STATE_PATH_UNSAFE")
     data = json.loads(path.read_text("utf-8")) if path.exists() else {}
@@ -191,10 +293,33 @@ def reconcile(path=PATH, credential=None):
     middleware = data.get("middleware")
     require(connections in (None, [], target["connections"]),
             "FILESTASH_EXISTING_CONNECTIONS_CONFLICT")
-    if semantic_config(data, target):
+    general = data.get("general", {})
+    require(isinstance(general, dict), "FILESTASH_GENERAL_STATE_INVALID")
+    secret_seeded = False
+    # Pin the key BEFORE first boot. Filestash can otherwise encrypt the
+    # middleware using its pre-initialisation (empty) key.
+    if not general.get("secret_key"):
+        require(middleware in (None, {}) or
+                semantic_middleware(middleware, target["middleware"]),
+                "FILESTASH_SECRET_MISSING_WITH_UNKNOWN_MIDDLEWARE")
+        general["secret_key"] = "".join(
+            secrets.choice(string.ascii_letters + string.digits)
+            for _ in range(16))
+        data["general"] = general
+        secret_seeded = True
+    if semantic_config(data, target) and not secret_seeded:
         print("FILESTASH_SMB=UNCHANGED")
         return
-    if middleware not in (None, {}):
+    if middleware not in (None, {}) and not secret_seeded:
+        if repair_broken_idp:
+            # Fail closed unless this precise instance and precise runtime
+            # symptom match the known first-boot encryption defect.
+            try:
+                _repair_broken_idp(path, data, target)
+                return
+            except Blocked as error:
+                if str(error) != "FILESTASH_RECOVERY_NO_PROVEN_IDP_FAILURE":
+                    raise
         # Filestash encrypts both params at rest. The on-disk ciphertext
         # cannot be safely equated with our source JSON. Authenticate to the
         # running admin API and compare its DECRYPTED effective settings.
@@ -210,23 +335,9 @@ def reconcile(path=PATH, credential=None):
             "FILESTASH_EXISTING_CONNECTIONS_CONFLICT")
     for key, value in target.items():
         data[key] = value
-    output = (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode()
-    if path.exists() and path.read_bytes() == output:
+    if not _write_config(path, data):
         print("FILESTASH_SMB=UNCHANGED")
         return
-    user = pwd.getpwnam("filestash")
-    fd, stage = tempfile.mkstemp(prefix=".dh-smb-", dir=path.parent)
-    try:
-        os.fchmod(fd, 0o600)
-        os.fchown(fd, user.pw_uid, user.pw_gid)
-        with os.fdopen(fd, "wb") as stream:
-            stream.write(output)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(stage, path)
-    finally:
-        if os.path.exists(stage):
-            os.unlink(stage)
     print("FILESTASH_SMB=RECONCILED")
 
 
@@ -234,9 +345,11 @@ if __name__ == "__main__":
     try:
         parser = argparse.ArgumentParser()
         parser.add_argument("--credential-file", type=Path, required=True)
+        parser.add_argument("--repair-broken-idp", action="store_true")
         args = parser.parse_args()
         require(os.geteuid() == 0, "FILESTASH_ROOT_REQUIRED")
-        reconcile(credential=args.credential_file)
+        reconcile(credential=args.credential_file,
+                  repair_broken_idp=args.repair_broken_idp)
     except (OSError, ValueError, RuntimeError, UnicodeError) as error:
         # Never expose encrypted config, passwords, cookies, or HTTP response.
         code = str(error) if isinstance(error, Blocked) else "RUNTIME"
