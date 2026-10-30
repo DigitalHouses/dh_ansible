@@ -78,7 +78,11 @@ try:
         connection.close()
 except (OSError,sqlite3.Error,ValueError):
     pass
-result["zfs_healthy"]=run(["zpool","status","-x"])[1].strip()=="all pools are healthy"
+# Check the actual managed pool, not unrelated pools that may be imported.
+zfs_rc,zfs_out,_=run(["zpool","status","-x","serzhan-pool"])
+result["zfs_healthy"]=(zfs_rc==0 and
+    (zfs_out.strip()=="all pools are healthy" or
+     zfs_out.strip().endswith("is healthy")))
 result["zfs_pool_present"]=run(["zpool","list","-H","-o","name"])[1].splitlines()
 arc={}
 try:
@@ -154,34 +158,38 @@ try:
                            "bounded":checked>=5000}
 except (OSError,sqlite3.Error):
     result["plex_index"]={"status":"FAIL","missing":-1,"checked":0}
-# Existing Plex catalog entries can be present without a matched movie or
-# poster. Count metadata, never expose media names or download remote artwork.
-result["plex_movie_metadata"]={"status":"FAIL","movies":0,
-                               "missing_posters":0,"unmatched":0}
+# Inspect Plex's indexed movie media inside the owned media dataset only.
+# Accept both current and historical library subpaths, but never customer
+# documents or downloads outside the bounded media root.
+result["plex_movie_metadata"]={"status":"FAIL","reason":"DB_UNREADABLE",
+                               "movies":0,"missing_posters":0,"unmatched":0}
 try:
     conn=sqlite3.connect(db.as_uri()+"?mode=ro",uri=True,timeout=5)
     columns={row[1] for row in conn.execute("PRAGMA table_info(metadata_items)")}
-    required={"id","metadata_type","guid","thumb_url"}
-    if not required.issubset(columns):
-        raise sqlite3.DatabaseError("PLEX_METADATA_SCHEMA_DRIFT")
-    poster_columns=["NULLIF(mi.thumb_url,'')"]
-    if "user_thumb_url" in columns:
-        poster_columns.append("NULLIF(mi.user_thumb_url,'')")
-    poster_expr="COALESCE("+",".join(poster_columns)+",'')"
-    movie_rows=conn.execute(
-        "SELECT DISTINCT mi.id, mi.guid, "+poster_expr+
-        " FROM metadata_items mi "
-        "JOIN media_items f ON f.metadata_item_id=mi.id "
-        "JOIN media_parts part ON part.media_item_id=f.id "
-        "WHERE mi.metadata_type=1 AND part.file LIKE ? LIMIT 5000",
-        ("/serzhan-pool/media/movies/%",)).fetchall()
+    required={"id","metadata_type","guid"}
+    poster_cols=[c for c in ("thumb_url","user_thumb_url") if c in columns]
+    if not required.issubset(columns) or not poster_cols:
+        result["plex_movie_metadata"]["reason"]="DB_SCHEMA_MISMATCH"
+    else:
+        poster_expr="COALESCE("+",".join(
+            "NULLIF(mi."+col+",'')" for col in poster_cols)+",'')"
+        movie_rows=conn.execute(
+            "SELECT DISTINCT mi.id, mi.guid, "+poster_expr+
+            " FROM metadata_items mi "
+            "JOIN media_items f ON f.metadata_item_id=mi.id "
+            "JOIN media_parts part ON part.media_item_id=f.id "
+            "WHERE mi.metadata_type=1 AND part.file LIKE ? LIMIT 5000",
+            ("/serzhan-pool/media/%",)).fetchall()
+        unmatched=sum(not guid or str(guid).startswith(
+                      ("local://","com.plexapp.agents.none"))
+                      for _,guid,_ in movie_rows)
+        missing=sum(not thumb for _,_,thumb in movie_rows)
+        result["plex_movie_metadata"]={
+            "status":"PASS" if movie_rows else "SKIP",
+            "reason":"FOUND" if movie_rows else "NO_INDEXED_MOVIE",
+            "movies":len(movie_rows),"missing_posters":missing,
+            "unmatched":unmatched}
     conn.close()
-    unmatched=sum(not guid or str(guid).startswith(("local://","com.plexapp.agents.none"))
-                  for _,guid,_ in movie_rows)
-    missing=sum(not thumb for _,_,thumb in movie_rows)
-    result["plex_movie_metadata"]={
-        "status":"PASS" if movie_rows else "SKIP",
-        "movies":len(movie_rows),"missing_posters":missing,"unmatched":unmatched}
 except (OSError,sqlite3.Error):
     pass
 print(json.dumps(result,ensure_ascii=True,separators=(",",":")))
@@ -285,7 +293,9 @@ def main():
         ("prowlarr",9696,"/"),("qbittorrent",8080,"/")):
         check("http_"+name,http_check(a.guest_ip,expected_port,path))
     check("filestash_smb_login_form",filestash_login_form(a.guest_ip))
-    check("zfs_pool_and_health",a.pool in guest.get("zfs_pool_present",[]) and guest.get("zfs_healthy") is True)
+    check("zfs_pool_and_health",a.pool in guest.get("zfs_pool_present",[]) and guest.get("zfs_healthy") is True,
+          "target_present="+str(a.pool in guest.get("zfs_pool_present",[]))+
+          " target_healthy="+str(guest.get("zfs_healthy") is True))
     arc=guest.get("arc",{})
     limit=768*1024*1024
     check("zfs_arc_limit_768",guest.get("arc_parameter")==limit and
@@ -335,13 +345,14 @@ def main():
               "checked="+str(idx.get("checked",0))+" missing="+str(idx.get("missing","?")))
     movie_meta=guest.get("plex_movie_metadata",{})
     if movie_meta.get("status")=="SKIP":
-        skip("plex_movie_posters","NO_IMPORTED_MOVIES_YET")
+        skip("plex_movie_posters","NO_INDEXED_MOVIE_IN_MEDIA_LIBRARY")
     else:
         check("plex_movie_posters",
               movie_meta.get("status")=="PASS" and
               movie_meta.get("missing_posters")==0 and
               movie_meta.get("unmatched")==0,
-              "movies="+str(movie_meta.get("movies",0))+
+              "reason="+str(movie_meta.get("reason","UNKNOWN"))+
+              " movies="+str(movie_meta.get("movies",0))+
               " missing_posters="+str(movie_meta.get("missing_posters","?"))+
               " unmatched="+str(movie_meta.get("unmatched","?")))
     try:
