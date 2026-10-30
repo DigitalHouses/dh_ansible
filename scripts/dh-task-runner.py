@@ -33,6 +33,7 @@ WORKER_SERVICE = "dh-pve-access-audit.service"
 WORKER_REQUEST = Path("/var/lib/semaphore/dh-pve-access-audit.request")
 LOCK_PATH = Path("/run/dh-ansible-task-runner.lock")
 LOG_DIR = Path("/var/log/dh-ansible-direct")
+DANGEROUS_SURVEY_VALUES = frozenset({"erase", "recreate", "destroy", "delete", "wipe", "reset"})
 CANONICAL_EXECUTABLE = Path(
     "/opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py")
 
@@ -216,6 +217,8 @@ def cli(argv: list[str] | None = None) -> int:
     parser.add_argument("--checkout", required=True, type=Path)
     parser.add_argument("--survey", action="append", default=[], help="catalog enum name=value")
     parser.add_argument("--execute", action="store_true", help="Actually run after preflight")
+    parser.add_argument("--approve-destructive", action="store_true",
+                        help="Additional guardrail; does not replace explicit owner approval")
     args = parser.parse_args(argv)
     require(os.geteuid() == 0, "ROOT_OWNED_RUNNER_SESSION_REQUIRED")
     check_trusted_launcher()
@@ -227,6 +230,10 @@ def cli(argv: list[str] | None = None) -> int:
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     entry = resolve_task(catalog, args.task)
     extras = parse_survey(entry.get("survey_vars"), args.survey)
+    dangerous = any(option.split("=", 1)[1] in DANGEROUS_SURVEY_VALUES
+                    for option in extras)
+    if args.execute and dangerous:
+        require(args.approve_destructive, "DESTRUCTIVE_SURVEY_APPROVAL_REQUIRED")
     source = checkout / entry["playbook"]
     secure_regular(source)
     require(source.resolve().is_relative_to(checkout.resolve()),
