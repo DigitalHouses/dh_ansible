@@ -1,0 +1,53 @@
+---
+# Plex may miss filesystem-change events; periodic scans are the fallback.
+# Changes only when needed, never rewrites tokens in application logs.
+- name: Install protected native Plex scan preferences reconciler
+  ansible.builtin.copy:
+    src: dh-plex-scan-settings.py
+    dest: /usr/local/sbin/dh-plex-scan-settings
+    owner: root
+    group: root
+    mode: '0700'
+
+- name: Inspect Plex automatic and periodic scanning policy
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-plex-scan-settings, --mode, check]
+  register: dh_plex_scan_before
+  changed_when: false
+
+- name: Require known Plex scanning state before editing
+  ansible.builtin.assert:
+    that:
+      - dh_plex_scan_before.stdout in ['MEDIA_PLEX_SCAN=READY', 'MEDIA_PLEX_SCAN=NEEDS_UPDATE']
+    fail_msg: MEDIA_PLEX_SCAN_STATE_INVALID
+
+- name: Stop Plex only when its scan policy must be reconciled
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    state: stopped
+  when: dh_plex_scan_before.stdout == 'MEDIA_PLEX_SCAN=NEEDS_UPDATE'
+
+- name: Set Plex scanning policy without changing account credentials
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-plex-scan-settings, --mode, apply]
+  register: dh_plex_scan_applied
+  changed_when: dh_plex_scan_applied.stdout == 'MEDIA_PLEX_SCAN=CHANGED'
+  when: dh_plex_scan_before.stdout == 'MEDIA_PLEX_SCAN=NEEDS_UPDATE'
+
+- name: Restore Plex media service after possible policy update
+  ansible.builtin.systemd_service:
+    name: plexmediaserver.service
+    enabled: true
+    state: started
+
+- name: Verify effective Plex scanning preferences
+  ansible.builtin.command:
+    argv: [/usr/local/sbin/dh-plex-scan-settings, --mode, check]
+  register: dh_plex_scan_after
+  changed_when: false
+
+- name: Refuse disabled automatic or periodic Plex media scanning
+  ansible.builtin.assert:
+    that:
+      - dh_plex_scan_after.stdout == 'MEDIA_PLEX_SCAN=READY'
+    fail_msg: MEDIA_PLEX_AUTO_SCAN_CONFIGURATION_FAILED

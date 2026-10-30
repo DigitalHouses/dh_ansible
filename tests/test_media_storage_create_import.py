@@ -198,6 +198,7 @@ class GuestLifecycle(unittest.TestCase):
             with (patch.object(m.Path, "exists", side_effect=lambda: not removed[0]),
                   patch.object(m, "config", return_value=state),
                   patch.object(m, "old_guest_matches") as preflight,
+                  patch.object(m, "run", return_value="[]"),
                   patch.object(m, "qm", side_effect=qm)):
                 with redirect_stdout(io.StringIO()):
                     m.reconcile_media_vm_lifecycle(

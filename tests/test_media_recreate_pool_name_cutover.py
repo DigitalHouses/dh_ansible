@@ -21,6 +21,7 @@ def data(source=True):
                 "sata_controller": "0000:00:17.0"},
         "storage": {
             "pool_name": "demo-pool",
+            "import_pool_guid": NEW_GUID,
             "disk": {"serial": "S2PWNX0H603177N",
                      "wwn": "0x5002538d41046527",
                      "size_bytes": 1000204886016},
@@ -99,3 +100,13 @@ def test_unrecognized_managed_pool_name_blocks():
         assert False
     except m.Blocked as e:
         assert str(e) == "MANAGED_ZFS_SOURCE_NOT_APPROVED"
+
+
+def test_recreate_rejects_changed_existing_pool_guid_before_vm_delete():
+    item = data()
+    item["storage"]["import_pool_guid"] = "1111111111111111"
+    try:
+        check(item, "demo-pool\t" + NEW_GUID)
+        assert False
+    except m.Blocked as error:
+        assert str(error) == "MANAGED_ZFS_IMPORT_GUID_DRIFT"

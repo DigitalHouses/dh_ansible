@@ -1,0 +1,70 @@
+---
+# Proxmox PCI passthrough iGPU is visible during the FIRST Debian boot.
+# The Debian cloud image initially lacks Intel DMC/GuC firmware. A driver
+# probed before firmware installation may remain wedged until the NEXT boot.
+# /dev/dri/renderD128 and Jellyfin's qsv XML are not proof of usable video.
+- name: Require installed Intel graphics firmware blobs before GPU acceptance
+  ansible.builtin.stat:
+    path: "/lib/firmware/i915/{{ item }}"
+  loop:
+    - adlp_dmc.bin
+    - tgl_guc_70.bin
+  register: media_gpu_firmware
+
+- name: Reject incomplete Intel firmware before continuing
+  ansible.builtin.assert:
+    that:
+      - media_gpu_firmware.results | map(attribute='stat.exists') | list == [true, true]
+    fail_msg: MEDIA_INTEL_FIRMWARE_MISSING
+
+- name: Probe Intel VA-API after the firmware installation
+  ansible.builtin.command:
+    argv: [vainfo, --display, drm, --device, /dev/dri/renderD128]
+  environment:
+    LIBVA_DRIVER_NAME: iHD
+  register: media_gpu_early_vaapi
+  changed_when: false
+  failed_when: false
+
+- name: Reboot only if GPU cannot initialize with newly installed firmware
+  ansible.builtin.reboot:
+    msg: "DigitalHouses Intel GPU firmware activation (Media Server)"
+    reboot_timeout: 420
+    connect_timeout: 8
+    post_reboot_delay: 8
+  when: media_gpu_early_vaapi.rc != 0
+
+- name: Wait for Intel DRM render node after possible firmware reboot
+  ansible.builtin.wait_for:
+    path: /dev/dri/renderD128
+    state: present
+    timeout: 90
+
+- name: Verify hardware VA-API initialized on the effective boot
+  ansible.builtin.command:
+    argv: [vainfo, --display, drm, --device, /dev/dri/renderD128]
+  environment:
+    LIBVA_DRIVER_NAME: iHD
+  register: media_gpu_vaapi
+  changed_when: false
+  failed_when: false
+
+- name: Reject wedged or unusable Intel Quick Sync
+  ansible.builtin.assert:
+    that:
+      - media_gpu_vaapi.rc == 0
+      - "'VAProfileH264' in media_gpu_vaapi.stdout"
+    fail_msg: MEDIA_INTEL_GPU_RUNTIME_NOT_FUNCTIONAL
+
+- name: Inspect current boot for GuC failure and GPU wedging
+  ansible.builtin.command:
+    argv: [journalctl, -k, -b, --no-pager]
+  register: media_gpu_boot_log
+  changed_when: false
+
+- name: Require no Intel GPU firmware initialization failure on current boot
+  ansible.builtin.assert:
+    that:
+      - "'declaring it wedged' not in media_gpu_boot_log.stdout"
+      - "'GuC initialization failed' not in media_gpu_boot_log.stdout"
+    fail_msg: MEDIA_INTEL_GPU_BOOT_WEDGED

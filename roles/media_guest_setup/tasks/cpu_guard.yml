@@ -13,7 +13,7 @@
 
       [Slice]
       CPUAccounting=yes
-      CPUQuota=150%
+      CPUQuota=100%
   register: dh_media_cpu_slice_file
 
 - name: Ensure systemd override directories for both players
@@ -70,10 +70,10 @@
   register: dh_media_cpu_service_slices
   changed_when: false
 
-- name: Verify both players share exactly 150 percent of one CPU budget
+- name: Verify both players share exactly 100 percent of one CPU budget
   ansible.builtin.assert:
     that:
-      - dh_media_cpu_cgroup_max.stdout == '150000 100000'
+      - dh_media_cpu_cgroup_max.stdout == '100000 100000'
       - dh_media_cpu_service_slices.results | map(attribute='stdout') | unique | list == ['dhtranscode.slice']
     fail_msg: MEDIA_TRANSCODE_SHARED_CPU_BUDGET_NOT_APPLIED
 
@@ -81,7 +81,7 @@
   ansible.builtin.debug:
     msg:
       media_transcode_cpu_limit: PASS
-      shared_cpu_quota: '150%'
+      shared_cpu_quota: '100%'
       protected_services: [plexmediaserver, jellyfin]
       other_guest_services: UNCHANGED
-      pve_cpulimit: UNCHANGED
+      pve_cpulimit: '150% is reconciled by protected PVE worker'
