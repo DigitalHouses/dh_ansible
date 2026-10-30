@@ -1,5 +1,7 @@
 # Media Server: запуск Semaphore и прямой инженерный fallback
 
+**Обязательная точка входа для AI:** [Единый операционный runbook](ai-agent-execution.md). Здесь только особенности медиасервера, прежние инциденты и проверки; команды, release-publishing и общий порядок исполнения поддерживаются **в одном документе**, не в истории чатов.
+
 **Область:** задача `80-Медиасервер · Развёртывание`, runner Ansible/Semaphore и защищённый PVE worker.  
 **Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).  
 **Статус:** подтверждённый способ исполнения на пилотном site runner; **не** универсальное разрешение на операции с production.
@@ -15,48 +17,11 @@
 
 Исторический журнал — **только доказательство существования пути**, не готовое основание повторять прежние параметры, Git SHA, destructive-политику или правовые полномочия.
 
-## Порядок действий AI-агента или инженера
+## Запуск task №80 / Acceptance №81
 
-1. **Сначала live-state.** Проверить, нет ли уже выполняющейся Task №80, другого прямого Ansible-процесса или worker-запроса. Сверить VMID, VM status, существующий pool GUID и WWN, NFS/backup-зависимости, а также явно утверждённые `media_vm_action` и `media_raw_disk_action`. Не запускать второй write параллельно.
-2. **Сначала штатная точка входа.** Если доступен разрешённый механизм создания Task через интерфейс или штатный API Semaphore, применять шаблон №80 с двумя независимыми survey-параметрами. Не пытаться подменить UI-запуск записью в SQLite.
-3. **Если API-запуск недоступен, проверить проверенный прямой путь.** Запускать **тот же** `playbooks/plan-pve-media-vm.yml` на авторизованном site runner от локального UNIX-пользователя `semaphore`, через установленный Ansible virtualenv, с точным site inventory и pinned checkout. Он сам делает `audit → plan → approved apply → verify` через root-owned watcher. **Не** выполнять `dh-pve-media-deploy` напрямую, не читать/передавать root-only SSH-ключи в `semaphore`, не обходить nonce/SHA-проверки.
-4. **Любая блокировка безопасности удалённого инструмента — STOP.** Не обходить отказ через иной инструмент, shell-обёртку, API-токен, ручную запись worker-request или повышенные права. Отдельно сообщить, что блокируется: API-вызов, shell launch, авторизация OS или сам playbook. Пользователю можно предложить штатный Run из Semaphore.
-5. **После запуска** зафиксировать exact checkout Git SHA, site, approved actions, способ запуска, путь к журналу, nonce и результат root-worker; проверить реальную VM/ZFS/GPU и отдельно выполнить acceptance №81. Прямой запуск **не создаёт запись Task в Semaphore** и его нельзя называть «Task #NN Success» без соответствующей записи.
+**Для всех этапов обязательно использовать [единый runbook AI](ai-agent-execution.md)**: preflight → совпадение pinned release checkout/worker → штатный UI/API **или** разрешённый прямой запуск того же playbook от `semaphore` → проверка nonce/result → independent Acceptance №81. Нельзя выполнять `dh-pve-media-deploy` напрямую или игнорировать security-deny.
 
-## Минимальный прямой запуск (только при разрешённом доступе)
-
-Ниже **операторский шаблон**, а не команда, разрешающая очистку диска. Его можно применять исключительно после подтверждения целевого site, явного approval для выбранных действий и отсутствия другого запуска. Значения `SITE_ID`, `CODE_DIR`, `VM_ACTION`, `DISK_ACTION` берутся из **проверенного live-state и утверждённого Fleet**, а не из сохранённого примера.
-
-```bash
-# На авторизованном runner под root (команды Ansible исполняются от semaphore).
-set -euo pipefail
-
-SITE_ID="<verified-site-id>"
-CODE_DIR="/var/lib/semaphore/<verified-pinned-checkout>"
-VM_ACTION="keep"       # create | keep | recreate; только явно утверждённый выбор
-DISK_ACTION="import"   # import | erase; erase требует отдельного approval
-INV="/var/lib/ansible/site-data/$SITE_ID/hosts.yml"
-LOG="/var/log/dh-media-direct-$(date -u +%Y%m%dT%H%M%SZ).log"
-
-test -f "$INV"
-test -f "$CODE_DIR/playbooks/plan-pve-media-vm.yml"
-test -d "$CODE_DIR/roles"
-test "$(runuser -u semaphore -- git -C "$CODE_DIR" rev-parse HEAD | wc -c)" -eq 41
-# До apply независимо проверить: отсутствие параллельного запуска, Fleet
-# identity/approval, совпадение checkout SHA с staged worker release SHA.
-# Эти проверки обязательны; строки выше их НЕ заменяют.
-
-(
-  cd "$CODE_DIR"
-  runuser -u semaphore -- env "ANSIBLE_ROLES_PATH=$CODE_DIR/roles" \
-    /opt/ansible/venv/bin/ansible-playbook \
-    -i "$INV" playbooks/plan-pve-media-vm.yml \
-    -e "media_vm_action=$VM_ACTION" \
-    -e "media_raw_disk_action=$DISK_ACTION"
-) 2>&1 | tee "$LOG"
-```
-
-**Важно:** `set -o pipefail` сохраняет ошибку Ansible при `tee`. Не добавлять `--ask-pass` или пароли в команду/логи. PVE secrets и приватный Fleet Vault остаются за установленной границей доступа. Не запускать `--check` как замену аппаратному preflight.
+Для media VM: `playbooks/plan-pve-media-vm.yml`, **два независимых параметра** `media_vm_action` (create/keep/recreate) и `media_raw_disk_action` (import/erase); для обновления приложений на существующей VM — `keep + import`, если live-state и Fleet подтверждают отсутствие разрушающих действий. Direct запуск не образует запись Semaphore Task. Пример команд есть **только в едином runbook**.
 
 ## Контракт реализации и диагностика
 
