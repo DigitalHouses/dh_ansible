@@ -697,7 +697,7 @@ def fetch_site_inventory(checkout, fleet_sha, env, site):
 
 
 def verify_runner_network(checkout: Path, site: str, cidr: str, gateway: str) -> None:
-    """Require the launcher's address to match pinned, site-scoped Fleet data."""
+    """Preserve .231 default; permit only explicitly documented site exception."""
     runner = checkout.parent / "fleet-detail" / "inventories" / site / "runner.yml"
     if runner.is_symlink() or not runner.is_file() or runner.stat().st_size > 65536:
         raise Blocked("Pinned site runner inventory unavailable")
@@ -706,6 +706,10 @@ def verify_runner_network(checkout: Path, site: str, cidr: str, gateway: str) ->
         ips = re.findall(r"(?m)^    ipv4: ([0-9./]+)$", body)
         gateways = re.findall(r"(?m)^    gateway: ([0-9.]+)$", body)
         vmids = re.findall(r"(?m)^  vmid: ([0-9]+)$", body)
+        exceptions = re.findall(r"(?m)^    runner_ipv4_exception: ([0-9./]+)$", body)
+        reasons = [line.partition(": ")[2].strip().strip(chr(34))
+                   for line in body.splitlines()
+                   if line.startswith("    runner_ipv4_exception_reason: ")]
         if len(ips) != 1 or len(gateways) != 1 or vmids != [str(CTID)]:
             raise ValueError("Ambiguous site runner network")
         pinned_ip = ipaddress.IPv4Interface(ips[0])
@@ -713,10 +717,14 @@ def verify_runner_network(checkout: Path, site: str, cidr: str, gateway: str) ->
         if (pinned_ip != requested_ip
                 or ipaddress.IPv4Address(gateways[0]) != ipaddress.IPv4Address(gateway)):
             raise ValueError("Launcher differs from pinned Fleet runner network")
-        # Preserve the original .231 rule. Only an explicit per-site Fleet
-        # exception may authorize a different runner IP on a shared LAN.
-        exceptions = re.findall(r"(?m)^    runner_ipv4_exception: ([0-9./]+)$", body)
-        reasons = re.findall(r'(?m)^    runner_ipv4_exception_reason: "([^"\\n]+)"
+        standard = ipaddress.IPv4Address(int(requested_ip.network.network_address) + 231)
+        if requested_ip.ip == standard:
+            if exceptions or reasons:
+                raise ValueError("Standard .231 runner must not declare an exception")
+        elif (exceptions != [str(requested_ip)] or len(reasons) != 1
+              or not 16 <= len(reasons[0]) <= 200):
+            raise ValueError("Nonstandard runner IP requires documented Fleet exception")
+    except (UnicodeError, ValueError, OSError) as error:
         raise Blocked("Site runner address must match pinned Fleet inventory") from error
     print(f"SITE_RUNNER_NETWORK=PASS site={site} ip={cidr}", flush=True)
 
