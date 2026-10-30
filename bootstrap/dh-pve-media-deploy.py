@@ -97,8 +97,16 @@ def check(site, data, pve):
          "STATIC_IP_SUBNET_MISMATCH")
     need(vmid == 2000 + int(ip.split(".")[-1].split("/")[0]), "VMID_IP_MISMATCH")
     res = data.get("resources", {})
-    need(1 <= int(res.get("cores", 4)) <= 8 and 2048 <= int(res.get("memory_mb", 4096)) <= 8192
-         and 32 <= int(res.get("disk_gb", 64)) <= 256, "VM_RESOURCES_INVALID")
+    # The customer's protected home automation VM has precedence over media.
+    # Do not accept silent defaults, particularly on a fresh recreate.
+    need(res.get("cores") == 2 and res.get("memory_mb") == 4096
+         and res.get("disk_gb") == 64
+         and res.get("cpu_limit") == 1.5
+         and res.get("cpu_units") == 50
+         and res.get("ballooning") is False
+         and res.get("zfs_arc_max_mb") == 768
+         and res.get("transcode_cpu_limit") == 1.0,
+         "MEDIA_PROTECTED_RESOURCE_POLICY_INVALID")
     for dev in ("gpu", "sata_controller"):
         need(BDF_PATTERN.fullmatch(data["pci"][dev]) is not None,
              "PCI_ADDRESS_INVALID")
@@ -225,6 +233,22 @@ def ensure_lifecycle(vmid, data):
         qm("set", vmid, "--onboot", wanted_boot)
     if current.get("vga", "serial0") != display:
         qm("set", vmid, "--vga", display)
+    res = data["resources"]
+    wanted = {
+        "cores": str(res["cores"]),
+        "memory": str(res["memory_mb"]),
+        "balloon": "0",
+        "cpulimit": str(res["cpu_limit"]),
+        "cpuunits": str(res["cpu_units"]),
+    }
+    for field, value in wanted.items():
+        # No implicit VM recreation. A running guest may need a later
+        # controlled reboot for changes to its active CPU topology.
+        if current.get(field) != value:
+            qm("set", vmid, "--" + field, value)
+    actual = config(vmid)
+    need(all(actual.get(key) == val for key, val in wanted.items()),
+         "MEDIA_PVE_RESOURCE_POLICY_NOT_APPLIED")
 
 
 def ensure_config(vmid, site, data):
@@ -426,8 +450,11 @@ def apply(site, vm_action, disk_action):
     if not existing:
         qm("create", vmid, "--name", name,
            "--ostype", "l26", "--machine", "q35", "--bios", "seabios",
-           "--cores", str(data.get("resources", {}).get("cores", 4)),
-           "--memory", str(data.get("resources", {}).get("memory_mb", 4096)),
+           "--cores", str(data["resources"]["cores"]),
+           "--memory", str(data["resources"]["memory_mb"]),
+           "--balloon", "0",
+           "--cpulimit", str(data["resources"]["cpu_limit"]),
+           "--cpuunits", str(data["resources"]["cpu_units"]),
            "--scsihw", "virtio-scsi-single",
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
            "--vga", media_display(data),
