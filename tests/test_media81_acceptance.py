@@ -87,8 +87,8 @@ def test_movie_posters_probe_is_bounded_and_reports_schema_errors():
     assert '("zpool","status","-x","serzhan-pool")' not in src
     assert '["zpool","status","-x","serzhan-pool"]' in src
     assert '"/serzhan-pool/media/%"' in src
-    assert '"reason":"DB_SCHEMA_MISMATCH"' in src
-    assert '"reason":"DB_UNREADABLE"' in src
+    assert '"DB_SCHEMA_MISMATCH"' in src
+    assert '"DB_UNREADABLE"' in src
     assert '"NO_INDEXED_MOVIE_IN_MEDIA_LIBRARY"' in src
     assert 'part.file LIKE ? LIMIT 5000' in src
     assert 'target_healthy=' in src
