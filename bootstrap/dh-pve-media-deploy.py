@@ -423,7 +423,7 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
              "DISK_ERASE_NOT_APPROVED_IN_FLEET")
     # The VM itself serves Proxmox's NFS backup storage. Refuse to remove it
     # during a running vzdump job. The job schedule is left untouched.
-    active_pve_tasks = json.loads(run("/usr/sbin/pvesh", "get",
+    active_pve_tasks = json.loads(run("/usr/bin/pvesh", "get",
                                        "/nodes/" + run("/usr/bin/hostname", "-s") + "/tasks",
                                        "--source", "active",
                                        "--output-format", "json"))
