@@ -50,6 +50,7 @@ def test_worker_detects_wrong_commit_or_mixed_files(tmp_path, monkeypatch):
         "playbooks/setup-pve-media-guest.yml": "guest",
         "playbooks/media-acceptance-worker.yml": "media81",
         "scripts/media-acceptance.py": "read-only",
+        "scripts/dh-task-runner.py": "generic-catalog-only",
     }
     for index in range(30):
         payloads[f"roles/media_guest_setup/files/example{index}.txt"] = str(index)
