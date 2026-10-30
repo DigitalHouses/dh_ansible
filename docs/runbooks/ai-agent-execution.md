@@ -83,6 +83,100 @@ python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED
 
 Это **проверенная последовательность из журналов**, а не предоставление AI-агенту права на произвольную замену root-owned файлов. Если у текущего подключения или политики нет разрешения выполнить публикацию, остановиться и предложить штатный операторский запуск. Не придумывать альтернативный self-update worker.
 
+### Рабочий пример точечного staging на существующем runner
+
+Это **операторский reference** исторической операции от 30.10.2026 (без вызова полного Bootstrap), **не автоматическое разрешение**. Исполняется только из уже авторизованной root-сессии site runner, после §2, явного approval на замену worker и проверки **неизменности состава staged assets** между старой и новой ревизиями. Если функция `stage_pve_access_audit()` добавляла/удаляла пути, **не использовать** старую asset map: остановиться и выполнить новое согласованное staging.
+
+Значения `NEW_SHA`, `OLD_SHA`, `CODE_DIR` оператор подставляет из фактического Git/Fleet/manifest, не из истории. Ниже нет ни SSH-команд к PVE, ни секретов; target — **только** внутренний pinned worker, не media VM.
+
+```bash
+# Проверки и неизменяемые входы перед root-публикацией.
+NEW_SHA="<verified-full-40-char-sha>"
+OLD_SHA="<current-manifest-40-char-sha>"
+CODE_DIR="/root/<verified-clean-staging-checkout>"
+test "$(git -C "$CODE_DIR" rev-parse HEAD)" = "$NEW_SHA"
+test -z "$(git -C "$CODE_DIR" status --porcelain)"
+test -z "$(git -C "$CODE_DIR" diff "$OLD_SHA" "$NEW_SHA" -- bootstrap/semaphore-host-install.py)"
+python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$OLD_SHA"
+test ! -e /var/lib/semaphore/dh-pve-access-audit.request
+test "$(systemctl is-active dh-pve-access-audit.service || true)" != active
+test "$(ps -eo args | grep -Ec '^[^ ]*ansible-playbook .*[p]lan-pve-media-vm.yml' || true)" = 0
+
+# После подтверждения отсутствия параллельных task/worker и approval:
+NEW_SHA="$NEW_SHA" OLD_SHA="$OLD_SHA" CODE_DIR="$CODE_DIR" python3 - <<'PY'
+import hashlib, json, os, shutil, stat, subprocess, tempfile
+from pathlib import Path
+
+new_sha, old_sha = os.environ["NEW_SHA"], os.environ["OLD_SHA"]
+src = Path(os.environ["CODE_DIR"])
+dst = Path("/opt/digitalhouses/bootstrap/pve-access")
+manifest = dst / ".media-worker-release.json"
+request = Path("/var/lib/semaphore/dh-pve-access-audit.request")
+external = {
+    "bootstrap/pve-access-audit-request.sh": Path("/usr/local/sbin/dh-pve-access-audit"),
+    "bootstrap/dh-pve-media-release-verify.py": Path("/usr/local/sbin/dh-pve-media-release-verify"),
+}
+def run(*args):
+    subprocess.run(args, check=True, capture_output=True)
+assert os.geteuid() == 0
+assert subprocess.check_output(["git", "-C", str(src), "rev-parse", "HEAD"],
+                               text=True).strip() == new_sha
+assert not request.exists()
+assert subprocess.run(["systemctl", "is-active", "--quiet",
+                       "dh-pve-access-audit.service"]).returncode != 0
+before = json.loads(manifest.read_text())
+assert before["schema"] == 1 and before["commit"] == old_sha
+assert len(before["assets"]) >= 30
+# All asset destinations and their parent directories must already be trusted.
+for rel in before["assets"]:
+    item = Path(rel)
+    assert not item.is_absolute() and ".." not in item.parts
+    target = external.get(rel, dst / rel)
+    assert target.is_file() and not target.is_symlink()
+    assert target.stat().st_uid == 0
+    assert (src / rel).is_file() and not (src / rel).is_symlink()
+backup = Path(tempfile.mkdtemp(prefix="dh-media-worker-before-",
+                               dir="/root"))
+os.chmod(backup, 0o700)
+shutil.copytree(dst, backup / "pve-access")
+for rel, target in external.items():
+    shutil.copy2(target, backup / Path(rel).name)
+print("WORKER_BACKUP=" + str(backup), flush=True)
+
+# A failure before the new manifest is committed leaves an invalid mixed
+# release; verifier will fail closed. Do not deploy or conceal the failure.
+run("systemctl", "stop", "dh-pve-access-audit.path")
+try:
+    assert not request.exists()
+    assets = {}
+    for rel in sorted(before["assets"]):
+        raw = (src / rel).read_bytes()
+        target = external.get(rel, dst / rel)
+        mode = stat.S_IMODE(target.stat().st_mode)
+        with tempfile.NamedTemporaryFile(dir=target.parent, delete=False) as fh:
+            fh.write(raw)
+            staged = Path(fh.name)
+        os.chown(staged, 0, 0)
+        os.chmod(staged, mode)
+        os.replace(staged, target)
+        assets[rel] = hashlib.sha256(raw).hexdigest()
+    with tempfile.NamedTemporaryFile(dir=dst, delete=False) as fh:
+        fh.write((json.dumps({"schema": 1, "commit": new_sha,
+                              "assets": assets}, sort_keys=True) + "\n").encode())
+        stamped = Path(fh.name)
+    os.chown(stamped, 0, 0)
+    os.chmod(stamped, 0o600)
+    os.replace(stamped, manifest)  # Release stamp ALWAYS LAST
+    run("python3", "/usr/local/sbin/dh-pve-media-release-verify",
+        "--expected-commit", new_sha)
+finally:
+    run("systemctl", "start", "dh-pve-access-audit.path")
+print("WORKER_RELEASE=PASS", new_sha, flush=True)
+PY
+```
+
+**Предусловие, которое не заменяет этот код:** перечень assets между релизами должен быть одинаковым. Проверку `git diff OLD..NEW -- bootstrap/semaphore-host-install.py` использовать как строгий conservative gate: если файл менялся, необходимо ручное ревью контракта и другой утверждённый staging. Прерванный staging оставляет watcher включённым, но manifest verification обнаружит несогласованные файлы. В этом случае **не запускать** №80; использовать root-only backup и утверждённую процедуру rollback. Никаких «поправим SHA вручную».
+
 **Проверка после staging:**
 
 ```bash
