@@ -153,3 +153,13 @@ def test_launcher_is_not_published_as_a_general_root_command():
     assert "SURVEY_VALUE_NOT_ALLOWED" in source
     assert "WORKER_REQUEST_PENDING" in source
     assert "OTHER_ANSIBLE_RUNNING" in source
+
+
+def test_destructive_enum_requires_separate_explicit_guardrail():
+    src = SCRIPT.read_text()
+    assert '"erase"' in src
+    assert '"recreate"' in src
+    assert "DANGEROUS_SURVEY_VALUES" in src
+    assert 'args.execute and dangerous' in src
+    assert 'DESTRUCTIVE_SURVEY_APPROVAL_REQUIRED' in src
+    assert '--approve-destructive' in src
