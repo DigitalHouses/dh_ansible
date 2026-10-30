@@ -181,7 +181,7 @@ try:
     if record.get("type") != "file" or record.get("encoding") != "base64":
         raise ValueError("Pinned site network source missing")
     body = base64.b64decode("".join(record["content"].split()), validate=True)
-    digest = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\\0" + body).hexdigest()
+    digest = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\0" + body).hexdigest()
     if digest != record.get("sha"):
         raise ValueError("Pinned site runner identity mismatch")
     content = body.decode("utf-8")
