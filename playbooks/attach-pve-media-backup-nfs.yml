@@ -125,7 +125,7 @@
               and dh_existing_backup_storages[0].server == dh_backup_server
               and dh_existing_backup_storages[0].export == dh_backup_export
               and dh_existing_backup_storages[0].content == 'backup'
-              and dh_existing_backup_storages[0].options == 'vers=4.1'
+              and dh_existing_backup_storages[0].options == 'vers=3'
               and dh_existing_backup_storages[0].nodes == dh_backup_node
               and (dh_existing_backup_storages[0].disable | default(0) | int) == 0
             )
@@ -147,6 +147,9 @@
             and dh_existing_backup_mount.stdout.split()[1] in ['nfs', 'nfs4'])
         fail_msg: MEDIA_NFS_BACKUP_FOREIGN_MOUNT
 
+    # NFSv3 mounts the exact exported subdirectory; with NFSv4.1 the PVE
+    # root-squashed client cannot traverse the deliberately private parent
+    # /serzhan-pool/backups (2770). Keep owner/group ACLs private.
     - name: Register native backup-only NFS storage when absent
       ansible.builtin.command:
         argv:
@@ -163,7 +166,7 @@
           - --nodes
           - "{{ dh_backup_node }}"
           - --options
-          - vers=4.1
+          - vers=3
       when: dh_existing_backup_storages | length == 0
       register: dh_backup_storage_created
 
