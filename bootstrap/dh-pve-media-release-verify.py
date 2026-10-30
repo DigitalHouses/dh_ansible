@@ -44,6 +44,7 @@ def verify(expected_commit, *, root=WORKER_ROOT, manifest=MANIFEST, external=Non
     require("roles/media_guest_setup/files/dh-sambee-owner.py" in assets, "MISSING_SAMBEE")
     require("playbooks/setup-pve-media-guest.yml" in assets, "MISSING_PLAYBOOK")
     require("scripts/media-acceptance.py" in assets, "MISSING_MEDIA81_SCRIPT")
+    require("scripts/dh-task-runner.py" in assets, "MISSING_TASK_RUNNER")
     require("playbooks/media-acceptance-worker.yml" in assets, "MISSING_MEDIA81_WORKER")
     for relative, digest in assets.items():
         require(isinstance(relative, str) and
