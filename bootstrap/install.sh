@@ -4,9 +4,9 @@ set -Eeuo pipefail
 umask 077
 
 SITE=""
-CODE_RELEASE="cdd122444c7a0a22d0326596924bcf87eb823236"
-CODE_INSTALLER_BLOB="ba96d5e10d47736d819be975c2ad988d4d88fb6b"
-FLEET_RELEASE="e4cc4da268808f677a436eebd0635566381c6878"
+CODE_RELEASE="bc6ced273ec665e87e95c429845f00c3776972e4"
+CODE_INSTALLER_BLOB="0ef55b02d42101c3416541db793db653ebe45474"
+FLEET_RELEASE="deb6e49ab9f0295391088070467476fffdada68e"
 GH_VERSION="2.102.0"
 GH_SHA256="bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
 
@@ -162,23 +162,47 @@ with os.fdopen(fd, "wb") as output:
 print("DH_ANSIBLE_INSTALLER_SOURCE=VERIFIED")
 PY
 
-echo "=== READ NETWORK CONFIGURATION ==="
+echo "=== READ PINNED SITE RUNNER NETWORK ==="
+gh api "repos/DigitalHouses/dh_ansible_fleet_detail/contents/inventories/${SITE}/runner.yml?ref=${FLEET_RELEASE}" > "$WORK/runner.json"
 BRIDGE_IP=$(ip -4 -o addr show dev vmbr0 | awk '$3=="inet" {print $4}')
 DEFAULT_GW=$(ip -4 route show default | awk '$1=="default" && $2=="via" {print $3}')
-readarray -t NETWORK < <(python3 - "$BRIDGE_IP" "$DEFAULT_GW" <<'PY'
-import ipaddress,sys
+readarray -t NETWORK < <(python3 - "$BRIDGE_IP" "$DEFAULT_GW" "$WORK/runner.json" <<'PY'
+import base64
+import hashlib
+import ipaddress
+import json
+import pathlib
+import re
+import sys
 try:
-    interface = ipaddress.IPv4Interface(sys.argv[1])
-    gateway = ipaddress.IPv4Address(sys.argv[2])
-    assert interface.network.prefixlen == 24
-    assert gateway in interface.network
-    address = ipaddress.IPv4Address(int(interface.network.network_address) + 231)
-    assert address != interface.ip and address != gateway
-except (IndexError, ValueError, AssertionError):
-    raise SystemExit("BLOCKED: unsupported or ambiguous PVE LAN")
-print(interface.ip)
-print(str(address) + "/24")
-print(gateway)
+    bridge = ipaddress.IPv4Interface(sys.argv[1])
+    observed_gateway = ipaddress.IPv4Address(sys.argv[2])
+    record = json.loads(pathlib.Path(sys.argv[3]).read_text(encoding="utf-8"))
+    if record.get("type") != "file" or record.get("encoding") != "base64":
+        raise ValueError("Pinned site network source missing")
+    body = base64.b64decode("".join(record["content"].split()), validate=True)
+    digest = hashlib.sha1(b"blob " + str(len(body)).encode() + b"\\0" + body).hexdigest()
+    if digest != record.get("sha"):
+        raise ValueError("Pinned site runner identity mismatch")
+    content = body.decode("utf-8")
+    ips = re.findall(r"(?m)^    ipv4: ([0-9./]+)$", content)
+    gateways = re.findall(r"(?m)^    gateway: ([0-9.]+)$", content)
+    vmids = re.findall(r"(?m)^  vmid: ([0-9]+)$", content)
+    if len(ips) != 1 or len(gateways) != 1 or vmids != ["1231"]:
+        raise ValueError("Ambiguous runner inventory")
+    runner = ipaddress.IPv4Interface(ips[0])
+    desired_gateway = ipaddress.IPv4Address(gateways[0])
+    if (bridge.network.prefixlen != 24 or bridge.network != runner.network
+            or runner.ip in (bridge.ip, observed_gateway, bridge.network.network_address,
+                             bridge.network.broadcast_address)
+            or desired_gateway != observed_gateway
+            or desired_gateway not in bridge.network):
+        raise ValueError("Runner/PVE network mismatch")
+except (IndexError, KeyError, ValueError, AssertionError, UnicodeError) as exc:
+    raise SystemExit("BLOCKED: cannot verify site-scoped runner address: " + str(exc))
+print(bridge.ip)
+print(str(runner))
+print(desired_gateway)
 PY
 )
 if (( ${#NETWORK[@]} != 3 )); then
