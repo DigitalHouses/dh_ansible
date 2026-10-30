@@ -31,3 +31,10 @@ def test_gpu_helper_reload_restart_and_fresh_gpu_acceptance():
     assert "collected_at_epoch" in " ".join(str(x) for x in check["argv"])
     assert tasks[e]["retries"] >= 4
     assert "changed_when" in tasks[e]
+
+
+def test_media_role_pins_plex_agent_0_8_5_or_later_stable_release():
+    source = ROLE.read_text()
+    assert "digitalhouses_plex_agent-v0.8.5" in source
+    assert "digitalhouses_plex_agent-v0.8.0" not in source
+    assert "DIGITALHOUSES_SOURCE_REF: digitalhouses_plex_agent-v0.8.5" in source
