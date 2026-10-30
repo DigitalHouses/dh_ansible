@@ -80,3 +80,16 @@ def test_worker_is_report_only_and_does_not_install_software():
     report=next(t for t in y["tasks"] if t["name"].startswith("Store only"))
     assert report["ansible.builtin.copy"]["mode"]=="0640"
     assert report["ansible.builtin.copy"]["group"]=="semaphore"
+
+
+def test_movie_posters_probe_is_bounded_and_reports_schema_errors():
+    src=(ROOT/"scripts/media-acceptance.py").read_text()
+    assert '("zpool","status","-x","serzhan-pool")' not in src
+    assert '["zpool","status","-x","serzhan-pool"]' in src
+    assert '"/serzhan-pool/media/%"' in src
+    assert '"reason":"DB_SCHEMA_MISMATCH"' in src
+    assert '"reason":"DB_UNREADABLE"' in src
+    assert '"NO_INDEXED_MOVIE_IN_MEDIA_LIBRARY"' in src
+    assert 'part.file LIKE ? LIMIT 5000' in src
+    assert 'target_healthy=' in src
+    assert 'SELECT DISTINCT mi.id, mi.guid' in src
