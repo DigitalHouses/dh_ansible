@@ -24,6 +24,7 @@ import urllib.request
 
 PATH = Path("/opt/dh-filestash/data/state/config/config.json")
 BASE = "http://127.0.0.1:8334"
+BACKUP_ROOT = Path("/var/backups/digitalhouses/filestash")
 SECRET_RE = re.compile(r"^[a-zA-Z0-9]{6,8}$")
 
 
@@ -264,8 +265,16 @@ def _repair_broken_idp(path, data, target):
             "FILESTASH_RECOVERY_FILE_UNSAFE")
     original = path.read_bytes()
     # The original opaque state is never overwritten without a retained copy.
+    # Keep backups outside the service-writable state directory.
+    BACKUP_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
+    backup_meta = BACKUP_ROOT.lstat()
+    require(stat.S_ISDIR(backup_meta.st_mode) and
+            backup_meta.st_uid == 0 and
+            stat.S_IMODE(backup_meta.st_mode) == 0o700 and
+            not BACKUP_ROOT.is_symlink(),
+            "FILESTASH_RECOVERY_BACKUP_DIR_UNSAFE")
     fd, backup = tempfile.mkstemp(prefix=".dh-filestash-idp-backup-",
-                                  suffix=".json", dir=path.parent)
+                                  suffix=".json", dir=BACKUP_ROOT)
     try:
         os.fchmod(fd, 0o600)
         os.fchown(fd, 0, 0)
