@@ -13,6 +13,8 @@ ExecStart=/opt/{{ item.name }}/{{ item.name }} -nobrowser -data=/var/lib/{{ item
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
+# Allow the native Arr updater to finish its child process on restart.
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
