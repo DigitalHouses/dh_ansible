@@ -100,6 +100,7 @@ def test_native_radarr_sonarr_pinned_without_extra_semaphore_task():
     assert "User={{ item.slug }}" in template
     assert "/var/lib/{{ item.slug }}" in template
     assert "Restart=on-failure" in template
+    assert "KillMode=process" in template
     tasks = yaml.safe_load(yml)
     by_name = {task["name"]: task for task in tasks}
     grant = by_name["Allow each native Arr application to update only its own installation"]
