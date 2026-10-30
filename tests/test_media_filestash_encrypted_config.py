@@ -30,7 +30,7 @@ def native_form(values):
 def seed(directory,opaque=False):
     module=helper()
     data=module.desired()
-    data["general"]={"keep":"untouched"}
+    data["general"]={"keep":"untouched","secret_key":"testsecretkey123"}
     if opaque:
         data["middleware"]["identity_provider"]["params"]="encrypted:ciphertext:1"
         data["middleware"]["attribute_mapping"]["params"]="encrypted:ciphertext:2"
@@ -167,3 +167,90 @@ def test_foreign_disk_connections_block_before_admin_api(tmp_path):
         else:
             assert False,"Foreign connection must be preserved"
     assert path.read_bytes()==original
+
+
+def test_firstboot_seeds_stable_crypto_key_before_filestash_saves_middleware():
+    with tempfile.TemporaryDirectory() as temp:
+        mod=helper()
+        path=Path(temp)/"config.json"
+        path.write_text(json.dumps({"general":{"keep":"owner-choice"}}))
+        fake=SimpleNamespace(pw_uid=0,pw_gid=0)
+        with mock.patch.object(mod.pwd,"getpwnam",return_value=fake):
+            mod.reconcile(path=path)
+            first=json.loads(path.read_text())
+            key=first["general"]["secret_key"]
+            assert len(key)==16 and key.isalnum()
+            assert mod.semantic_config(first,mod.desired())
+            mod.reconcile(path=path)
+            assert json.loads(path.read_text())["general"]["secret_key"]==key
+        assert first["general"]["keep"]=="owner-choice"
+
+
+def test_repair_exact_broken_idp_preserves_unrelated_config_and_root_only_backup():
+    with tempfile.TemporaryDirectory() as temp:
+        mod,path=seed(temp,True)
+        original=json.loads(path.read_text())
+        original["middleware"]["identity_provider"]["params"]="v"+("A"*80)
+        original["middleware"]["attribute_mapping"]["params"]="v"+("B"*80)
+        original["general"]["custom"]="owner-data"
+        path.write_text(json.dumps(original))
+        before=path.read_bytes()
+        current_uid=path.stat().st_uid
+        fake=SimpleNamespace(pw_uid=current_uid,pw_gid=path.stat().st_gid)
+        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=True), \\
+             mock.patch.object(mod.pwd,"getpwnam",return_value=fake), \\
+             mock.patch.object(mod,"effective_admin_config",side_effect=AssertionError("repair should not login")):
+            mod.reconcile(path=path,credential=Path(temp)/"unused",
+                          repair_broken_idp=True)
+        after=json.loads(path.read_text())
+        assert mod.semantic_config(after,mod.desired())
+        assert after["general"]==original["general"]
+        backups=list(Path(temp).glob(".dh-filestash-idp-backup-*.json"))
+        assert len(backups)==1
+        assert backups[0].read_bytes()==before
+        assert backups[0].stat().st_mode & 0o777==0o600
+
+
+def test_repair_refuses_foreign_idp_even_when_error_is_present():
+    with tempfile.TemporaryDirectory() as temp:
+        mod,path=seed(temp,True)
+        current=json.loads(path.read_text())
+        current["middleware"]["identity_provider"]["type"]="openid"
+        path.write_text(json.dumps(current))
+        before=path.read_bytes()
+        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=True):
+            try:
+                mod.reconcile(path=path,repair_broken_idp=True)
+            except mod.Blocked as exc:
+                assert str(exc)=="FILESTASH_RECOVERY_FOREIGN_MIDDLEWARE"
+            else:
+                assert False,"Foreign IdP must not be rewritten"
+        assert path.read_bytes()==before
+        assert list(Path(temp).glob(".dh-filestash-idp-backup-*.json"))==[]
+
+
+def test_repair_mode_preserves_healthy_encrypted_middleware():
+    with tempfile.TemporaryDirectory() as temp:
+        mod,path=seed(temp,True)
+        initial=path.read_bytes()
+        with mock.patch.object(mod,"broken_idp_entrypoint",return_value=False), \\
+             mock.patch.object(mod,"passport",return_value="sample88"), \\
+             mock.patch.object(mod,"effective_admin_config",
+                               return_value=native_form(mod.desired())):
+            mod.reconcile(path=path,credential=Path(temp)/"unused",
+                          repair_broken_idp=True)
+        assert path.read_bytes()==initial
+        assert list(Path(temp).glob(".dh-filestash-idp-backup-*.json"))==[]
+
+
+def test_task80_checks_real_filestash_login_beyond_http_root():
+    import yaml
+    tasks=yaml.safe_load((ROOT/"roles/media_guest_setup/tasks/apps.yml").read_text())
+    by={t["name"]:t for t in tasks}
+    assert "--repair-broken-idp" in by[
+        "Reconcile Filestash SMB passthrough without creating web users"
+    ]["ansible.builtin.command"]["argv"]
+    auth=by["Verify actual Filestash SMB username and password entrypoint"]
+    assert auth["ansible.builtin.uri"]["follow_redirects"]=="none"
+    assert auth["ansible.builtin.uri"]["status_code"]==200
+    assert "FILESTASH_SMB_IDP_LOGIN_BROKEN" in str(tasks)
