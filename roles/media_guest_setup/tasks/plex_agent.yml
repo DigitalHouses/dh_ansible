@@ -74,6 +74,62 @@
     'source = digitalhouses_plex_agent-v0.8.0' not in (media_plex_agent_installed_build.content | default('') | b64decode)
   no_log: true
 
+# intel_gpu_top uses the i915 PMU. Debian 13 defaults to
+# perf_event_paranoid=3, so the unprivileged GPU helper requires CAP_PERFMON.
+# Keep this a systemd drop-in: the pinned upstream installer owns the base unit.
+- name: Create dedicated Plex Agent GPU helper override directory
+  ansible.builtin.file:
+    path: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d
+    state: directory
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Grant only PMU performance monitoring capability to Plex GPU helper
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d/20-dh-intel-pmu.conf
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      [Service]
+      # Reset upstream CAP_SYS_ADMIN: GPU utilization only needs CAP_PERFMON.
+      CapabilityBoundingSet=
+      CapabilityBoundingSet=CAP_PERFMON
+      AmbientCapabilities=
+      AmbientCapabilities=CAP_PERFMON
+  register: media_plex_agent_gpu_pmu_override
+
+- name: Reload systemd unit configuration after GPU helper override changes
+  ansible.builtin.systemd_service:
+    daemon_reload: true
+  when: media_plex_agent_gpu_pmu_override.changed
+
+- name: Start Plex GPU helper with the corrected minimal PMU capability
+  ansible.builtin.systemd_service:
+    name: digitalhouses_plex_agent_gpu_helper.service
+    enabled: true
+    state: "{{ 'restarted' if media_plex_agent_gpu_pmu_override.changed else 'started' }}"
+
+- name: Wait for a fresh, usable Intel GPU PMU sample from the helper
+  ansible.builtin.command:
+    argv:
+      - python3
+      - -c
+      - >-
+        import json,time;
+        p='/var/lib/digitalhouses_plex_agent/gpu_state.json';
+        x=json.load(open(p));
+        assert x.get('supported') is True and x.get('available') is True
+        and x.get('status') == 'ok'
+        and time.time()-float(x.get('collected_at_epoch',0)) < 30,
+        'MEDIA_PLEX_AGENT_GPU_PMU_UNAVAILABLE'
+  register: media_plex_agent_gpu_pmu_check
+  retries: 10
+  delay: 3
+  until: media_plex_agent_gpu_pmu_check.rc == 0
+  changed_when: false
+
 - name: Check service account can access its protected Plex Agent configuration
   ansible.builtin.command:
     argv:
