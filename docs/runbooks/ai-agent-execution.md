@@ -20,7 +20,7 @@
 
 **Один общий механизм для задач 00, 10, 20, 30, 40, 50, 60, 70, 80, 81, 90 и будущих задач** — root-owned pinned CLI `scripts/dh-task-runner.py` из существующего защищённого release. Никаких специальных launch-скриптов для каждого номера или отдельных привилегий для №81. Источник задач — неизменный `catalog/semaphore-tasks.json` **того же Git SHA**, что и checkout.
 
-После разрешённой публикации соответствующего release Bootstrap кладёт launcher в ` /opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py ` (в реальном пути **без пробелов**, root-owned), и включает его SHA256 в manifest. Проверить версию перед выполнением. Старая инсталляция с **69 assets** этого launcher ещё не содержит: до обновления полноценного staged release он **не существует** на runner. Изменён состав assets — нельзя перепубликовать новый release старым циклом «перебрать 69 файлов», требуется staging **нового manifest по обновлённой функции** `stage_pve_access_audit` и его проверка.
+После разрешённой публикации соответствующего release Bootstrap кладёт launcher в `/opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py` (root-owned), и включает его SHA256 в manifest. Проверить версию перед выполнением. Старая инсталляция с **69 assets** этого launcher ещё не содержит: до обновления полноценного staged release он **не существует** на runner. Изменён состав assets — нельзя перепубликовать новый release старым циклом «перебрать 69 файлов», требуется staging **нового manifest по обновлённой функции** `stage_pve_access_audit` и его проверка.
 
 Использование (команды выполняются **только** в уже разрешённой root-сессии доверенного site runner; нет автоматического открытия доступа):
 
