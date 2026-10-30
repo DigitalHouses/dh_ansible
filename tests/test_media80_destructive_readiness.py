@@ -18,6 +18,7 @@ def test_recreate_declares_hard_cpu_and_memory_policy_on_vm_create_and_keep():
                     "MANAGED_ZFS_IMPORT_GUID_DRIFT"):
         assert literal in source
     assert source.index("old_guest_matches(vmid, site, data, managed=managed)") < source.index('qm("destroy", vmid')
+    assert '"/usr/bin/pvesh"' in source and '"/usr/sbin/pvesh"' not in source
     assert source.index('need(all(actual.get(key) == val for key, val in wanted.items())') < source.index("def ensure_config")
 
 
