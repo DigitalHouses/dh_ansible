@@ -473,8 +473,21 @@
     dest: /opt
     remote_src: true
     creates: "/opt/{{ item.name }}/{{ item.name }}"
-    owner: root
+    owner: "{{ item.slug }}"
     group: root
+  loop: "{{ media_arr_releases }}"
+  when: media_vm.applications[item.slug] | bool
+
+# The bundled updater replaces executable and UI files as the dedicated
+# application user. Keep /opt itself root-owned; grant write access only to
+# each application's own tree, never to another service or shared ZFS data.
+- name: Allow each native Arr application to update only its own installation
+  ansible.builtin.file:
+    path: "/opt/{{ item.name }}"
+    state: directory
+    owner: "{{ item.slug }}"
+    group: root
+    recurse: true
   loop: "{{ media_arr_releases }}"
   when: media_vm.applications[item.slug] | bool
 
