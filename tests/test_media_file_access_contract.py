@@ -83,7 +83,7 @@ def test_portal_and_discovery_are_declared_without_secrets():
 def test_plex_agent_pinned_release_and_mqtt_is_fleet_only():
     tasks = yaml.safe_load((ROLE / "tasks/plex_agent.yml").read_text())
     text = str(tasks)
-    assert "digitalhouses_plex_agent-v0.8.0" in text
+    assert "digitalhouses_plex_agent-v0.8.5" in text
     assert "MEDIA_PLEX_AGENT_MQTT_FLEET_REQUIRED" in text
     assert "no_log" in text
     conf = (ROLE / "templates/digitalhouses-plex-agent.conf.j2").read_text()
