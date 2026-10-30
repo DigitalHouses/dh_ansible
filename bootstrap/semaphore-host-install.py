@@ -368,7 +368,9 @@ def host_preflight(site, cidr, gateway, pve_ip, *, resume=False, resume_ansible=
     ip = ipaddress.IPv4Interface(cidr)
     gateway_addr = ipaddress.IPv4Address(gateway)
     host_addr = ipaddress.IPv4Address(pve_ip)
-    if (int(ip.ip) & 255) != 231 or gateway_addr not in ip.network or host_addr not in ip.network:
+    if (ip.network.prefixlen != 24 or ip.ip in (ip.network.network_address,
+                                               ip.network.broadcast_address)
+            or gateway_addr not in ip.network or host_addr not in ip.network):
         raise Blocked("Site runner addressing invalid")
     if gateway_addr == ip.ip or host_addr == ip.ip:
         raise Blocked("Runner IP collides with PVE/gateway")
@@ -692,6 +694,26 @@ def fetch_site_inventory(checkout, fleet_sha, env, site):
         fetch_immutable_file(fleet, fleet_sha, path, env, repository=FLEET_REPO)
     print(f"SITE_INVENTORY_FETCH=PASS site={site} files={len(paths)}", flush=True)
     return paths
+
+
+def verify_runner_network(checkout: Path, site: str, cidr: str, gateway: str) -> None:
+    """Require the launcher's address to match pinned, site-scoped Fleet data."""
+    runner = checkout.parent / "fleet-detail" / "inventories" / site / "runner.yml"
+    if runner.is_symlink() or not runner.is_file() or runner.stat().st_size > 65536:
+        raise Blocked("Pinned site runner inventory unavailable")
+    try:
+        body = runner.read_text(encoding="utf-8")
+        ips = re.findall(r"(?m)^    ipv4: ([0-9./]+)$", body)
+        gateways = re.findall(r"(?m)^    gateway: ([0-9.]+)$", body)
+        vmids = re.findall(r"(?m)^  vmid: ([0-9]+)$", body)
+        if len(ips) != 1 or len(gateways) != 1 or vmids != [str(CTID)]:
+            raise ValueError("Ambiguous site runner network")
+        if (ipaddress.IPv4Interface(ips[0]) != ipaddress.IPv4Interface(cidr)
+                or ipaddress.IPv4Address(gateways[0]) != ipaddress.IPv4Address(gateway)):
+            raise ValueError("Launcher differs from pinned Fleet runner network")
+    except (UnicodeError, ValueError, OSError) as error:
+        raise Blocked("Site runner address must match pinned Fleet inventory") from error
+    print(f"SITE_RUNNER_NETWORK=PASS site={site} ip={cidr}", flush=True)
 
 
 def site_inventory_exists(path):
@@ -1619,6 +1641,7 @@ def apply(args, template):
                                       preauthorized=args.use_github_session)
         owner_master = validate_fleet_password(checkout)
         verify_site_escrow(checkout, args.site)
+        verify_runner_network(checkout, args.site, args.runner_cidr, args.gateway)
         # Site ID y/n is confirmed by the public installer before auth.
         # Resume operations still require an explicit extra confirmation.
         if args.resume_semaphore:
@@ -1707,7 +1730,9 @@ def commission_pve_preflight(args, checkout=None):
         raise Blocked("Commissioning requires root on the PVE host")
     runner = ipaddress.IPv4Interface(args.runner_cidr)
     host_ip = ipaddress.IPv4Address(args.pve_ip)
-    if runner.ip.packed[-1] != 231 or host_ip not in runner.network:
+    if (runner.network.prefixlen != 24 or host_ip not in runner.network
+            or runner.ip in (runner.network.network_address, runner.network.broadcast_address, host_ip)
+            or ipaddress.IPv4Address(args.gateway) == runner.ip):
         raise Blocked("Site runner and PVE address mismatch")
     assigned = run("ip", "-4", "-o", "addr", "show")
     if args.pve_ip not in [part.split("/")[0] for row in assigned.splitlines()
@@ -1784,6 +1809,7 @@ def commission_existing_pve_access(args, *, verify_only=False):
         checkout = work / "source"
         authenticate_git(checkout, args.expected_commit, args.expected_fleet_commit,
                          env, args.site, preauthorized=args.use_github_session)
+        verify_runner_network(checkout, args.site, args.runner_cidr, args.gateway)
         guest_python = commission_pve_preflight(args, checkout)
         master = validate_fleet_password(checkout)
         current = assert_private_fleet_head(args.expected_fleet_commit, env)
