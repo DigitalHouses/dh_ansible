@@ -20,11 +20,13 @@
 | Локальный smoke, состояние обычного сервиса, безопасный диагностический read-only | Прямой Semaphore playbook → переиспользуемые Ansible roles/modules | Только если конкретная диагностика требует защищённых ресурсов | **20**, **30** |
 | Read-only аудит, которому нужны root-файлы, приватные SSH-ключи или API-токены | Semaphore → nonce request → фиксированный root-worker → независимый audit → status | Да; секреты остаются у доверенного исполнителя | **50** |
 | Установка/обновление локального привилегированного сервиса | Semaphore → nonce → root-worker; Ansible apply/verify внутри | Да | **40** |
-| Создание VM/LXC, PCI passthrough, конфигурация PVE и гостевой ОС | Декларативная роль + `audit/plan` → строго ограниченный worker → PVE API/проверенный SSH → `verify` | Да, если затрагивается PVE/устройства | **60** как действующий пример LXC; **80** пока только план и не готова к apply |
+| Создание VM/LXC, PCI passthrough, конфигурация PVE и гостевой ОС | Декларативная роль + `audit/plan` → строго ограниченный worker → PVE API/проверенный SSH → `verify` | Да, если затрагивается PVE/устройства | **60** для LXC; **80** — работающая цепочка audit → plan → approved apply → verify через защищённый worker; реальная приёмка устанавливается отдельно |
 | Подключение уже утверждённого NFS-экспорта медиасервера к PVE (backup-only) | Semaphore nonce request → существующий защищённый root-worker → pinned-SSH Ansible playbook → аудит/подключение NFS → проверка mount и записи; без изменения заданий backup | Секретный PVE SSH-ключ остаётся доступен только root-worker; Semaphore не выполняет SSH | **90** |
 | Облачные API, Cloudflare Tunnel, Access, mTLS | План и проверка защиты → root-worker со scoped credential → readback удалённого API | Да | **10**, **70** |
 | Управление самим каталогом Semaphore | Публичный `catalog/semaphore-tasks.json` → фиксированный root-worker → официальный localhost HTTPS Semaphore API | Да, поскольку управляющий API-токен root-only | **00** |
 | Много независимых жизненных циклов, требующих явных границ утверждения/отката | В будущем нативный Workflow со звеньями, построенными из утверждённых пользовательских задач или reusable этапов | По требованиям каждого звена | **Целевая архитектура; не считать внедрённой** |
+
+**Операторский fallback:** прямой запуск того же pinned Ansible playbook на локальном runner от `semaphore` уже подтверждён на пилоте; он не заменяет защищённый root-worker и не создаёт историю Task в Semaphore. При блокировке security-инструмента не искать обход; см. [media-semaphore-launch.md](../runbooks/media-semaphore-launch.md).
 
 **Правило выбора:** сначала штатный модуль/коллекция Ansible → общая роль → существующий доверенный worker. Новый Bash/Python-исполнитель создавать только при доказанном отсутствии подходящего механизма, аппаратном/bootstrap-ограничении или независимой диагностике. Отдельный worker на каждую мелкую операцию — архитектурный дефект.
 
@@ -53,9 +55,9 @@
 
 **Принципиальное различие:** обновление **каталога** задач (00) не обновляет **Fleet Detail**. Загрузка публичного Git при запуске Ansible не обновляет приватный inventory. Успех `include_vars` подтверждает доступ к файлу, **не свежесть данных**.
 
-**Сейчас реализовано:** owner-authorized [`semaphore-host-install.py`](../../bootstrap/semaphore-host-install.py) получает private Fleet по проверенному commit, передаёт только site YAML через `pct push`, проверяет хеши и устанавливает `root:semaphore 0640`; GitHub-вход владельца временный. Задача 80 сейчас использует [`site_inventory_prepare`](../../roles/site_inventory_prepare/tasks/main.yml), но эта роль **проверяет локальные файлы, а не скачивает отсутствующие или устаревшие**. Без специально настроенного источника runtime secrets её вызов `fleet_secrets` также не является рабочим способом получить PVE token.
+**Текущая реализация пилотного runner (проверено 30.10.2026):** Bootstrap [`semaphore-host-install.py`](../../bootstrap/semaphore-host-install.py) и commissioning установили reusable `site_inventory_prepare` + защищённый `dh-site-data` provider: разрешённый `media_vm.yml` запрашивается через PVE с проверкой источника и атомарно размещается на runner как `root:semaphore 0640`. Задача 80 передаёт фиксированный nonce/commit в `dh-pve-access-audit` для preflight и approved guest apply; root-only secrets остаются в worker/PVE. **Не переносить факт готовности пилота на другие sites без отдельной commissioning-проверки.** Операционные нюансы запуска и отказа инструмента: [runbook](../runbooks/media-semaphore-launch.md).
 
-**Целевой механизм для one-click новых задач (не внедрён):** общий `site_data` provider, доступный из доверенной privileged boundary, должен:
+**Нормативный контракт для новых sites (на пилоте внедрён, на других sites необходим commissioning):** общий `site_data` provider в доверенной privileged boundary должен:
 1. Определить текущий `site.id` из проверенной локальной identity, проверить разрешённый source/commit и доступный credential.
 2. Получить **только** нужные данные `inventories/<site>/` из зафиксированной проверяемой ревизии; не открывать всему runner private Git, чужие sites или Fleet Vault.
 3. Сверить текущее состояние и SHA256, поддержать новую редакцию уже существующих файлов через проверенный diff; не считать любое отличие взломом и не молча стирать ручные изменения.
@@ -116,7 +118,7 @@ Workflow — граф крупных операторских этапов, а �
 | **50** | Read-only PVE access audit → root-worker | Действует |
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
-| **80** | Media VM read-only plan + `site_inventory_prepare` + `fleet_secrets` | **Не готова к one-click**: нет гарантированной доставки `media_vm.yml` и источника secrets; создание VM не реализовано |
+| **80** | Media VM: `site_inventory_prepare` → PCI/storage preflight → nonce + pinned root-worker → PVE VM lifecycle → guest apps | Реальный one-click запуск работает на пилотном runner, но любая ошибка приложения возвращает FAIL; `create + erase` и `keep + import` — независимые явно утверждаемые параметры. Резервный прямой Ansible-запуск описан в [runbook](../runbooks/media-semaphore-launch.md) и не создаёт Task в Semaphore |
 | **90** | PVE NFS Backups: Semaphore nonce → root-worker → pinned PVE SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; PVE SSH-ключ root-only; не изменяет backup jobs, не запускает резервное копирование и не трогает данные |
 
 **Этот реестр описывает наблюдаемую реализацию на дату написания; не служит автоматическим разрешением на запуск write-операций.** После изменения каталога или реализации обязан обновляться как часть того же PR.
