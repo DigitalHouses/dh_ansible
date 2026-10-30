@@ -16,6 +16,39 @@
 
 **Правило коммуникации:** «Semaphore API недоступен» ≠ «запустить Ansible самостоятельно невозможно». «Когда-то был `DEPLOYED`» ≠ «новая версия применена». Не просить пользователя повторно запускать то, что агент может корректно выполнить разрешённым способом.
 
+## Стандартный способ запуска **любой** задачи из каталога
+
+**Один общий механизм для задач 00, 10, 20, 30, 40, 50, 60, 70, 80, 81, 90 и будущих задач** — root-owned pinned CLI `scripts/dh-task-runner.py` из существующего защищённого release. Никаких специальных launch-скриптов для каждого номера или отдельных привилегий для №81. Источник задач — неизменный `catalog/semaphore-tasks.json` **того же Git SHA**, что и checkout.
+
+После разрешённой публикации соответствующего release Bootstrap кладёт launcher в ` /opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py ` (в реальном пути **без пробелов**, root-owned), и включает его SHA256 в manifest. Проверить версию перед выполнением. Старая инсталляция с **69 assets** этого launcher ещё не содержит: до обновления полноценного staged release он **не существует** на runner. Изменён состав assets — нельзя перепубликовать новый release старым циклом «перебрать 69 файлов», требуется staging **нового manifest по обновлённой функции** `stage_pve_access_audit` и его проверка.
+
+Использование (команды выполняются **только** в уже разрешённой root-сессии доверенного site runner; нет автоматического открытия доступа):
+
+```bash
+# Заполнить полный проверенный SHA актуального checkout/release:
+SHA="<full-approved-40-character-git-sha>"
+DIR="/var/lib/semaphore/dh-task-<verified-short-sha>"
+TOOL="/opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py"
+
+# Предварительный план любой конкретной задачи (без запуска playbook):
+python3 "$TOOL" --site serzhan-home --task 81 --commit "$SHA" --checkout "$DIR"
+
+# Запуск №81 — без survey (независимая read-only приёмка):
+python3 "$TOOL" --site serzhan-home --task 81 --commit "$SHA" \
+  --checkout "$DIR" --execute
+
+# Запуск №80 — только с утверждёнными из каталога enum параметрами:
+python3 "$TOOL" --site serzhan-home --task 80 --commit "$SHA" \
+  --checkout "$DIR" --survey media_vm_action=keep \
+  --survey media_raw_disk_action=import --execute
+```
+
+**Результат:** launcher сам разрешает номер задачи в playbook, валидирует обязательные survey, site/runner hostname, проверяет SHA чистого checkout, root-owned inventory, корректность доступа к fixed worker (для playbooks, использующих его), отсутствие активного Ansible и pending worker request, последовательность задач, запускает только `runuser -u semaphore -- env -i ... ansible-playbook` и пишет root-only журнал. В коде нет возможности передать свой shell, playbook вне каталога, произвольные extra vars, root SSH/PVE credentials или сменить исполнителя. По умолчанию — **PLAN_ONLY**. `--execute` требуется отдельно; семантическое разрешение владельца и Fleet остаётся обязательным.
+
+**Важно:** этот способ **не даёт AI новых прав**. Если подключённый инструмент явно отклонил выполнение операции (например, прежний запуск №81), нельзя повторить тот же запрещённый запуск с этим launcher под видом «другого метода». Тогда запуск выполняет разрешённый оператор через Semaphore UI либо отдельно утверждённый доступ. Реализация механизма в Git и его установка на site runner — два разных состояния.
+
+**Исторические shell-команды §4/§5** остаются справкой для диагностики старых запусков; для новых AI-чата и новой задачи стандартный путь — **только этот общий launcher**. Прямой путь не создаёт Task/Success в UI Semaphore — результат отмечается отдельно.
+
 ## 1. Архитектура и источники истины
 
 | Компонент | Где / зачем |
