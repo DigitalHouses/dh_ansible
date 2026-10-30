@@ -98,6 +98,12 @@
     name: qemu-guest-agent.service
     state: started
 
+- name: Persist ZFS ARC ceiling before first firmware reboot
+  ansible.builtin.import_tasks: zfs_arc_boot.yml
+
+- name: Activate and prove Intel GPU before launching media applications
+  ansible.builtin.import_tasks: gpu_firmware_runtime.yml
+
 - name: Ensure APT signing-key directory
   ansible.builtin.file:
     path: /etc/apt/keyrings
@@ -229,6 +235,9 @@
     daemon_reload: true
     enabled: true
     state: started
+
+- name: Apply live ZFS ARC ceiling after approved pool mount
+  ansible.builtin.import_tasks: zfs_arc_runtime.yml
 
 - name: Reconcile shared permanent media library directories
   ansible.builtin.file:
@@ -367,6 +376,9 @@
     return_content: false
   register: media_plex_http
   changed_when: false
+
+- name: Reconcile native Plex automatic and periodic scanning
+  ansible.builtin.import_tasks: plex_autoscan.yml
 
 - name: Validate declared ZFS import mode and pool GUID
   ansible.builtin.command:
