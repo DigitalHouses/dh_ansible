@@ -269,7 +269,7 @@ def _repair_broken_idp(path, data, target):
     BACKUP_ROOT.mkdir(parents=True, mode=0o700, exist_ok=True)
     backup_meta = BACKUP_ROOT.lstat()
     require(stat.S_ISDIR(backup_meta.st_mode) and
-            backup_meta.st_uid == 0 and
+            backup_meta.st_uid == os.geteuid() and
             stat.S_IMODE(backup_meta.st_mode) == 0o700 and
             not BACKUP_ROOT.is_symlink(),
             "FILESTASH_RECOVERY_BACKUP_DIR_UNSAFE")
@@ -277,7 +277,7 @@ def _repair_broken_idp(path, data, target):
                                   suffix=".json", dir=BACKUP_ROOT)
     try:
         os.fchmod(fd, 0o600)
-        os.fchown(fd, 0, 0)
+        os.fchown(fd, os.geteuid(), os.getegid())
         with os.fdopen(fd, "wb") as stream:
             stream.write(original)
             stream.flush()
