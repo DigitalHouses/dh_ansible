@@ -132,12 +132,17 @@ def allow_force_import_of_sole_verified_vdev(pool, disk):
             "FORCE_IMPORT_VDEV_NOT_EXACT_DECLARED_WWN")
 
 
-def ensure_import(pool, disk, physical, access):
+def ensure_import(pool, disk, physical, access, expected_guid=None):
     guid = get_pool(pool)
     if guid:
+        require(expected_guid is None or guid == expected_guid,
+                "IMPORT_POOL_GUID_MISMATCH")
         verify_pool_disk(pool, physical)
         return guid, False
-    require(imported_guid_visible(pool) is not None, "REQUESTED_POOL_NOT_FOUND")
+    importable = imported_guid_visible(pool)
+    require(importable is not None, "REQUESTED_POOL_NOT_FOUND")
+    require(expected_guid is None or importable == expected_guid,
+            "IMPORT_POOL_GUID_MISMATCH")
     args = ["/usr/sbin/zpool", "import", "-N", "-d", "/dev/disk/by-id"]
     if access == "readonly":
         args += ["-o", "readonly=on"]
@@ -148,6 +153,8 @@ def ensure_import(pool, disk, physical, access):
         print("POOL=FORCE_IMPORTED_AFTER_VERIFIED_VM_REPLACEMENT", flush=True)
     guid = get_pool(pool)
     require(guid is not None, "POOL_IMPORT_UNCONFIRMED")
+    require(expected_guid is None or guid == expected_guid,
+            "IMPORT_POOL_GUID_MISMATCH")
     verify_pool_disk(pool, physical)
     return guid, True
 
@@ -405,7 +412,11 @@ def main():
     if args.action == "erase":
         guid, changed = ensure_create(data, disk, physical, "erase")
     else:
-        guid, changed = ensure_import(data["pool_name"], disk, physical, data["mode"])
+        expected = data.get("import_pool_guid")
+        require(isinstance(expected, str) and expected.isdecimal(),
+                "IMPORT_POOL_GUID_NOT_PINNED")
+        guid, changed = ensure_import(data["pool_name"], disk, physical,
+                                      data["mode"], expected)
         print("POOL=IMPORTED", flush=True)
     expected_access = "on" if data["mode"] == "readonly" else "off"
     require(command("/usr/sbin/zpool", "get", "-H", "-o", "value",
