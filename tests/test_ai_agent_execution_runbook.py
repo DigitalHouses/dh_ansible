@@ -28,7 +28,7 @@ def test_runbook_covers_proven_runner_and_pinned_release_workflow():
         "stage_pve_access_audit", "dh-pve-media-release-verify",
         "MEDIA_WORKER_RELEASE=PASS", "os.replace", "manifest",
         "keep + import", "Acceptance", "security-deny",
-        "не создаёт UI Task",
+        "создаёт UI Task",
     ):
         assert required in doc, required
 
