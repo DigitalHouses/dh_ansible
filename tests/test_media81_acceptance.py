@@ -59,6 +59,9 @@ def test_acceptance_probes_are_read_only_and_never_reveal_credentials():
     assert "MEDIA81_RESULT=" in src
     assert "new_file_auto_discovery" in src
     assert "plex_periodic_scan_15min" in src
+    assert "filestash_smb_login_form" in src
+    assert "def filestash_login_form(host)" in src
+    assert "class _NoRedirect" in src
     assert "plex_movie_posters" in src
     assert "native_update_writable_" in src
     assert "plex_movie_metadata" in src
