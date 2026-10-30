@@ -61,6 +61,18 @@ for name,leaf in (("Media","media"),("Documents","doc"),
 result["password_files_present"]={
     u:pathlib.Path(root+"/digitalhouses/credentials/"+u+".txt").is_file()
     for u in ("serzhan","serzhan_admin")}
+# Search-provider readiness is distinct from Prowlarr HTTP uptime.
+# Metadata only: never read indexer Settings (cookies/credentials).
+result["prowlarr_indexers"] = None
+try:
+    db=pathlib.Path("/var/lib/prowlarr/prowlarr.db")
+    if db.is_file() and not db.is_symlink():
+        connection=sqlite3.connect(db.as_uri()+"?mode=ro",uri=True,timeout=5)
+        result["prowlarr_indexers"]=int(connection.execute(
+            "SELECT COUNT(*) FROM Indexers WHERE Enable=1").fetchone()[0])
+        connection.close()
+except (OSError,sqlite3.Error,ValueError):
+    pass
 result["zfs_healthy"]=run(["zpool","status","-x"])[1].strip()=="all pools are healthy"
 result["zfs_pool_present"]=run(["zpool","list","-H","-o","name"])[1].splitlines()
 arc={}
@@ -238,6 +250,18 @@ def main():
               for n in ("Media","Documents")))
     check("account_passports_present",all(guest.get("password_files_present",{}).values())
           and len(guest.get("password_files_present",{}))==2)
+    # A running Prowlarr with connected Radarr/Sonarr is not yet a
+    # functional search installation when it has zero enabled sources.
+    provider_count=guest.get("prowlarr_indexers")
+    if isinstance(provider_count,int) and not isinstance(provider_count,bool):
+        if provider_count==0:
+            skip("prowlarr_indexers_present",
+                 "NO_ENABLED_INDEXERS_OWNER_SELECTION_REQUIRED")
+        else:
+            check("prowlarr_indexers_present",provider_count>0,
+                  "enabled="+str(provider_count))
+    else:
+        check("prowlarr_indexer_metadata_readable",False)
     scan=guest.get("plex_scan",{})
     check("plex_auto_scan_enabled",scan.get("automatic")=="1")
     check("plex_periodic_scan_15min",scan.get("periodic")=="1" and
