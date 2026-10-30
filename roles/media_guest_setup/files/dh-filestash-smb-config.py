@@ -235,6 +235,7 @@ def _repair_broken_idp(path, data, target):
     """Recover only our exact broken passthrough; preserve a root-only backup."""
     require(data.get("connections") == target["connections"],
             "FILESTASH_RECOVERY_FOREIGN_CONNECTION")
+    require(broken_idp_entrypoint(), "FILESTASH_RECOVERY_NO_PROVEN_IDP_FAILURE")
     general = data.get("general", {})
     require(isinstance(general, dict) and
             re.fullmatch(r"[a-zA-Z0-9]{16}", general.get("secret_key", "")),
@@ -256,7 +257,6 @@ def _repair_broken_idp(path, data, target):
         require(isinstance(opaque, str) and len(opaque) >= 32 and
                 not opaque.lstrip().startswith(("{", "[")),
                 "FILESTASH_RECOVERY_UNEXPECTED_PARAMS")
-    require(broken_idp_entrypoint(), "FILESTASH_RECOVERY_NO_PROVEN_IDP_FAILURE")
     meta = path.lstat()
     user = pwd.getpwnam("filestash")
     require(stat.S_ISREG(meta.st_mode) and meta.st_nlink == 1 and
