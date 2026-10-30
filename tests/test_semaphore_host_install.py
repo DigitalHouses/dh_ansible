@@ -921,7 +921,7 @@ def test_resume_fresh_recovers_vault_pve_identity_without_reenrollment():
     assert "or (args.resume_semaphore and args.restore_pve_access)):" in body
     assert "if not (args.resume or args.resume_fresh or args.resume_ansible" not in body
     assert "provision_pve_identity_stage(args.site, args.runner_cidr," in body
-    assert body.index("stage_pve_access_audit(checkout)") < body.index(
+    assert body.index("stage_pve_access_audit(checkout, args.expected_commit)") < body.index(
         "provision_pve_identity_stage(args.site, args.runner_cidr,"
     )
     # The provisioner first decrypts and recovers existing credentials.
