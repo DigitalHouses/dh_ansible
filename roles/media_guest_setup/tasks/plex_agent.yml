@@ -74,9 +74,11 @@
     'source = digitalhouses_plex_agent-v0.8.5' not in (media_plex_agent_installed_build.content | default('') | b64decode)
   no_log: true
 
-# intel_gpu_top uses the i915 PMU. Debian 13 defaults to
-# perf_event_paranoid=3, so the unprivileged GPU helper requires CAP_PERFMON.
-# Keep this a systemd drop-in: the pinned upstream installer owns the base unit.
+# intel_gpu_top uses the i915 PMU. On this Debian 13 / i915 guest
+# perf_event_paranoid=3 requires BOTH CAP_PERFMON and CAP_SYS_ADMIN.
+# The base pinned upstream GPU helper already grants CAP_SYS_ADMIN.
+# Preserve it and add CAP_PERFMON only to this isolated GPU helper,
+# not to the main MQTT/Plex Agent service.
 - name: Create dedicated Plex Agent GPU helper override directory
   ansible.builtin.file:
     path: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d
@@ -85,7 +87,7 @@
     group: root
     mode: '0755'
 
-- name: Grant only PMU performance monitoring capability to Plex GPU helper
+- name: Grant verified PMU capabilities to isolated Plex GPU helper
   ansible.builtin.copy:
     dest: /etc/systemd/system/digitalhouses_plex_agent_gpu_helper.service.d/20-dh-intel-pmu.conf
     owner: root
@@ -93,11 +95,11 @@
     mode: '0644'
     content: |
       [Service]
-      # Reset upstream CAP_SYS_ADMIN: GPU utilization only needs CAP_PERFMON.
+      # Debian 13 Intel PMU needs both: retain upstream CAP_SYS_ADMIN.
       CapabilityBoundingSet=
-      CapabilityBoundingSet=CAP_PERFMON
+      CapabilityBoundingSet=CAP_PERFMON CAP_SYS_ADMIN
       AmbientCapabilities=
-      AmbientCapabilities=CAP_PERFMON
+      AmbientCapabilities=CAP_PERFMON CAP_SYS_ADMIN
   register: media_plex_agent_gpu_pmu_override
 
 - name: Reload systemd unit configuration after GPU helper override changes
