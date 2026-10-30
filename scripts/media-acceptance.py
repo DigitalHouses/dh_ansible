@@ -61,6 +61,11 @@ for name,leaf in (("Media","media"),("Documents","doc"),
 result["password_files_present"]={
     u:pathlib.Path(root+"/digitalhouses/credentials/"+u+".txt").is_file()
     for u in ("serzhan","serzhan_admin")}
+# A running Arr service is not update-ready when it cannot modify its
+# installation. Keep writable scope confined to each dedicated app tree.
+result["arr_update_paths"]={
+    slug:access_as(slug,"/opt/"+name,"-w")
+    for slug,name in (("radarr","Radarr"),("sonarr","Sonarr"),("prowlarr","Prowlarr"))}
 # Search-provider readiness is distinct from Prowlarr HTTP uptime.
 # Metadata only: never read indexer Settings (cookies/credentials).
 result["prowlarr_indexers"] = None
@@ -149,6 +154,36 @@ try:
                            "bounded":checked>=5000}
 except (OSError,sqlite3.Error):
     result["plex_index"]={"status":"FAIL","missing":-1,"checked":0}
+# Existing Plex catalog entries can be present without a matched movie or
+# poster. Count metadata, never expose media names or download remote artwork.
+result["plex_movie_metadata"]={"status":"FAIL","movies":0,
+                               "missing_posters":0,"unmatched":0}
+try:
+    conn=sqlite3.connect(db.as_uri()+"?mode=ro",uri=True,timeout=5)
+    columns={row[1] for row in conn.execute("PRAGMA table_info(metadata_items)")}
+    required={"id","metadata_type","guid","thumb_url"}
+    if not required.issubset(columns):
+        raise sqlite3.DatabaseError("PLEX_METADATA_SCHEMA_DRIFT")
+    poster_columns=["NULLIF(mi.thumb_url,'')"]
+    if "user_thumb_url" in columns:
+        poster_columns.append("NULLIF(mi.user_thumb_url,'')")
+    poster_expr="COALESCE("+",".join(poster_columns)+",'')"
+    movie_rows=conn.execute(
+        "SELECT DISTINCT mi.id, mi.guid, "+poster_expr+
+        " FROM metadata_items mi "
+        "JOIN media_items f ON f.metadata_item_id=mi.id "
+        "JOIN media_parts part ON part.media_item_id=f.id "
+        "WHERE mi.metadata_type=1 AND part.file LIKE ? LIMIT 5000",
+        ("/serzhan-pool/media/movies/%",)).fetchall()
+    conn.close()
+    unmatched=sum(not guid or str(guid).startswith(("local://","com.plexapp.agents.none"))
+                  for _,guid,_ in movie_rows)
+    missing=sum(not thumb for _,_,thumb in movie_rows)
+    result["plex_movie_metadata"]={
+        "status":"PASS" if movie_rows else "SKIP",
+        "movies":len(movie_rows),"missing_posters":missing,"unmatched":unmatched}
+except (OSError,sqlite3.Error):
+    pass
 print(json.dumps(result,ensure_ascii=True,separators=(",",":")))
 """
 
@@ -250,6 +285,9 @@ def main():
               for n in ("Media","Documents")))
     check("account_passports_present",all(guest.get("password_files_present",{}).values())
           and len(guest.get("password_files_present",{}))==2)
+    for slug in ("radarr","sonarr","prowlarr"):
+        check("native_update_writable_"+slug,
+              guest.get("arr_update_paths",{}).get(slug) is True)
     # A running Prowlarr with connected Radarr/Sonarr is not yet a
     # functional search installation when it has zero enabled sources.
     provider_count=guest.get("prowlarr_indexers")
@@ -273,6 +311,17 @@ def main():
         check("plex_indexed_media_files",
               idx.get("status")=="PASS" and idx.get("missing")==0,
               "checked="+str(idx.get("checked",0))+" missing="+str(idx.get("missing","?")))
+    movie_meta=guest.get("plex_movie_metadata",{})
+    if movie_meta.get("status")=="SKIP":
+        skip("plex_movie_posters","NO_IMPORTED_MOVIES_YET")
+    else:
+        check("plex_movie_posters",
+              movie_meta.get("status")=="PASS" and
+              movie_meta.get("missing_posters")==0 and
+              movie_meta.get("unmatched")==0,
+              "movies="+str(movie_meta.get("movies",0))+
+              " missing_posters="+str(movie_meta.get("missing_posters","?"))+
+              " unmatched="+str(movie_meta.get("unmatched","?")))
     try:
         result=ssh(a.pve_ip,"ansible-linux",
                    ["sudo","-n","showmount","-e",a.guest_ip],pve=True)
