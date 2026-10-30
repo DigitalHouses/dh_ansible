@@ -70,7 +70,7 @@ def test_native_plex_scanner_reconciler_keeps_other_preferences_and_tokens(tmp_p
     module=importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     prefs=tmp_path/"Preferences.xml"
-    prefs.write_text('<PlexMediaServer PlexOnlineToken="SENSITIVE" OtherSetting="preserve" />')
+    prefs.write_text('<Preferences PlexOnlineToken="SENSITIVE" OtherSetting="preserve" />')
     monkeypatch.setattr(module,"PREF",prefs)
     monkeypatch.setattr(module.pwd,"getpwnam",lambda _:type("Owner",(),{"pw_uid":prefs.stat().st_uid})())
     monkeypatch.setattr(module.subprocess,"run",lambda *a,**kw:type("Run",(),{"returncode":1})())
