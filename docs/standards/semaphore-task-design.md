@@ -121,6 +121,7 @@ Workflow — граф крупных операторских этапов, а �
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
 | **80** | Media VM: `site_inventory_prepare` → PCI/storage preflight → nonce + pinned root-worker → PVE VM lifecycle → guest apps | Реальный one-click запуск работает на пилотном runner, но любая ошибка приложения возвращает FAIL; `create + erase` и `keep + import` — независимые явно утверждаемые параметры. Резервный прямой Ansible-запуск описан в [runbook](../runbooks/media-semaphore-launch.md) и не создаёт Task в Semaphore |
+| **81** | Media Acceptance E2E: independent read-only fixed-purpose worker, pinned SHA, sanitized PASS/FAIL/SKIP report | Independent task; direct run by `semaphore` uses the generic catalog launcher; it is not a new privileged pathway and does not bypass security-deny |
 | **90** | PVE NFS Backups: Semaphore nonce → root-worker → pinned PVE SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; PVE SSH-ключ root-only; не изменяет backup jobs, не запускает резервное копирование и не трогает данные |
 
 **Этот реестр описывает наблюдаемую реализацию на дату написания; не служит автоматическим разрешением на запуск write-операций.** После изменения каталога или реализации обязан обновляться как часть того же PR.
