@@ -207,6 +207,27 @@ def http_check(host,port,path="/"):
     except (urllib.error.URLError,TimeoutError,OSError):
         return False
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def filestash_login_form(host):
+    """Read-only, no credentials: insist on a real SMB identity-provider form."""
+    url = ("http://" + host +
+           ":8334/api/session/auth/?action=redirect&label=DigitalHouses%20SMB")
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _NoRedirect())
+    try:
+        with opener.open(url, timeout=8) as response:
+            body = response.read(32768).decode("utf-8", "replace")
+            return (response.status == 200 and
+                    'name="user"' in body and 'name="password"' in body)
+    except (urllib.error.HTTPError, urllib.error.URLError,
+            TimeoutError, OSError):
+        return False
+
+
 def check(name,success,detail=""):
     result="PASS" if success else "FAIL"
     print("MEDIA81_CHECK="+name+" RESULT="+result+(" DETAIL="+detail if detail else ""),flush=True)
@@ -263,6 +284,7 @@ def main():
         ("radarr",7878,"/"),("sonarr",8989,"/"),
         ("prowlarr",9696,"/"),("qbittorrent",8080,"/")):
         check("http_"+name,http_check(a.guest_ip,expected_port,path))
+    check("filestash_smb_login_form",filestash_login_form(a.guest_ip))
     check("zfs_pool_and_health",a.pool in guest.get("zfs_pool_present",[]) and guest.get("zfs_healthy") is True)
     arc=guest.get("arc",{})
     limit=768*1024*1024
