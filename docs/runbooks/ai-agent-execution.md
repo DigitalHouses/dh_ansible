@@ -38,7 +38,7 @@
 
 Вначале **read-only**, на авторизованном runner, если подключённый инструмент разрешает:
 
-`bash
+```bash
 hostname -s
 id semaphore
 date -Is
@@ -53,16 +53,16 @@ data = json.load(open(p))
 print('WORKER_RELEASE_COMMIT=' + data['commit'])
 print('WORKER_ASSETS=' + str(len(data['assets'])))
 PY
-`
+```
 
 Это **пример для пилотного site**, не разрешение обходить права и не полный аппаратный preflight. До apply дополнительно необходимо: проверить текущие VMID/status, физический WWN и GUID ZFS, сетевую идентичность, `pve.yml`, `media_vm.yml`, backup/NFS-зависимости, активные задания PVE и approvals. Если требуемая проверка недоступна или результат неоднозначен, `BLOCKED`; не угадывать по сохранённому значению. Site-specific данные должны поступать из проверенного Fleet.
 
 **Проверка целостности до изменения:**
 
-`bash
+```bash
 # EXPECTED_SHA — 40-символьный commit из фактически утверждённого pinned release
 python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED_SHA"
-`
+```
 
 Ожидается `MEDIA_WORKER_RELEASE=PASS FILES=N`. N — фактическое число манифеста, **не фиксировать 69 как универсальное**.
 
@@ -85,7 +85,7 @@ python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED
 
 **Проверка после staging:**
 
-`bash
+```bash
 # В корне разрешённого site runner после публикации
 CODE_DIR="/var/lib/semaphore/dh-media-direct-<verified-short-sha>"
 EXPECTED_SHA="<full-40-char-sha>"
@@ -93,7 +93,7 @@ test "$(runuser -u semaphore -- git -C "$CODE_DIR" rev-parse HEAD)" = "$EXPECTED
 python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED_SHA"
 systemctl is-active dh-pve-access-audit.path
 test ! -e /var/lib/semaphore/dh-pve-access-audit.request
-`
+```
 
 **Важно:** несовпадение checkout SHA и pinned worker commit = **`BLOCKED`**, даже если каталоги, HTTP-сервисы и `systemctl` выглядят исправными.
 
@@ -103,7 +103,7 @@ test ! -e /var/lib/semaphore/dh-pve-access-audit.request
 
 **Проверенный fallback:** запуск *того же* playbook напрямую на site runner **от `semaphore`**, с его обычным inventory и с уже опубликованным идентичным pinned worker release. Пример **только для подтверждённого пилота** и **только после preflight и разрешения операции**:
 
-`bash
+```bash
 set -euo pipefail
 SITE_ID="serzhan-home"
 CODE_DIR="/var/lib/semaphore/dh-media-direct-<verified-short-sha>"
@@ -129,7 +129,7 @@ test ! -e /var/lib/semaphore/dh-pve-access-audit.request
 ) 2>&1 | tee "$LOG"
 echo "RUNNER_LOG=$LOG"
 echo "TERMINAL STAYS OPEN"
-`
+```
 
 Текст `<verified-short-sha>` / `<full-40-char-sha>` — **заполнить после реальной проверки**, не вставлять буквальные скобки. `VM_ACTION` и `DISK_ACTION` — **два независимых параметра**, оба берутся из явного разрешения и Fleet. Для восстановления приложений без удаления VM/ZFS — `keep + import`. `create`, `recreate`, `erase` — только при конкретно утверждённых условиях. Даже при `keep + import` проверить возможные побочные операции в текущей версии роли.
 
