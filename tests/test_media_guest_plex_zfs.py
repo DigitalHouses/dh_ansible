@@ -99,6 +99,15 @@ def test_native_radarr_sonarr_pinned_without_extra_semaphore_task():
     assert "ExecStart=/opt/{{ item.name }}/{{ item.name }}" in template
     assert "User={{ item.slug }}" in template
     assert "/var/lib/{{ item.slug }}" in template
+    assert "Restart=on-failure" in template
+    tasks = yaml.safe_load(yml)
+    by_name = {task["name"]: task for task in tasks}
+    grant = by_name["Allow each native Arr application to update only its own installation"]
+    assert grant["ansible.builtin.file"]["path"] == "/opt/{{ item.name }}"
+    assert grant["ansible.builtin.file"]["owner"] == "{{ item.slug }}"
+    assert grant["ansible.builtin.file"]["group"] == "root"
+    assert grant["ansible.builtin.file"]["recurse"] is True
+    assert grant["loop"] == "{{ media_arr_releases }}"
     setup = (ROOT / "bootstrap/semaphore-host-install.py").read_text()
     assert '("media_guest_setup", "defaults/main.yml")' in setup
     assert '("media_guest_setup", "templates/media-arr.service.j2")' in setup
