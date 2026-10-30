@@ -89,7 +89,7 @@ def test_first_commission_preserves_unrelated_filestash_config():
         mod=helper()
         path=Path(temp)/"config.json"
         path.write_text(json.dumps({"general":{"keep":"owner-choice"}}))
-        fake=SimpleNamespace(pw_uid=0,pw_gid=0)
+        fake=SimpleNamespace(pw_uid=path.stat().st_uid,pw_gid=path.stat().st_gid)
         with mock.patch.object(mod.pwd,"getpwnam",return_value=fake):
             mod.reconcile(path=path)
         d=json.loads(path.read_text())
