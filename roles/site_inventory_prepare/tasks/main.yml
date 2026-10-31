@@ -69,7 +69,66 @@
   vars:
     infrastructure_access_capability: filesystem_manage
 
-- name: Materialize site component files with standard Ansible file management
+- name: Inspect actual PVE endpoint captured locally during host Bootstrap
+  ansible.builtin.stat:
+    path: "{{ inventory_dir }}/pve-runtime.yml"
+    follow: false
+  register: site_pve_runtime_stat
+  changed_when: false
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Require trusted local PVE observation instead of Fleet's stored IP
+  ansible.builtin.assert:
+    that:
+      - site_pve_runtime_stat.stat.isreg | default(false)
+      - not (site_pve_runtime_stat.stat.islnk | default(false))
+      - site_pve_runtime_stat.stat.pw_name == 'root'
+      - site_pve_runtime_stat.stat.gr_name == 'semaphore'
+      - site_pve_runtime_stat.stat.mode == '0640'
+    fail_msg: >-
+      PVE_RUNTIME_ENDPOINT_MISSING: capture the actual PVE vmbr0 IPv4 on
+      the PVE host during site runner commissioning; do not guess the
+      PVE address from VMID or use the stale Fleet host field.
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Load the locally observed PVE endpoint
+  ansible.builtin.include_vars:
+    file: "{{ inventory_dir }}/pve-runtime.yml"
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Load private PVE non-address configuration without changing source
+  ansible.builtin.slurp:
+    src: "/var/lib/semaphore/.dh-credentials/fleet/inventories/{{ site.id }}/pve.yml"
+  register: site_pve_source
+  changed_when: false
+  no_log: true
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Validate PVE metadata and locally observed host
+  ansible.builtin.assert:
+    that:
+      - pve_observed is mapping
+      - pve_observed.source == 'bootstrap_vmbr0'
+      - pve_observed.ipv4 is match('^[0-9]{1,3}([.][0-9]{1,3}){3}$')
+      - (site_pve_source.content | b64decode | from_yaml).pve is mapping
+      - (site_pve_source.content | b64decode | from_yaml).pve.node is defined
+    fail_msg: "PVE_RUNTIME_ENDPOINT_INVALID: verify actual host identity and local observation."
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Compose effective PVE configuration with observed IP, not Fleet IP
+  ansible.builtin.set_fact:
+    site_pve_effective: >-
+      {{
+        (site_pve_source.content | b64decode | from_yaml)
+        | combine({
+            'pve': (site_pve_source.content | b64decode | from_yaml).pve
+                   | combine({'host': pve_observed.ipv4})
+          })
+      }}
+  no_log: true
+  when: "'pve.yml' in site_inventory_required_files"
+
+- name: Materialize non-PVE site components via native Ansible
   ansible.builtin.copy:
     src: "/var/lib/semaphore/.dh-credentials/fleet/inventories/{{ site.id }}/{{ item }}"
     dest: "{{ inventory_dir }}/{{ item }}"
@@ -78,10 +137,21 @@
     group: semaphore
     mode: "0640"
   become: true
-  loop: "{{ site_inventory_required_files }}"
+  loop: "{{ site_inventory_required_files | reject('equalto', 'pve.yml') | list }}"
   loop_control:
     label: "{{ item }}"
   no_log: true
+
+- name: Materialize effective PVE endpoint without modifying private Fleet
+  ansible.builtin.copy:
+    dest: "{{ inventory_dir }}/pve.yml"
+    content: "{{ site_pve_effective | to_nice_yaml(indent=2) }}"
+    owner: root
+    group: semaphore
+    mode: "0640"
+  become: true
+  no_log: true
+  when: "'pve.yml' in site_inventory_required_files"
 
 - name: Verify installed site components and permissions
   ansible.builtin.stat:
