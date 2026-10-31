@@ -12,6 +12,13 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
 
+    - name: Reconcile NetAlertX component inventory from authorized private Fleet
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - netalertx.yml
+
     - name: Load canonical private NetAlertX desired state
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/netalertx.yml"
