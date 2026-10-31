@@ -74,6 +74,12 @@ CI проверяет форматирование, lint, syntax, unit, конт
 
 SSH pinned host keys для Linux; официальные API с проверкой TLS и server identity для PVE/TrueNAS; least privilege; изоляция site credentials, Vault/зашифрованные секреты; secret-safe logging. Никогда не отключать TLS verification для обхода диагностики без специального решения.
 
+### P11a. Global credential readiness before all ordinary work
+
+По утверждённой **эксплуатационной политике DigitalHouses** всякая обычная Ansible-задача (даже если сама не использует один из credentials) перед изменениями должна выполнить свежую, read-only проверку **всех обязательных credentials данного объекта**. Наличие секрета без успешной аутентификации и достаточных прав — не PASS; недоступность сервиса не равнозначна неверному паролю. Ошибки агрегируются по всем независимым проверкам, а администратор получает безопасный список: target, credential, причина, точное действие по исправлению. Любая неисправность блокирует задачу; READY предыдущего запуска Semaphore не разрешает новую задачу без текущего preflight.
+
+Исключения только для Bootstrap, Obtain Credentials, Check Credentials и согласованного аварийного восстановления, чтобы можно было устранить блокировку. Для пользовательского интерфейса — штатная история Semaphore; для исполнения — одна переиспользуемая роль в Ansible `pre_tasks`, не отдельный платный Workflow, не custom flag store. Это **осознанное ужесточение политики**, а не требование upstream Ansible. Подробности и критерии E2E: [Site credential readiness](runbooks/site-credentials-onboarding.md#обязательный-глобальный-credential-readiness-gate).
+
 ### P12. Git as source of truth and disaster-recovery source
 
 Изменения проходят через version-controlled desired state. `plan` и `apply` используют одну immutable revision. Локальные site runners ограничены своим объектом, получают код через read-only Git access. Документируем ручные emergency changes и проводим reconcile перед следующим apply.
