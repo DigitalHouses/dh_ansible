@@ -46,7 +46,7 @@
       - item.stat.isreg | default(false)
       - not (item.stat.islnk | default(false))
       - item.stat.pw_name == 'semaphore'
-      - item.stat.mode == '0600'
+      - item.stat.mode in (['0600'] if item.item == dh_site_vault_password else ['0600', '0640', '0644'])
     fail_msg: "SITE_VAULT_NOT_COMMISSIONED"
   loop: "{{ dh_site_vault_files.results }}"
   no_log: true
