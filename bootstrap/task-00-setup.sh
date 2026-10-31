@@ -5,6 +5,7 @@ umask 077
 
 SITE="${1:?site ID required}"
 SHA="${2:?pinned Git revision required}"
+PVE_IPV4="${3:?actual PVE IPv4 from host vmbr0 required}"
 SRC=/opt/digitalhouses/src
 BASE="/var/lib/ansible/site-data/$SITE"
 [[ $EUID -eq 0 && ! -f /etc/pve/user.cfg ]] || { echo "BLOCKED: guest root required" >&2; exit 2; }
@@ -12,6 +13,14 @@ BASE="/var/lib/ansible/site-data/$SITE"
 [[ $SHA =~ ^[0-9a-f]{40}$ && $(hostname) == "ansible-$SITE" ]] || { echo "BLOCKED: guest/revision mismatch" >&2; exit 2; }
 [[ $(git -C "$SRC" rev-parse HEAD) == "$SHA" ]] || { echo "BLOCKED: Git commit mismatch" >&2; exit 2; }
 [[ -f /root/dh-semaphore-initial-admin-password ]] || { echo "BLOCKED: Semaphore not installed" >&2; exit 2; }
+# The PVE address is a fact of the Bootstrap host, never a number inferred
+# from CTID/VMID or a permanent per-site value in Git.
+python3 - "$PVE_IPV4" <<'PY'
+import ipaddress
+import sys
+address = ipaddress.IPv4Address(sys.argv[1])
+assert not (address.is_unspecified or address.is_loopback or address.is_multicast or address.is_link_local)
+PY
 
 OWNER="${SITE%-*}"
 TYPE="${SITE##*-}"
@@ -33,6 +42,11 @@ YAML
 printf '%s\n' '---' 'site:' "  id: $SITE" "  owner_slug: $OWNER" "  type: $TYPE" > "$BASE/group_vars/all.yml"
 chown root:semaphore "$BASE/hosts.yml" "$BASE/group_vars/all.yml"
 chmod 0640 "$BASE/hosts.yml" "$BASE/group_vars/all.yml"
+# Local bootstrap observation, not a Fleet declaration. Reverify it against
+# PVE's actual identity before privileged operations after any IP change.
+printf '%s\n' '---' 'pve_observed:' "  ipv4: $PVE_IPV4" '  source: bootstrap_vmbr0' > "$BASE/pve-runtime.yml"
+chown root:semaphore "$BASE/pve-runtime.yml"
+chmod 0640 "$BASE/pve-runtime.yml"
 
 install -d -o root -g root -m 0755 /opt/digitalhouses/bootstrap /usr/local/sbin
 install -o root -g root -m 0644 "$SRC/bootstrap/semaphore-project.py" /opt/digitalhouses/bootstrap/semaphore-project.py
