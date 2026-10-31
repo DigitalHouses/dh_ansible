@@ -22,9 +22,23 @@ class PveRuntimeContractTests(unittest.TestCase):
         self.assertIn("PVE_RUNTIME_ENDPOINT_MISSING", role)
         self.assertIn("pve-runtime.yml", role)
         self.assertIn("site_pve_source.content", role)
-        self.assertIn("combine({'host': pve_observed.ipv4})", role)
+        self.assertIn("'host': pve_observed.ipv4", role)
+        self.assertIn("'tls': site_pve_fleet.pve.tls", role)
+        self.assertIn("host_root_vmbr0", role)
         self.assertIn("to_nice_yaml", role)
         self.assertNotRegex(role, r"host: [0-9]+[.][0-9]+[.][0-9]+[.][0-9]+")
+
+    def test_host_commissioning_is_general_and_non_destructive(self):
+        host = (ROOT / "bootstrap/commission-pve-runner.py").read_text()
+        self.assertIn("PVE_NATIVE_SSH=PASS", host)
+        self.assertIn("PVE_HARDWARE_AUDIT=PASS", host)
+        self.assertIn("host_root_vmbr0", host)
+        self.assertNotIn("qm destroy", host)
+        self.assertNotIn("zpool destroy", host)
+        audit = (ROOT / "playbooks/audit-pve-native.yml").read_text()
+        self.assertIn("PVE_NATIVE_AUDIT_PASS", audit)
+        self.assertIn("StrictHostKeyChecking=yes", audit)
+        self.assertIn("infrastructure_changes: NONE", audit)
 
     def test_pve_deployment_and_cloudflare_planning_reconcile_first(self):
         for path in ("playbooks/plan-pve-media-vm.yml",
