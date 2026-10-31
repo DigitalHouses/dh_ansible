@@ -32,6 +32,13 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
 
+    - name: Reconcile runner component inventory from authorized private Fleet
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - runner.yml
+
     - name: Load desired runner state from the private inventory repository
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/runner.yml"
