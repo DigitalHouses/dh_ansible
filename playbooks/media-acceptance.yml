@@ -9,6 +9,14 @@
     - name: Load site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Reconcile read-only acceptance inventory from authorized private Fleet
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - pve.yml
+          - media_vm.yml
+
     - name: Load PVE identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/pve.yml"
