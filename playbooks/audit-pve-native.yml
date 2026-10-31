@@ -1,0 +1,143 @@
+---
+# Native read-only PVE probe. Reuses one site-local SSH identity commissioned
+# on the PVE host; no task-specific root worker, sudo or credential transport.
+- name: Resolve this site's authenticated Proxmox endpoint
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  pre_tasks:
+    - name: Load canonical site
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+    - name: Materialize effective PVE identity from Fleet and host-root observation
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - pve.yml
+
+    - name: Load effective PVE endpoint
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve.yml"
+
+    - name: Read local root-commissioned PVE identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve-runtime.yml"
+
+    - name: Require trusted site-scoped host-root observation
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - pve_observed.source == 'host_root_vmbr0'
+          - pve.host == pve_observed.ipv4
+          - pve.node == pve_observed.node
+          - pve.tls.sha256_fingerprint == pve_observed.tls_sha256_fingerprint
+        fail_msg: "PVE_NATIVE_NOT_COMMISSIONED: run generic PVE host-root commissioning first."
+
+    - name: Inspect native PVE SSH materials
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        - /var/lib/semaphore/.ssh/dh_pve_known_hosts
+      register: pve_native_ssh_files
+      changed_when: false
+
+    - name: Accept only trusted SSH material owned by Semaphore
+      ansible.builtin.assert:
+        that:
+          - item.stat.isreg | default(false)
+          - not (item.stat.islnk | default(false))
+          - item.stat.pw_name == 'semaphore'
+          - item.stat.mode == '0600'
+        fail_msg: "PVE_NATIVE_SSH_IDENTITY_UNSAFE"
+      loop: "{{ pve_native_ssh_files.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+
+    - name: Read live PVE certificate fingerprint without credentials
+      ansible.builtin.shell: |
+        set -o pipefail
+        openssl s_client -connect "{{ pve.host }}:{{ pve.port }}" -servername "{{ pve.host }}" </dev/null 2>/dev/null |
+          openssl x509 -noout -fingerprint -sha256
+      args:
+        executable: /bin/bash
+      register: pve_native_live_tls
+      changed_when: false
+      check_mode: false
+
+    - name: Require observed TLS identity before SSH operations
+      ansible.builtin.assert:
+        that:
+          - ('sha256 Fingerprint=' ~ pve.tls.sha256_fingerprint) in pve_native_live_tls.stdout
+        fail_msg: "PVE_NATIVE_TLS_IDENTITY_MISMATCH"
+
+    - name: Add verified PVE target only for this Ansible invocation
+      ansible.builtin.add_host:
+        name: pve_native
+        groups: pve_native_targets
+        ansible_host: "{{ pve.host }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes
+          -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+        expected_pve_node: "{{ pve.node }}"
+        expected_pve_ip: "{{ pve.host }}"
+        expected_pve_site: "{{ site.id }}"
+
+- name: Audit actual PVE hardware and target VM without modifying anything
+  hosts: pve_native_targets
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read PVE node identity
+      ansible.builtin.command: [hostname, -s]
+      register: native_node
+      changed_when: false
+
+    - name: Read effective PVE bridge address
+      ansible.builtin.command: [ip, -4, -o, addr, show, dev, vmbr0]
+      register: native_bridge
+      changed_when: false
+
+    - name: Require exact node and observed IP
+      ansible.builtin.assert:
+        that:
+          - native_node.stdout == expected_pve_node
+          - expected_pve_ip in native_bridge.stdout
+        fail_msg: "PVE_NATIVE_HOST_IDENTITY_MISMATCH"
+
+    - name: Read current guest identifiers
+      ansible.builtin.command: [qm, list]
+      register: native_guests
+      changed_when: false
+
+    - name: Read physical disks without changing them
+      ansible.builtin.command:
+        argv: [lsblk, -J, -b, -o, NAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,TRAN,MOUNTPOINTS]
+      register: native_disks
+      changed_when: false
+
+    - name: Read PCI identities
+      ansible.builtin.command: [lspci, -Dnn]
+      register: native_pci
+      changed_when: false
+
+    - name: Report PVE hardware inventory for media provisioning review
+      ansible.builtin.debug:
+        msg:
+          result: PVE_NATIVE_AUDIT_PASS
+          site: "{{ expected_pve_site }}"
+          node: "{{ native_node.stdout }}"
+          ip: "{{ expected_pve_ip }}"
+          guests: "{{ native_guests.stdout_lines }}"
+          disks: "{{ native_disks.stdout | from_json }}"
+          pci: "{{ native_pci.stdout_lines }}"
+          infrastructure_changes: NONE
