@@ -15,7 +15,7 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
-**После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и privileged workers могут появиться только как отдельная задача, **не** как часть Tiny Bootstrap.
+**После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и PVE/Media privileged workers требуют отдельного ввода в эксплуатацию. Исключение новой версии: Tiny Bootstrap заранее устанавливает **только ограниченный on-demand watcher №40**; Remote Desktop Commander устанавливается позднее, исключительно после запуска №40.
 
 **Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
 
@@ -32,7 +32,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/89d
 1. Получить официальный шаблон Debian 13, создать **только отсутствующий** непривилегированный LXC (`CT1231`, адрес последнего октета `.231/24` из `vmbr0`).
 2. Клонировать публичный `DigitalHouses/dh_ansible` **внутри нового LXC** и проверить закреплённый Git SHA.
 3. Запустить внутри гостя существующий установщик Ansible + Semaphore (с TLS, mDNS, systemd, закрытым файлом начального пароля).
-4. Подготовить минимальный локальный site inventory и через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач` с ограниченным on-demand watcher.
+4. Подготовить минимальный локальный site inventory, через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач`, включить watcher синхронизатора, а в новой версии дополнительно подготовить **отдельный фиксированный watcher №40** без установки Remote Desktop Commander.
 
 Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
 
@@ -86,7 +86,7 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 При запуске нового шаблона `40-Установить Remote Desktop Commander` показывает
 ссылку для подтверждения устройства и одноразовый код **в журнале Semaphore**.
-Root-owned обработчик принимает только запросы `INSTALL:<uuid>` и `PAIR:<uuid>`,
+Root-owned обработчик, подготовленный новым Fresh Bootstrap и включаемый только при наличии разрешённого фиксированного запроса, принимает лишь `INSTALL:<uuid>` и `PAIR:<uuid>`, 
 читает только текущий запуск службы (systemd InvocationID), ограничивает возраст
 кода 13 минутами и публикует исключительно очищенную строку статуса
 в `/run/dh-remote-commander-pairing.status` (root:semaphore, `0640`).
@@ -97,7 +97,7 @@ Root-owned обработчик принимает только запросы `
 Загрузка Chrome может инициироваться самим Desktop Commander для функции `write_pdf`.
 Она не является частью процедуры авторизации Remote MCP.
 
-У Semaphore нет общих root-прав. Для Remote Commander фиксированный root-owned `systemd.path` / `oneshot` механизм должен публиковаться **отдельной разрешённой задачей**, а не в Tiny Bootstrap. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `50-Проверка доступов PVE` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
+У Semaphore нет общих root-прав. На **новых** runner ограниченный root-owned `systemd.path` / `oneshot` механизм №40 ставится в четвёртом этапе Fresh Bootstrap, но **сам Remote Commander не устанавливается** до №40. На уже работающем CT1231 watcher отсутствует: №00 только обновляет шаблоны и **не может** его установить. Повтор №00 → №40 без отдельной разрешённой root-capability установки или нового Fresh Bootstrap по-прежнему вернёт BLOCKED. Подробности: [runbook №40](docs/runbooks/remote-commander-commissioning.md). При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `50-Проверка доступов PVE` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
 
 ## Приёмка нового установщика
 
