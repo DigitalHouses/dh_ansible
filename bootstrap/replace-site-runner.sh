@@ -49,6 +49,17 @@ curl -fLsS --connect-timeout 10 --retry 2 --max-time 90 \
   -o "$STAGING/install.sh"
 bash -n "$STAGING/install.sh"
 grep -Fq 'CTID=1231' "$STAGING/install.sh" || { echo "BLOCKED: different bootstrap CTID" >&2; exit 2; }
+# Ensure the required official guest image is locally available before we
+# destroy the old runner; otherwise an unrelated image download failure
+# could strand the site without a runner.
+pveam update
+TEMPLATE="$(pveam available --section system | awk '$2 ~ /^debian-13-standard_[[:alnum:].+-]+_amd64[.]tar[.]zst$/ {print $2}' | sort -V | tail -n1)"
+[[ -n "$TEMPLATE" ]] || { echo "BLOCKED: Debian 13 template unavailable" >&2; exit 2; }
+if ! pveam list local | grep -Fq "local:vztmpl/$TEMPLATE"; then
+  pveam download local "$TEMPLATE"
+fi
+echo "TEMPLATE_READY=PASS"
+
 if pct config "$CTID" >/dev/null 2>&1; then
   CONF="$(pct config "$CTID")"
   grep -Fxq "hostname: ansible-$OLD_SITE" <<< "$CONF" || {
