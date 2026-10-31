@@ -17,6 +17,8 @@
 
 **После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и privileged workers могут появиться только как отдельная задача, **не** как часть Tiny Bootstrap.
 
+**Fresh E2E принят 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
+
 ## Единая точка входа · Tiny Bootstrap
 
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
@@ -34,25 +36,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/261
 
 Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
 
-**Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. При E2E на Jonsbo после неуспеха оператор отдельно удаляет только идентифицированный тестовый CT по [runbook](docs/runbooks/ai-agent-execution.md), сохраняет HAOS VM2253 и запускает ту же команду с нуля. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
+**Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. На Jonsbo тестовый цикл удаления CT закрыт успешной приёмкой; действующий CT1231 не удалять без нового адресного разрешения. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
 
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
-## PVE Access · принятый E2E
+## PVE Access · отдельная приёмка, не часть Bootstrap
 
-**Историческая приёмка на прежнем PVE (20 октября 2026):** PVE Access и зашифрованный Fleet Vault были приняты для `serzhan-home`. Это **не** приёмка нового Jonsbo, а Tiny Bootstrap намеренно не переносит старые credentials.
-Канонические пользователи `ansible-audit@pve`, `ansible-writer@pve` и Linux `ansible-linux` созданы на PVE.
-Независимо подтверждены SSH/sudo, оба API-токена (только GET), совпадение SSH/TLS pin и восстановление
-двух токенов с исходным защищённым escrow из зашифрованного Fleet Vault в режиме read-only.
-Первый выпуск токенов повторно не выполнялся. Заключительный destructive Fresh E2E CT1231,
-включая Semaphore-шаблон `40`, **ещё не выполнен**.
+Историческая приёмка PVE Access и восстановления Fleet Vault на **прежнем PVE** проходила в октябре 2026 года. Tiny Bootstrap на Jonsbo **не** переносит identities, private Fleet и защищённые workers; они требуют отдельных задач Semaphore, явного разрешения и собственных проверок. Старые результаты нельзя принимать как подтверждение нового PVE.
 
 ## Semaphore · локальные операции
 
 **Обязательный стандарт проектирования и выбора механизма задач:** [Semaphore · создание задач, reusable-этапы и Workflows](docs/standards/semaphore-task-design.md). Перед добавлением нового шаблона сверяйте функциональный класс, источник site data/секретов, границу root-worker и E2E-приёмку одной кнопкой.
 
 
-**Новый режим (кандидат; Fresh E2E ещё не принят):** Installer создаёт в Semaphore
+**Принятый режим (Fresh E2E + первый запуск №00 = PASS, 31.10.2026):** Установщик создаёт в Semaphore
 **ровно одну задачу — `00-Обновить список задач`**. Остальные определения
 хранятся в `catalog/semaphore-tasks.json` публичного `dh_ansible`
 и создаются/обновляются по запросу через официальный localhost HTTPS API.
@@ -70,12 +67,9 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 не меняет ID/историю существующих управляемых шаблонов. Работает через
 ограниченный root-owned `systemd.path` обработчик. Отзывной API-токен Semaphore
 хранится только у root (`0600`), поэтому смена UI-пароля не ломает синхронизацию.
-При ошибке каталога задача `00` остаётся доступной. На восстановленном старом
-CT1231 по-прежнему находятся прежние шаблоны; перенос требует отдельного аудита
-и миграции, без уничтожения существующего Golden Backup.
+При ошибке синхронизации задача №00 остаётся доступной. Уже существующие задачи нельзя стирать или переименовывать без отдельного проверенного плана.
 
-**Историческая приёмка 20.10.2026:** старый Bootstrap использовал задачи
-`10/20/30/40` и прошёл Fresh E2E. Новый одношаблонный Bootstrap прошёл живой CI-тест Semaphore 2.19 API, но ещё не принят в Fresh E2E.
+**Текущая приёмка:** только четырёхэтапный Tiny Bootstrap и №00; 10 новых задач зарегистрированы, но не запускались. Исторические результаты старого Bootstrap не заменяют приемку инфраструктурных задач на Jonsbo.
 
 При запуске нового шаблона `40-Установить Remote Desktop Commander` показывает
 ссылку для подтверждения устройства и одноразовый код **в журнале Semaphore**.
@@ -90,53 +84,19 @@ Root-owned обработчик принимает только запросы `
 Загрузка Chrome может инициироваться самим Desktop Commander для функции `write_pdf`.
 Она не является частью процедуры авторизации Remote MCP.
 
-У Semaphore нет общих root-прав. Для Remote Commander на runner заранее подготавливается root-owned фиксированный `systemd.path` / `oneshot` механизм. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `50-Проверка доступов PVE` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
+У Semaphore нет общих root-прав. Для Remote Commander фиксированный root-owned `systemd.path` / `oneshot` механизм должен публиковаться **отдельной разрешённой задачей**, а не в Tiny Bootstrap. При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `50-Проверка доступов PVE` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
 
-### Fresh Bootstrap · transient pct exec SIGHUP
+## Приёмка нового установщика
 
-В E2E 20.10.2026 Bootstrap смог создать Debian 13, установить Ansible и HTTPS Semaphore,
-но после `SEMAPHORE_TEMPLATES=PASS` один из вызовов `pct exec ... install -d` вернул `129`.
-Exit 129 совместим с SIGHUP; причина сигнала по журналу не определена.
-Только создание root-owned bootstrap-каталогов (идемпотентное `install -d`) теперь имеет
-**не более 3 попыток** с диагностикой `GUEST_DIRECTORY_ATTACH_INTERRUPTED`.
-Другие операции PVE, Semaphore, GitHub и Vault не повторяются автоматически.
-Повторный полностью успешный Fresh E2E необходим перед созданием Golden backup.
+**31 октября 2026:** подтверждены Fresh Bootstrap и ручной запуск задачи №00 через Semaphore. Журнал Bootstrap: `CT_CREATE=PASS`, `CODE_GIT_SHA=PASS`, `SEMAPHORE_INSTALL=PASS`, `TASK_00_ONLY=PASS`, `BOOTSTRAP_FRESH_DONE=PASS`, `RESULT_RC=0`. Журнал №00: `created=10`, `unchanged=1`, `updated=0`, `failed=0`, `unreachable=0`, `infrastructure_tasks_executed=false`. Полный отчёт: [acceptance](docs/acceptance/tiny-bootstrap-2026-10-31.md).
 
-### Debian 13 · штатная обработка Postfix в LXC
+**Ранее:** в октябре 2026 прежний Python Bootstrap проходил собственные E2E и диагностику `pct exec`/Postfix, включал восстановление Fleet/PVE identities и режимы `--resume*`. Эти механизмы **не относятся к принятому Tiny Bootstrap**, не должны возвращаться в его путь и остаются только историей Git. Отдельная проверка PVE/Fleet/Media/Remote Commander на новом runner ещё не проведена.
 
-Для нового `CT1231` Bootstrap требует работающих `dbus.service`, `dbus.socket` и здорового systemd.
-Если единственный упавший systemd-unit — `postfix.service`, который не нужен runner и не может
-настроить mount namespace внутри непривилегированного LXC, Bootstrap штатно выполняет
-`systemctl mask --now postfix.service` и `systemctl reset-failed postfix.service`.
-Любые другие сбои systemd по-прежнему блокируют установку.
-
-При остановке сразу после первого запуска Debian разрешён `--resume-fresh`.
-Этот режим повторно не создаёт CT и **восстанавливает** ранее выданные PVE
-API-токены и SSH-ключ из зашифрованного Fleet Vault — без перевыпуска токенов.
-
-## Приёмка
-
-20 октября 2026: **Fresh Bootstrap + recovery E2E `serzhan-home` = ACCEPTED**.
-Действующий CT1231 создан заново из официального Debian 13. Во время первого запуска выявлена
-ошибка необязательного Postfix в непривилегированном LXC; причина и обработка зафиксированы.
-После возобновления подготовлены HTTPS Semaphore, Ansible Core 2.21.4, локальный inventory,
-mDNS и PVE Access. Первоначальные credentials восстановлены из зашифрованного Fleet Vault
-**без перевыпуска токенов**. В Semaphore проверены задания:
-`10-Проверка запуска Ansible` Task #1 SUCCESS;
-`20-Аудит локального runner` Task #2 SUCCESS;
-`40-Проверка доступов PVE` Task #3 SUCCESS (`pve_access: PASS`).
-systemd healthy, Semaphore и оба root-owned watcher active, секретный SSH-ключ root:0600.
-Тест read-only PVE audit подтвердил реальные API-токены (GET) и SSH/sudo.
-Проверка восстановленной инфраструктуры принята. Сценарии **PVE write** и развёртывание
-NetAlertX являются отдельными задачами и этой приёмкой не утверждены.
-
-19 октября 2026: **Fresh Bootstrap E2E домашнего pilot runner принят** — официальный Debian 13 с нуля, HTTPS Semaphore 2.19.16, Ansible Core 2.21.4, два UI smoke-аудита SUCCESS и read-only повторный seeder PASS. Это **не** разрешение на инфраструктурные write-операции или массовое развёртывание.
-
-Новый flow подтверждения slug и on-demand Remote Commander проверяется отдельно CI и контролируемым `--resume-semaphore` на действующем тестовом CT; повторный destructive E2E для их применения не нужен. Production объекты не менять без отдельной приёмки.
+**CI:** общий workflow по-прежнему останавливается на проверке безопасности некоторых ранее существовавших публичных файлов, ещё до тестов. Этот вопрос решается отдельно, без обхода security gate; успешный live E2E не означает зелёный CI.
 
 ## Имя локального runner
 
-Hostname LXC: `ansible-<site_id>` (например, `ansible-serzhan-home`). Site ID (`serzhan-home`) остаётся ключом Fleet, Semaphore inventory и Vault; hostname всегда строится по этому полному ID. CTID/IP по прежнему стандарту 1231 / .231. Bootstrap сверяет Site ID и owner_slug из PRIVATE site metadata до создания гостя. Переход на новое имя применяется только при следующем Fresh E2E, старые работающие CT не переименовываются автоматически.
+Hostname LXC: `ansible-<site_id>` (например, `ansible-serzhan-home`). Site ID (`serzhan-home`) остаётся ключом Fleet, Semaphore inventory и Vault; hostname всегда строится по этому полному ID. CTID/IP по прежнему стандарту 1231 / .231. Tiny Bootstrap подтверждает введённый Site ID и строит hostname из него; **private Fleet до создания CT не загружается**. Переход на новое имя применяется только при следующем Fresh E2E, старые работающие CT не переименовываются автоматически.
 
 
 ## Стандарт сетевой идентификации Linux-гостей
