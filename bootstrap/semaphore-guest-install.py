@@ -37,7 +37,7 @@ ADMIN_SECRET = Path("/root/dh-semaphore-initial-admin-password")
 UNIT = Path("/etc/systemd/system/digitalhouses-semaphore.service")
 VENV = Path("/opt/ansible/venv")
 APT_PKGS = ("python3", "python3-venv", "python3-pip", "ca-certificates", "curl",
-            "openssl", "git", "openssh-client", "tzdata", "avahi-daemon", "avahi-utils")
+            "openssl", "git", "openssh-client", "sudo", "tzdata", "avahi-daemon", "avahi-utils")
 
 
 class Blocked(RuntimeError):
@@ -161,6 +161,25 @@ def setup_files(site, runner_ip, service):
     os.chmod(CONFIG, 0o640)
 
 
+def configure_local_runner_admin(service) -> None:
+    """Give Semaphore native Ansible become inside its own disposable LXC only.
+
+    This is never a PVE credential and does not grant access to another guest.
+    The policy is installed at the runner/OS level, not for any numbered task.
+    """
+    if service.pw_name != "semaphore" or service.pw_uid == 0:
+        raise Blocked("Unexpected Semaphore administrative identity")
+    path = Path("/etc/sudoers.d/digitalhouses-semaphore")
+    if path.exists() or path.is_symlink():
+        raise Blocked("Existing local Semaphore sudo policy must be audited")
+    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o440)
+    with os.fdopen(fd, "w") as stream:
+        stream.write("semaphore ALL=(ALL:ALL) NOPASSWD: ALL\\n")
+    os.chmod(path, 0o440)
+    command("visudo", "-cf", str(path))
+    print("SEMAPHORE_LOCAL_ADMIN=PASS (runner LXC only)", flush=True)
+
+
 def configure_network_identity(site: str, runner_ip: str) -> None:
     """Publish the verified system hostname through native Debian mDNS.
 
@@ -241,6 +260,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
     if service.pw_uid == 0:
         raise Blocked("Unsafe service user")
     setup_files(site, runner_ip, service)
+    configure_local_runner_admin(service)
     print("SEMAPHORE_TLS_SETUP=PASS", flush=True)
     command("runuser", "-u", "semaphore", "--", "/usr/bin/semaphore",
             "migrate", "--config", str(CONFIG), timeout=90)
@@ -271,10 +291,8 @@ Environment=LC_ALL=C.UTF-8
 ExecStart=/usr/bin/semaphore server --config /etc/semaphore/config.json
 Restart=on-failure
 RestartSec=5
-NoNewPrivileges=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/semaphore
-ProtectHome=true
+# Semaphore executes approved Ansible become/sudo for this runner LXC.
+# No privilege-blocking systemd sandbox; other targets use separate identities.
 PrivateTmp=true
 UMask=0077
 
