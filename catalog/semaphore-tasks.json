@@ -48,7 +48,7 @@
     },
     {
       "title": "50-Проверка доступов PVE",
-      "playbook": "playbooks/request-pve-access-audit.yml",
+      "playbook": "playbooks/audit-pve-native.yml",
       "view": "04 · Приёмка"
     },
     {
