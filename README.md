@@ -22,7 +22,7 @@
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/da78782bc0c6b2ca208e4896e9c8c58c43da2bdc/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/261645fb4ab49bad8c0b115a49e88db7a47029fe/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
