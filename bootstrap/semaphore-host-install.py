@@ -131,7 +131,9 @@ CODE_FILES = (
     "playbooks/setup-pve-media-guest.yml",
     "playbooks/media-acceptance.yml",
     "playbooks/media-acceptance-worker.yml",
+    "playbooks/attach-pve-media-backup-nfs.yml",
     "scripts/media-acceptance.py",
+    "scripts/dh-task-runner.py",
     "playbooks/commission-new-runner-bonjour.yml",
     "bootstrap/dh-pve-media-deploy.py",
 )
@@ -1266,7 +1268,7 @@ def stage_pve_access_audit(checkout: Path, expected_commit: str) -> None:
                      "commission-new-runner-bonjour.yml"):
         source = checkout / "playbooks" / playbook
         if not source.is_file() or source.is_symlink():
-            raise Blocked("Pinned PVE/media playbook missing")
+            raise Blocked("Pinned PVE/media playbook missing: " + playbook)
         target = folder + "/playbooks/" + playbook
         assets["playbooks/" + playbook] = hashlib.sha256(source.read_bytes()).hexdigest()
         run("pct", "push", str(CTID), str(source), target, timeout=30)
