@@ -15,7 +15,7 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
-**После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и PVE/Media privileged workers требуют отдельного ввода в эксплуатацию. Исключение новой версии: Tiny Bootstrap заранее устанавливает **только ограниченный on-demand watcher №40**; Remote Desktop Commander устанавливается позднее, исключительно после запуска №40.
+**После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общие административные права для установки ПО и управления сервисами задаются по каждому managed target согласно [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md), а не отдельными root-workers для каждого номера задачи.
 
 **Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
 
@@ -24,7 +24,7 @@
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/603d11ff72e04e92c84b58b6321bf4bc55cf83e5/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/6fef78d3cbd347552267c1bfd14bb0db5a683771/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
@@ -32,11 +32,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/603
 1. Получить официальный шаблон Debian 13, создать **только отсутствующий** непривилегированный LXC (`CT1231`, адрес последнего октета `.231/24` из `vmbr0`).
 2. Клонировать публичный `DigitalHouses/dh_ansible` **внутри нового LXC** и проверить закреплённый Git SHA.
 3. Запустить внутри гостя существующий установщик Ansible + Semaphore (с TLS, mDNS, systemd, закрытым файлом начального пароля).
-4. Подготовить минимальный локальный site inventory, через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач`, включить watcher синхронизатора, а в новой версии дополнительно подготовить **отдельный фиксированный watcher №40** без установки Remote Desktop Commander.
+4. Подготовить минимальный локальный site inventory, через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач` и включить ограниченный каталоговый watcher. Права для установки ПО не выдаются как побочный эффект Bootstrap.
 
 Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens.
 
-**Задача №40 на уже работающем CT:** №00 не умеет доустанавливать root-owned watcher. Для существующего guest применяется один явно разрешённый **недеструктивный pinned upgrade** без пересоздания LXC и повторной №05/06; только затем запускается №40 через Semaphore. Полный порядок и границы: [runbook №40](docs/runbooks/remote-commander-commissioning.md). Новая схема ещё не имеет живой приёмки. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
+**Общий доступ для установки ПО:** №05/06 дают доступ к Fleet Vault, но не включают административные права Linux. Установка программ на runner и иных managed nodes требует отдельного commissioning инфраструктурной учётной записи / `ansible_become`. Задача №40 теперь использует обычную Ansible роль и общий preflight, а не особый watcher; при отсутствии прав она возвращает `INFRASTRUCTURE_ACCESS_NOT_COMMISSIONED`. Подробнее: [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md) и [runbook №40](docs/runbooks/remote-commander-commissioning.md). Bootstrap не запускает №00; после установки оператор отдельно запускает №00 для получения полного каталога.
 
 **Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. 31.10.2026 владелец дал **новое явное разрешение** удалить только подтверждённый тестовый CT1231 для следующего Fresh E2E. Это не общая политика удаления других LXC/VM. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
 
@@ -86,20 +86,12 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 **Текущая приёмка:** только четырёхэтапный Tiny Bootstrap и №00; 10 новых задач зарегистрированы, но не запускались. Исторические результаты старого Bootstrap не заменяют приемку инфраструктурных задач на Jonsbo.
 
-При запуске нового шаблона `40-Установить Remote Desktop Commander` показывает
-ссылку для подтверждения устройства и одноразовый код **в журнале Semaphore**.
-Root-owned обработчик, подготовленный новым Fresh Bootstrap и включаемый только при наличии разрешённого фиксированного запроса, принимает лишь `INSTALL:<uuid>` и `PAIR:<uuid>`, 
-читает только текущий запуск службы (systemd InvocationID), ограничивает возраст
-кода 13 минутами и публикует исключительно очищенную строку статуса
-в `/run/dh-remote-commander-pairing.status` (root:semaphore, `0640`).
-Полный systemd journal, OAuth-сессия и секреты не предоставляются Semaphore.
-Если служба уже работает, `PAIR` показывает текущий код без повторной установки.
-Отдельно проверяется статус устройства Online: статус `active` в systemd его не доказывает.
+Новая задача **40-Установить Remote Desktop Commander** вызывает общий `infrastructure_access` и существующую Ansible-роль `runner_remote_commander` с `become: true`. При действительном административном доступе она устанавливает pinned Node.js и агент, управляет systemd и выводит отфильтрованный код подключения. Отдельно проверяется статус устройства `Online`: статус `active` в systemd его не доказывает.
 
 Загрузка Chrome может инициироваться самим Desktop Commander для функции `write_pdf`.
 Она не является частью процедуры авторизации Remote MCP.
 
-У Semaphore нет общих root-прав. На **новых** runner ограниченный root-owned `systemd.path` / `oneshot` механизм №40 ставится в четвёртом этапе Fresh Bootstrap, но **сам Remote Commander не устанавливается** до №40. На уже работающем CT1231 watcher отсутствует: №00 только обновляет шаблоны и **не может** его установить. Повтор №00 → №40 без отдельной разрешённой root-capability установки или нового Fresh Bootstrap по-прежнему вернёт BLOCKED. Подробности: [runbook №40](docs/runbooks/remote-commander-commissioning.md). При запуске шаблон размещает только локальный запрос `INSTALL`; root выполняет исключительно закреплённый playbook установки Remote Commander. Все произвольные PVE/TrueNAS операции и доступ к Fleet Vault недоступны через этот механизм. Шаблон `50-Проверка доступов PVE` использует отдельный фиксированный read-only обработчик и не предоставляет Semaphore секреты.
+**Правила для всех задач установки ПО:** target, административная identity/credential source, `become`, разрешённые операции, approval и postconditions должны быть явно указаны. `sudo`/root-доступ — общий для конкретного managed node инфраструктурный prerequisite, а не исключение под приложение. См. [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md) и [стандарт Semaphore](docs/standards/semaphore-task-design.md). Существующие PVE/Media workers считаются legacy-контрактами до отдельной миграции; новая модель не устанавливает их автоматически.
 
 ## Приёмка нового установщика
 
