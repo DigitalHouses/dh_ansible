@@ -46,13 +46,6 @@ systemctl daemon-reload
 systemctl enable --now dh-semaphore-catalog-sync.path
 [[ $(systemctl is-active dh-semaphore-catalog-sync.path) == active ]] || { echo "BLOCKED: task 00 watcher inactive" >&2; exit 2; }
 
-# Stages only fixed-purpose task 40 watcher; agent remains opt-in.
-[[ -f "$SRC/bootstrap/stage-remote-commander-watcher.sh" &&
-   ! -L "$SRC/bootstrap/stage-remote-commander-watcher.sh" ]] || {
-  echo "BLOCKED: pinned task 40 commissioning missing" >&2; exit 2;
-}
-bash "$SRC/bootstrap/stage-remote-commander-watcher.sh" "$SITE" "$SHA"
-
 # Independent API acceptance: exactly one template; no task has been launched.
 python3 - "$SITE" <<'PY'
 import pathlib
