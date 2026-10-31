@@ -1,0 +1,17 @@
+---
+# One-time site runner commissioning. Run by existing authorized guest root.
+# Not a Semaphore operator template: unprivileged Semaphore cannot grant itself
+# first-time root rights. Used identically for any site runner LXC.
+- name: Commission native local Ansible admin for one existing runner
+  hosts: site_runner
+  connection: local
+  gather_facts: false
+  become: false
+
+  pre_tasks:
+    - name: Load the canonical runner identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+
+  roles:
+    - role: runner_local_admin
