@@ -19,6 +19,8 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
+**Credentials новых домов:** штатный [однократный site Vault onboarding](docs/runbooks/site-credentials-onboarding.md) — отдельный Ansible Vault на объект, зашифрованный Git, пароль владельца вне runner, проверенное локальное сохранение `0600` и повторное использование через общую роль `fleet_credentials`. Глобальный master Vault прежних домов — только переходная совместимость. Платных сервисов не требуется.
+
 **После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общие административные права для установки ПО и управления сервисами задаются по каждому managed target согласно [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md), а не отдельными root-workers для каждого номера задачи.
 
 **Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
