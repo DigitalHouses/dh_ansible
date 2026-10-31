@@ -32,11 +32,11 @@ Task numbers describe UI ordering, **not** automatic execution dependencies.
 Task 00 is initially the only built-in template; task 10 (Cloudflare planning)
 appears after the first successful task 00 synchronization.
 
-## Поправка 2026-10-31 · Задача №40
+## Поправка 2026-10-31 · Общее административное исполнение Ansible
 
-Приоритет независимой работы AI-агентов: **только fixed-purpose worker №40** разрешено устанавливать **пассивно** в последнем этапе нового Fresh Bootstrap. Он не устанавливает и не запускает Remote Desktop Commander до явного запуска №40 инженером в Semaphore. Стартовый каталог по-прежнему состоит **только из №00**; PVE/Media/Fleet работники не входят в Bootstrap. Root-owned watcher №40 принимает только проверенные requests `INSTALL` и `PAIR`, не предоставляет `semaphore` root shell. Детали и границы: [runbook №40](../runbooks/remote-commander-commissioning.md).
+Предыдущая попытка выделить fixed-purpose root-worker специально для №40 **отменена по решению владельца**. Подготовка системных обработчиков под каждый install playbook — нецелевой антипаттерн. [ADR-0020](0020-infrastructure-privilege-and-software-installation.md) вводит **переиспользуемую административную identity и стандартное Ansible `become` для конкретного managed target**, без отдельных root-capabilities по номеру задачи.
 
-Для уже работающего CT1231 старый root-owned каталоговый worker не умеет обновлять себя и не имеет операции по установке №40. Нужен один явный **недеструктивный pinned updater** с PVE/CT identity checks; пользователь может выполнить его одной командой и затем запустить №40. Простая №00 не повышает привилегии и не доставляет worker. На дату этой поправки новый путь **IMPLEMENTED IN GIT**, но **ещё не принят живой проверкой**.
+Bootstrap и №00 не должны скрыто выдавать универсальные root-права; commissioning credentials — отдельная явная инфраструктурная процедура. Задача №40 — обычная software/service установка через роль. Установленный CT1231 пока не обладает commissioned `become` для `semaphore`, и простое обновление №00 этого не меняет. Реальная установка №40 ещё не принята.
 
 ## Task 00 · Synchronize catalog
 - Public code repository `dh_ansible` is authoritative for catalog definitions.
