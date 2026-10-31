@@ -1,0 +1,36 @@
+---
+# Include from a task which needs this site's credentials.
+# Requires task 05 (private Git) + task 06 (Vault password) to have succeeded.
+- name: Require this site's local Fleet credentials
+  ansible.builtin.assert:
+    that:
+      - site is defined
+      - site.id is defined
+      - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+      - inventory_hostname == 'runner'
+      - (ansible_connection | default('')) == 'local'
+    fail_msg: "FLEET_CREDENTIALS_BAD_SITE"
+
+- name: Decrypt local Fleet Vault using saved password
+  ansible.builtin.command:
+    argv:
+      - /opt/ansible/venv/bin/ansible-vault
+      - view
+      - --vault-password-file
+      - /var/lib/semaphore/.dh-credentials/fleet-vault-password
+      - /var/lib/semaphore/.dh-credentials/fleet/secrets/fleet.vault.yml
+  register: dh_fleet_decrypted
+  changed_when: false
+  no_log: true
+
+- name: Select only this site's credentials in memory
+  ansible.builtin.set_fact:
+    fleet_site_credentials: "{{ (dh_fleet_decrypted.stdout | from_yaml).fleet_secrets.sites[site.id] }}"
+  no_log: true
+
+- name: Verify site credentials were selected
+  ansible.builtin.assert:
+    that:
+      - fleet_site_credentials is mapping
+    fail_msg: "FLEET_SITE_CREDENTIALS_MISSING"
+  no_log: true
