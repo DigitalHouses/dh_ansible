@@ -106,7 +106,7 @@ pct exec "$CTID" -- python3 /opt/digitalhouses/src/bootstrap/semaphore-guest-ins
 echo "SEMAPHORE_INSTALL=PASS"
 
 echo "=== 4/4 · SINGLE TASK 00 ==="
-pct exec "$CTID" -- bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh "$SITE" "$CODE_RELEASE"
+pct exec "$CTID" -- bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh "$SITE" "$CODE_RELEASE" "${HOST_CIDR%/*}"
 echo "BOOTSTRAP_FRESH_DONE=PASS"
 echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
 echo "ADMIN_PASSWORD_FILE=CT$CTID:/root/dh-semaphore-initial-admin-password"
