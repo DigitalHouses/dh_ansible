@@ -4,18 +4,19 @@
 
 **Приоритет и границы:** [AGENTS.md](../../AGENTS.md), [инженерные принципы](../engineering-principles.md), [стандарт Semaphore](../standards/semaphore-task-design.md), разрешения владельца, Fleet и ограничения подключённого инструмента имеют силу. Данный документ **не выдаёт нового доступа**, не отменяет approvals, не является универсальным разрешением на production. Детали медиасервера и диагностики приложений — в [media-semaphore-launch.md](media-semaphore-launch.md).
 
-## Fresh Bootstrap E2E — Jonsbo, до первой полной приёмки
+## Tiny Bootstrap + Semaphore №00 — Fresh E2E ACCEPTED (31.10.2026)
 
-**Решение владельца от 31.10.2026:** на новом standalone PVE Jonsbo, в тестовом цикле установки Ansible-2 (`site=serzhan-home`, `CT1231`, `ansible-serzhan-home`, стандартный последний октет `.231/24`) каждый неуспешный Bootstrap означает **удаление этого тестового LXC и повторный полный запуск Bootstrap с нуля**. `--resume`, `--resume-fresh`, `--resume-ansible` и `--resume-semaphore` в этой приёмке **не использовать**. Цель — добиться успешного **Fresh E2E**, а не довести частичную установку до успеха через resume.
+**Принято на Jonsbo, site `serzhan-home`, тестовый CT1231:** новый четырёхэтапный Bootstrap успешно создал чистый Debian 13 LXC, получил pinned Git checkout, установил Ansible + Semaphore HTTPS и создал **ровно одну №00**. `CT_CREATE=PASS`, `CODE_GIT_SHA=PASS`, `SEMAPHORE_INSTALL=PASS`, `TASK_00_ONLY=PASS`, `BOOTSTRAP_FRESH_DONE=PASS`, `RESULT_RC=0`. Оператор отдельно запустил №00 в Semaphore: `created=10`, `unchanged=1`, `updated=0`, `failed=0`, `unreachable=0`; инфраструктурные задачи не исполнялись. Полный отчёт: [Tiny Bootstrap — acceptance](../acceptance/tiny-bootstrap-2026-10-31.md).
 
-- Правило относится **только к указанному тестовому CT1231 на Jonsbo до приёмки**; не распространяется на чужие PVE, старые production runner, media VM и другие VM/LXC.
-- Перед каждым удалением автоматически проверить, что операция выполняется на утверждённом Jonsbo PVE (`vmbr0`, текущий адрес проверяется по приватному Fleet), а CT1231 имеет точные `hostname=ansible-serzhan-home`, `unprivileged=1`, `net0 ip=<site-runner-ip>/24` из private Fleet, `rootfs=local-lvm:vm-1231-disk-0`. Несовпадение = BLOCKED. Сохранить HAOS VM 2253 и все прочие гости. Удаление исполняет авторизованный оператор через штатные `pct stop` / `pct destroy`; не внедрять автоматическую очистку в обычный production Bootstrap.
-- Исправлять **четырёхэтапный** Tiny Bootstrap в `dh_ansible`, закреплять Git SHA в README, затем запускать **единую команду GitHub** без `--resume`. Старый Python orchestrator не возвращать. Каждый прогон интерактивный и проверяемый; **не создавать бесконечные автоматические попытки**.
-- **Для нового Tiny Bootstrap** после полного завершения требуются `RESULT_RC=0`, `BOOTSTRAP_FRESH_DONE=PASS`, `CT_CREATE=PASS`, `SEMAPHORE_INSTALL=PASS`, `TASK_00_ONLY=PASS`, HTTPS и отдельный ручной запуск №00 через Semaphore. Private Fleet и PVE Access сознательно **не** входят в Bootstrap: ими занимаются последующие отдельно утверждённые задачи. Промежуточные PASS не означают приёмку.
+**Граница:** private Fleet, PVE Access, защищённые worker, Remote Commander, Media Server и прочие задачи после №00 **не устанавливаются Bootstrap**. Они не считаются протестированными. Нельзя переносить успех старого Python Bootstrap/worker на новый runner; отсутствие worker на чистом CT является ожидаемым состоянием, а не ошибкой Bootstrap.
+
+**Fresh test cleanup закрыт:** разрешение 31.10.2026 удалять CT1231 между неудачными E2E относилось **только к испытаниям до этой приёмки**. Теперь CT — действующий runner: не удалять/пересоздавать без нового адресного destructive approval и проверки host/CT/rootfs/отсутствия mount points. Всегда сохранять HAOS VM2253 и все соседние гости. Сам установщик никогда не удаляет существующий CT, не имеет режимов `--resume*`.
+
+**Будущая установка:** одна pinned команда из [README](../../README.md) → четыре этапа → только №00 → человек нажимает №00 в Semaphore для получения остальных шаблонов. Bootstrap не расширять старым Python-orchestrator и не добавлять в него PVE/Media/Fleet логику.
 
 ## 0. Короткая памятка на 30 секунд
 
-1. Проверь доступные подключения: в пилоте рабочий путь — **Remote Desktop Commander → `ansible-serzhan-home` (site runner, CT1231)**. На runner установлен `semaphore`, Ansible и защищённый root-worker.
+1. Проверь доступные подключения: в пилоте рабочий путь — **Remote Desktop Commander → `ansible-serzhan-home` (site runner, CT1231)**. На новом runner после Tiny Bootstrap установлены Ansible и Semaphore; защищённый root-worker **не входит** в Bootstrap и появляется только после отдельной разрешённой установки.
 2. Прочитай текущие `AGENTS.md` и **этот** документ. Уточни site, требуемую задачу/действия, разрешение владельца; не переносить параметры из чужого дома.
 3. До любого apply проверь **живую** идентичность site/VM/диска, параллельные процессы, pending worker request, Git SHA checkout, Git SHA pinned worker, целостность manifest и актуальные approvals Fleet.
 4. **Основной путь** — штатный Semaphore UI/API, если он доступен и разрешён. **Подтверждённый инженерный путь** — непосредственный запуск **того же Ansible playbook от пользователя `semaphore`** на site runner с тем же site inventory; для этого **не нужен Semaphore API** и не нужен ручной запуск PVE helper.
@@ -25,11 +26,11 @@
 
 **Правило коммуникации:** «Semaphore API недоступен» ≠ «запустить Ansible самостоятельно невозможно». «Когда-то был `DEPLOYED`» ≠ «новая версия применена». Не просить пользователя повторно запускать то, что агент может корректно выполнить разрешённым способом.
 
-## Стандартный способ запуска **любой** задачи из каталога
+## Дополнительный инженерный CLI после отдельной установки task runner
 
-**Один общий механизм для задач 00, 10, 20, 30, 40, 50, 60, 70, 80, 81, 90 и будущих задач** — root-owned pinned CLI `scripts/dh-task-runner.py` из существующего защищённого release. Никаких специальных launch-скриптов для каждого номера или отдельных привилегий для №81. Источник задач — неизменный `catalog/semaphore-tasks.json` **того же Git SHA**, что и checkout.
+**Основной способ работы** после №00 — запуск задач через **Semaphore**. Для разрешённой диагностики/инженерного запуска любой задачи существует **необязательный** root-owned pinned CLI `scripts/dh-task-runner.py` из **отдельно опубликованного** защищённого release. Никаких специальных launch-скриптов для каждого номера или отдельных привилегий для №81. Источник задач — неизменный `catalog/semaphore-tasks.json` **того же Git SHA**, что и checkout.
 
-После разрешённой публикации соответствующего release Bootstrap кладёт launcher в `/opt/digitalhouses/bootstrap/pve-access/scripts/dh-task-runner.py` (root-owned), и включает его SHA256 в manifest. Проверить версию перед выполнением. Старая инсталляция с **69 assets** этого launcher ещё не содержит: до обновления полноценного staged release он **не существует** на runner. Изменён состав assets — нельзя перепубликовать новый release старым циклом «перебрать 69 файлов», требуется staging **нового manifest по обновлённой функции** `stage_pve_access_audit` и его проверка.
+Этот CLI **отсутствует на чистом Tiny Bootstrap runner**. Только отдельная разрешённая задача публикует защищённый release/launcher по проверенному контракту, включая SHA256 в manifest. Перед применением убедиться, что launcher действительно установлен, release проверен и действие разрешено. Не пытаться вызвать legacy `stage_pve_access_audit` через старый Python Bootstrap для «самовосстановления».
 
 Использование (команды выполняются **только** в уже разрешённой root-сессии доверенного site runner; нет автоматического открытия доступа):
 
@@ -58,7 +59,9 @@ python3 "$TOOL" --site serzhan-home --task 80 --commit "$SHA" \
 
 **Важно:** этот способ **не даёт AI новых прав**. Если подключённый инструмент явно отклонил выполнение операции (например, прежний запуск №81), нельзя повторить тот же запрещённый запуск с этим launcher под видом «другого метода». Тогда запуск выполняет разрешённый оператор через Semaphore UI либо отдельно утверждённый доступ. Реализация механизма в Git и его установка на site runner — два разных состояния.
 
-**Исторические shell-команды §4/§5** остаются справкой для диагностики старых запусков; для новых AI-чата и новой задачи стандартный путь — **только этот общий launcher**. Прямой путь не создаёт Task/Success в UI Semaphore — результат отмечается отдельно.
+**Исторические shell-команды §4/§5** остаются справкой для диагностики старых запусков. Стандарт после №00 — **Semaphore UI**; этот CLI допускается только когда установлен отдельно, проверен и разрешён. Прямой путь не создаёт Task/Success в UI Semaphore — результат отмечается отдельно. Прямой путь не создаёт Task/Success в UI Semaphore — результат отмечается отдельно.
+
+**Важно для команд этого документа:** разделы о protected worker и CLI **условны**: после принятого Tiny Bootstrap присутствуют только Ansible/Semaphore/№00 и синхронизированные шаблоны. Не считать существование worker, SSH/PVE identities или секретов доказанным без отдельного read-only preflight.
 
 ## 1. Архитектура и источники истины
 
@@ -67,7 +70,7 @@ python3 "$TOOL" --site serzhan-home --task 80 --commit "$SHA" \
 | `DigitalHouses/dh_ansible` | PUBLIC: roles, playbooks, каталог шаблонов, тесты; pin на **полный** Git commit |
 | `DigitalHouses/dh_ansible_fleet_detail` | PRIVATE: per-site inventory/approvals/Vault; не копировать секреты в chat/Git/public CI |
 | Site runner | Пилот `ansible-serzhan-home`; локальный пользователь `semaphore` без общих root-прав |
-| Site inventory (материализация) | `/var/lib/ansible/site-data/<site>/hosts.yml`, `group_vars/all.yml`, `media_vm.yml`, `pve.yml`; это не канонический Fleet |
+| Site inventory (материализация) | Tiny Bootstrap создаёт только `/var/lib/ansible/site-data/<site>/hosts.yml` и `group_vars/all.yml`; приватные `media_vm.yml`, `pve.yml` требуют отдельной доставки из Fleet |
 | Рабочий Ansible | `/opt/ansible/venv/bin/ansible-playbook`, roles path из текущего checkout |
 | Direct checkout | `/var/lib/semaphore/dh-media-direct-<short SHA>`; владелец `semaphore`; точный SHA проверяется |
 | Protected media worker | `/opt/digitalhouses/bootstrap/pve-access/` + root-only fixed handlers, `dh-pve-access-audit.path` |
@@ -76,7 +79,7 @@ python3 "$TOOL" --site serzhan-home --task 80 --commit "$SHA" \
 | Worker request/result | `/var/lib/semaphore/dh-pve-access-audit.request`, `/run/dh-pve-access-audit.status`; связка nonce + status |
 | Semaphore task catalog | `catalog/semaphore-tasks.json`; обновление каталога ≠ обновление protected worker ≠ обновление приватного Fleet |
 
-**Разделение привилегий:** `semaphore` запускает только обычный playbook, формирует разрешённый запрос, но не получает root SSH credentials. Привилегированные шаги PVE/guest делает *уже установленный* fixed-purpose root-worker, сверяющий site, nonce, Git commit и hashes. Нельзя вызывать `dh-pve-media-deploy` напрямую или обходить worker записью в SQLite/ручной подделкой request/status.
+**Разделение привилегий:** `semaphore` запускает только обычный playbook, формирует разрешённый запрос, но не получает root SSH credentials. Привилегированные шаги PVE/guest делает *отдельно установленный и проверенный* fixed-purpose root-worker, сверяющий site, nonce, Git commit и hashes. Нельзя вызывать `dh-pve-media-deploy` напрямую или обходить worker записью в SQLite/ручной подделкой request/status.
 
 ## 2. Обязательный preflight (перед тем как сказать «нет доступа» или выполнить write)
 
@@ -114,7 +117,7 @@ python3 /usr/local/sbin/dh-pve-media-release-verify --expected-commit "$EXPECTED
 
 **Это отдельная операция**. После Git-коммита, локальных тестов или изменения Ansible roles worker остаётся на старом SHA, пока assets не доставлены и manifest не обновлён.
 
-**Поддерживаемая реализация первичного/штатного staging:** функция `stage_pve_access_audit(checkout, expected_commit)` в [`bootstrap/semaphore-host-install.py`](../../bootstrap/semaphore-host-install.py). Она доставляет pin-список roles/playbooks/scripts на доверенный runner, записывает manifest **последним** и проверяет `MEDIA_WORKER_RELEASE=PASS`. Полный Bootstrap/режим `--resume-semaphore` — не универсальная команда «обновить одну media роль»: он затрагивает также commissioning/catalog, поэтому не запускай его без соответствующего задания и проверок.
+**Историческая (legacy) реализация staging, НЕ часть Tiny Bootstrap:** функция `stage_pve_access_audit(checkout, expected_commit)` в [`bootstrap/semaphore-host-install.py`](../../bootstrap/semaphore-host-install.py). Нельзя запускать старый Bootstrap или `--resume-semaphore` для установки worker на новый CT. Защищённый worker требует отдельной авторизованной процедуры с pinned assets, manifest и независимой проверкой `MEDIA_WORKER_RELEASE=PASS`. До такого подтверждения задача, требующая worker, должна возвращать `BLOCKED`.
 
 **Подтверждённая инженерная операция на уже установленном пилотном runner (30.10.2026):** отдельная публикация root-owned worker assets **без полного Bootstrap**, затем проверка SHA. Применялась при переходах `f0694af` → `4e3d4c` → `653a0fc`. Исторический порядок:
 
