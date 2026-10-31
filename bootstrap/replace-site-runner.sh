@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # Generic guarded replacement of disposable site runner CT1231 on actual PVE.
-# Args: expected-old-site new-site pinned-bootstrap-revision
+# Args: expected-old-site new-site pinned-bootstrap-revision expected-PVE-IP
 set -Eeuo pipefail
 umask 077
-[[ $# == 3 ]] || { echo "BLOCKED: old-site new-site bootstrap-sha required" >&2; exit 2; }
+[[ $# == 4 ]] || { echo "BLOCKED: old-site new-site bootstrap-sha expected-PVE-IP required" >&2; exit 2; }
 OLD_SITE="$1"
 NEW_SITE="$2"
 PIN="$3"
+EXPECTED_PVE_IP="$4"
 CTID=1231
 [[ $EUID == 0 && -f /etc/pve/user.cfg ]] || { echo "BLOCKED: PVE root required" >&2; exit 2; }
 [[ $OLD_SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || { echo "BLOCKED: invalid old site" >&2; exit 2; }
@@ -16,6 +17,9 @@ CTID=1231
 [[ $PIN =~ ^[0-9a-f]{40}$ ]] || { echo "BLOCKED: invalid pinned SHA" >&2; exit 2; }
 CIDR="$(ip -4 -o addr show dev vmbr0 | awk '$3=="inet"{print $4}')"
 [[ $(wc -w <<< "$CIDR") == 1 ]] || { echo "BLOCKED: vmbr0 PVE IP not unique" >&2; exit 2; }
+[[ $(cut -d/ -f1 <<< "$CIDR") == "$EXPECTED_PVE_IP" ]] || {
+  echo "BLOCKED: wrong PVE host/IP; nothing will be destroyed" >&2; exit 2;
+}
 RUNNER_IP="$(python3 - "$CIDR" <<'PY'
 import ipaddress,sys
 iface=ipaddress.IPv4Interface(sys.argv[1])
