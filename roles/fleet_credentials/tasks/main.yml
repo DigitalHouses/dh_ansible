@@ -1,34 +1,95 @@
 ---
-# Include from a task which needs this site's credentials.
-# Requires task 05 (private Git) + task 06 (Vault password) to have succeeded.
-- name: Require this site's local Fleet credentials
+# Site credentials are Ansible Vault encrypted in private Fleet Git.
+# New site runners use a distinct ciphertext and Vault password per site.
+# Pre-existing runners without a profile retain legacy compatibility until
+# deliberately migrated. No credentials are generated or printed here.
+- name: Validate local runner identity and credentials contract
   ansible.builtin.assert:
     that:
-      - site is defined
-      - site.id is defined
+      - site is mapping
       - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
       - inventory_hostname == 'runner'
       - (ansible_connection | default('')) == 'local'
+      - (site.credentials_profile | default('fleet_legacy_v1')) in ['fleet_legacy_v1', 'site_vault_v1']
     fail_msg: "FLEET_CREDENTIALS_BAD_SITE"
 
-- name: Decrypt local Fleet Vault using saved password
+- name: Select native Ansible Vault ciphertext and password file
+  ansible.builtin.set_fact:
+    dh_site_vault_ciphertext: >-
+      {{
+        '/var/lib/semaphore/.dh-credentials/fleet/secrets/sites/' ~ site.id ~ '.vault.yml'
+        if (site.credentials_profile | default('fleet_legacy_v1')) == 'site_vault_v1'
+        else '/var/lib/semaphore/.dh-credentials/fleet/secrets/fleet.vault.yml'
+      }}
+    dh_site_vault_password: >-
+      {{
+        '/var/lib/semaphore/.dh-credentials/site-vault-password'
+        if (site.credentials_profile | default('fleet_legacy_v1')) == 'site_vault_v1'
+        else '/var/lib/semaphore/.dh-credentials/fleet-vault-password'
+      }}
+  no_log: true
+
+- name: Verify encrypted site source and local password file
+  ansible.builtin.stat:
+    path: "{{ item }}"
+    follow: false
+  loop:
+    - "{{ dh_site_vault_ciphertext }}"
+    - "{{ dh_site_vault_password }}"
+  register: dh_site_vault_files
+  changed_when: false
+  no_log: true
+
+- name: Require regular protected site credentials before any operation
+  ansible.builtin.assert:
+    that:
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.pw_name == 'semaphore'
+      - item.stat.mode == '0600'
+    fail_msg: "SITE_VAULT_NOT_COMMISSIONED"
+  loop: "{{ dh_site_vault_files.results }}"
+  no_log: true
+
+- name: Decrypt only the selected site Vault via standard ansible-vault
   ansible.builtin.command:
     argv:
       - /opt/ansible/venv/bin/ansible-vault
       - view
-      - --vault-password-file
-      - /var/lib/semaphore/.dh-credentials/fleet-vault-password
-      - /var/lib/semaphore/.dh-credentials/fleet/secrets/fleet.vault.yml
-  register: dh_fleet_decrypted
+      - --vault-id
+      - "{{ site.id ~ '@' ~ dh_site_vault_password }}"
+      - "{{ dh_site_vault_ciphertext }}"
+  register: dh_site_vault_decrypted
   changed_when: false
   no_log: true
 
-- name: Select only this site's credentials in memory
+- name: Parse selected encrypted site credentials
   ansible.builtin.set_fact:
-    fleet_site_credentials: "{{ (dh_fleet_decrypted.stdout | from_yaml).fleet_secrets.sites[site.id] }}"
+    dh_site_secret_document: "{{ dh_site_vault_decrypted.stdout | from_yaml }}"
   no_log: true
 
-- name: Verify site credentials were selected
+- name: Require new site Vault to identify exactly this site
+  ansible.builtin.assert:
+    that:
+      - dh_site_secret_document is mapping
+      - dh_site_secret_document.site_secrets is mapping
+      - dh_site_secret_document.site_secrets.site_id == site.id
+      - dh_site_secret_document.site_secrets.credentials is mapping
+    fail_msg: "SITE_VAULT_WRONG_SITE_OR_FORMAT"
+  when: (site.credentials_profile | default('fleet_legacy_v1')) == 'site_vault_v1'
+  no_log: true
+
+- name: Select this site's encrypted credentials
+  ansible.builtin.set_fact:
+    fleet_site_credentials: >-
+      {{
+        dh_site_secret_document.site_secrets.credentials
+        if (site.credentials_profile | default('fleet_legacy_v1')) == 'site_vault_v1'
+        else dh_site_secret_document.fleet_secrets.sites[site.id]
+      }}
+  no_log: true
+
+- name: Require selected site credentials mapping
   ansible.builtin.assert:
     that:
       - fleet_site_credentials is mapping
