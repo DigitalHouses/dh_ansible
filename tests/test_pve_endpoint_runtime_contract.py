@@ -15,8 +15,7 @@ class PveRuntimeContractTests(unittest.TestCase):
         self.assertIn("pve-runtime.yml", guest)
         self.assertIn("source: bootstrap_vmbr0", guest)
         self.assertIn("root:semaphore", guest)
-        self.assertNotIn("192.168.11.6", host)
-        self.assertNotIn("192.168.11.30", host)
+        self.assertNotRegex(host, r'PVE_IPV4=[0-9]+[.][0-9]+[.][0-9]+[.][0-9]+')
 
     def test_site_inventory_never_trusts_fleet_ip_over_local_observation(self):
         role = (ROOT / "roles/site_inventory_prepare/tasks/main.yml").read_text()
@@ -25,8 +24,7 @@ class PveRuntimeContractTests(unittest.TestCase):
         self.assertIn("site_pve_source.content", role)
         self.assertIn("combine({'host': pve_observed.ipv4})", role)
         self.assertIn("to_nice_yaml", role)
-        self.assertNotIn("192.168.11.6", role)
-        self.assertNotIn("192.168.11.30", role)
+        self.assertNotRegex(role, r"host: [0-9]+[.][0-9]+[.][0-9]+[.][0-9]+")
 
     def test_pve_deployment_and_cloudflare_planning_reconcile_first(self):
         for path in ("playbooks/plan-pve-media-vm.yml",
