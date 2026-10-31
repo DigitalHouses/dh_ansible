@@ -70,6 +70,16 @@
 
 **Обновление пилота 31.10.2026 (упрощение по решению владельца):** для первичной авторизации введены отдельные задачи №05 (GitHub Device Flow) и №06 (master password в скрытом поле Semaphore). Разрешено хранить GH token, приватный Fleet checkout и проверенный Vault password в локальном каталоге пользователя `semaphore` под `/var/lib/semaphore/.dh-credentials/` (директория `0700`, пароль `0600`). Это **осознанное менее изолированное исключение для пилота** из прежнего запрета на локальную Fleet-копию. Не хранить master password в Semaphore environment, не печатать его и не переносить в публичный Git. Не создавать обязательный отдельный Credentials Provider; downstream задачи сами включают `fleet_credentials` или остаются `BLOCKED` до своей интеграции. Подробности: [runbook №05/06](../runbooks/credential-setup.md).
 
+## 4a. Универсальная административная модель для всех software/service tasks
+
+**Обязательный контракт:** [ADR-0020 — инфраструктурные credentials, `become` и установка ПО](../decisions/0020-infrastructure-privilege-and-software-installation.md). Установка ПО, создание сервисов и управление пакетами — обычные Ansible операции с административной identity **конкретного managed target**, а не причина создавать ещё один root-worker под номер задачи.
+
+Для **каждой новой или изменяемой** задачи (включая read-only) в ревью указывать `target`, `operations`, `identity`, `credential_source`, `approval`, `postconditions`, `privilege_status`. `read` задачи явно не нуждаются в `become`; `software_manage`, `service_manage` и `filesystem_manage` используют штатные Ansible modules с `become: true` там, где нужно. Для Linux предусмотрен общий read-only preflight `roles/infrastructure_access`. Сам preflight прав **не выдаёт**; `INFRASTRUCTURE_ACCESS_NOT_COMMISSIONED` блокирует исполнение до изменений.
+
+Credentials вводятся **однократно на уровне site/target и identity**, а не «перед №40» или «для №60». №05/06 дают Vault, но не создают Linux root/sudo. При `become` учитывать реальную ширину root-доступа и доверие исполняемому Git SHA; `software_manage` — классификация операции, **не OS-enforced ограничение**. Не выдавать `semaphore` скрытый `NOPASSWD: ALL` ради удобства и не считать внешний mutable main достаточной привязкой доверенного привилегированного кода.
+
+**Унаследованные fixed-purpose root-workers** (PVE/Media и др.) — отдельный ранее commissioned privileged boundary до безопасной поэтапной миграции; их не удалять при очередном обновлении каталога. **Для новых install задач нельзя копировать этот паттерн**. Другие исключения — только отдельное решение с доказательством, почему штатный Ansible `become`/API не подходит.
+
 ## 5. Фиксированный root-worker: стандарт безопасного вызова
 
 Типовая цепочка:
@@ -103,7 +113,7 @@ Workflow — граф крупных операторских этапов, а �
 2. **Источники:** перечислить требуемые site YAML, Vault/runtime secrets, API principals, PVE host access, versions/commits; до написания задачи проверить, что они **реально доступны в среде исполнения**.
 3. **Reuse:** найти существующий playbook/role/worker и точку встраивания. Не создавать второй способ делать ту же инфраструктурную операцию.
 4. **Контракт:** описать входной desired state, idempotency, ownership/adopt, fail-closed gates, ограничения существующих ресурсов, точные изменения и условия acceptance.
-5. **Security:** проверка site slug, локального runner, pinned SSH host/TLS identity; root-worker только когда нужен, никакого повышения полномочий Semaphore.
+5. **Security:** site slug, target/runner identity, pinned SSH/TLS trust; для Linux installation использовать общую site/target identity и штатный Ansible `become`; root-worker только по обоснованному исключению. Указать требуемый `credential_source`, проверить доступ и не превращать approval в выдачу прав. Никаких скрытых root grants Semaphore.
 6. **Implementation:** код только в публичном репозитории, реальные параметры только в приватном Fleet; register/update в `catalog/semaphore-tasks.json` только если оправдан новый операторский шаблон.
 7. **Testing:** CI syntax, unit/contract tests, secret-boundary scan, отсутствующие/неверные site data, отказ credentials, дрейф, нештатный повтор worker, idempotency; отдельный site read-only E2E перед `apply`.
 8. **Real acceptance:** проверить фактический пользовательский запуск **одной кнопкой**, UUID/status и postconditions; повторный apply без изменений `changed=0`; задокументировать источник Fleet revision, outcome и ограничения.
@@ -118,7 +128,7 @@ Workflow — граф крупных операторских этапов, а �
 | **10** | Cloudflare connector → fixed-purpose root-worker | Действует по защищённому запросу |
 | **20** | Простой Ansible smoke | Действует |
 | **30** | Ansible read-only runner audit | Действует |
-| **40** | Привилегированный локальный service install/pair → root-worker | Действует |
+| **40** | `infrastructure_access` → существующая роль `runner_remote_commander` через Ansible `become`; pairing в Semaphore | Новая реализация в Git; пока BLOCKED до общего admin commissioning на CT1231, не принята E2E |
 | **50** | Read-only PVE access audit → root-worker | Действует |
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
