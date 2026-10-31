@@ -98,12 +98,14 @@
   become: false
   tasks:
     - name: Read PVE node identity
-      ansible.builtin.command: [hostname, -s]
+      ansible.builtin.command:
+        argv: [hostname, -s]
       register: native_node
       changed_when: false
 
     - name: Read effective PVE bridge address
-      ansible.builtin.command: [ip, -4, -o, addr, show, dev, vmbr0]
+      ansible.builtin.command:
+        argv: [ip, -4, -o, addr, show, dev, vmbr0]
       register: native_bridge
       changed_when: false
 
@@ -115,7 +117,8 @@
         fail_msg: "PVE_NATIVE_HOST_IDENTITY_MISMATCH"
 
     - name: Read current guest identifiers
-      ansible.builtin.command: [qm, list]
+      ansible.builtin.command:
+        argv: [qm, list]
       register: native_guests
       changed_when: false
 
@@ -126,7 +129,8 @@
       changed_when: false
 
     - name: Read PCI identities
-      ansible.builtin.command: [lspci, -Dnn]
+      ansible.builtin.command:
+        argv: [lspci, -Dnn]
       register: native_pci
       changed_when: false
 
