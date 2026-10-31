@@ -289,6 +289,20 @@ def run(*argv, timeout=120, env=None, reveal=False):
                 Path(argv[4]).name in {"install", "stat", "sha256sum", "rm", "test"}):
             print("PCT_EXEC_FAILURE=command:" + Path(argv[4]).name +
                   f" rc:{p.returncode}", flush=True)
+        # A failed fixed-argument PVE CT creation must expose its actual
+        # PVE diagnostic. The operator must not need to replay pct create by
+        # hand or invent a second troubleshooting workflow.
+        if len(argv) >= 4 and tuple(argv[:3]) == ("pct", "create", str(CTID)):
+            raw_lines = (p.stderr or p.stdout or "").splitlines()
+            for raw_line in raw_lines[-6:]:
+                printable = "".join(
+                    ch if ch.isprintable() else " " for ch in raw_line
+                ).strip()[:400]
+                if not printable:
+                    continue
+                if any(mark in printable.lower() for mark in _SECRET_HINTS):
+                    printable = "[REDACTED]"
+                print("PCT_CREATE_DIAGNOSTIC=" + printable, flush=True)
         print(f"COMMAND_FAILURE_STEP={sequence:05d} (see root-only command log)",
               flush=True)
         for diagnostic in safe_guest_failure_lines(argv, p.stdout, p.stderr):
