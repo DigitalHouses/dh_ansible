@@ -34,6 +34,8 @@ jobs:
         run: |
           python3 -m py_compile bootstrap/dh-site-data-runner.py bootstrap/dh-site-data-pve-refresh.py
           bash -n bootstrap/pve-access-audit-request.sh
+      - name: Validate native runner Bootstrap Python syntax
+        run: python3 -m py_compile bootstrap/semaphore-guest-install.py
       - name: Validate runner wrapper syntax
         run: bash -n bin/ansimble-run
       - name: Validate PVE installer and release launcher shell syntax
@@ -82,6 +84,12 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-runner.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-runner-remote-commander.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-runner-remote-commander.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/commission-runner-local-admin.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-github-credentials.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-fleet-master-password.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/media-acceptance.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-pve-media-backup-nfs.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-cloudflare-haos-mtls.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-cloudflare-tunnel.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
