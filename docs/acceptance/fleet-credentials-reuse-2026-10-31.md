@@ -2,7 +2,7 @@
 
 **Дата:** 2026-10-31  
 **Site:** `serzhan-home`, Jonsbo, LXC CT1231  
-**Статус:** **ACCEPTED — read-only reuse в новом Ansible process**.
+**Статус:** **ACCEPTED — read-only reuse в новом Ansible process и после реального reboot CT1231**.
 
 ## Проверенный сценарий
 
@@ -29,9 +29,27 @@ PLAY RECAP: runner ok=15 changed=0 unreachable=0 failed=0
 
 Это подтверждает, что независимый процесс Ansible без UI-ввода повторно использует авторизацию GitHub и сохранённый master password Vault, а общая роль `fleet_credentials` выбирает credentials текущего site. Секреты, OAuth-токены и расшифрованные значения в логи или публичный документ не выводились.
 
+## Reboot E2E — PASS (2026-10-31)
+
+Оператор выполнил `pct reboot 1231` на Jonsbo, после чего запустил тот же read-only playbook `verify-fleet-credentials.yml` в новом процессе Ansible от `semaphore` с `LANG=C.UTF-8 LC_ALL=C.UTF-8` и проверкой закреплённого Git SHA.
+
+Живой журнал после перезагрузки подтверждает:
+
+```text
+result: CREDENTIALS_REUSE_PASS
+github_authorization_reused: true
+vault_master_password_reused: true
+site_credentials_selected: true
+administrator_input_required: false
+infrastructure_changed: false
+PLAY RECAP: runner ok=15 changed=0 unreachable=0 failed=0
+```
+
+**Принято:** сохранённые GitHub credentials и Fleet master password переживают reboot CT1231, применяются в независимом Ansible process без повторного интерактивного ввода. Роль `fleet_credentials` выбирает site namespace в памяти. Ни содержимое Vault, ни токены в отчёт не перенесены.
+
 ## Граница приёмки
 
-- **Не проверено:** фактическая перезагрузка CT1231 и reuse после reboot; истечение срока/обновление OAuth-токена; идемпотентный повтор №05/№06; downstream задачи 10–90, PVE worker, удалённые apply-операции.
+- **Не проверено:** истечение срока/обновление OAuth-токена; идемпотентный повтор №05/№06; downstream задачи 10–90, PVE worker, удалённые apply-операции. Реальный reboot CT1231 и reuse после него **проверены**.
 - №07 существует как playbook в публичном Git, **но не зарегистрирована как template в Semaphore**; заблокированное изменение каталога не обходить.
 - Повторное удаление/переустановка CT1231 не требуется и не разрешается этим отчётом.
 - Read-only прямой запуск — инженерная проверка; стандарт пользовательского запуска задач остаётся через Semaphore.
