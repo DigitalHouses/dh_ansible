@@ -23,32 +23,17 @@
 
 Ни мастер-пароль, ни OAuth token не должны попадать в stdout/записи Ansible. Это компромиссная модель хранения для пилота: Secrets сохраняются на runner в локальных файлах; дополнительные сервисы и split-secret architecture не вводятся.
 
-## Однократный переход текущего принятого CT1231
+## Только чистое развёртывание
 
-Проверенный 31.10.2026 Tiny Bootstrap закрепил старую версию `bootstrap/semaphore-project.py`, где проверка каталога поддерживала только `enum` survey. Поэтому без однократного обновления installed seeder новый `secret` survey задачи №06 не пройдёт валидацию при запуске №00.
+Установка и проверка новой ревизии №05/06 **всегда** выполняются через Fresh E2E:
 
-На утверждённом PVE, в root shell, **после read-only сверки CT1231** и при отсутствии работающей задачи №00:
+1. Проверить, что выполняемся на утверждённом Jonsbo, а CT1231 имеет точно ожидаемые hostname, IP, unprivileged rootfs и не содержит сторонних mount points.
+2. По **явному адресному разрешению** владельца удалить только идентифицированный тестовый CT1231 с его rootfs; не затрагивать HAOS VM2253 и остальные гости.
+3. Запустить **одну** pinned команду `bootstrap/install.sh` из [README](../../README.md). Она создаёт новый Debian 13 LXC, ставит Ansible/Semaphore и регистрирует только №00.
+4. В Semaphore вручную запустить №00. Она загрузит №05, №06 и другие шаблоны из публичного GitHub.
+5. Запустить №05, подтвердить код в браузере, затем №06 со скрытым вводом master password. Проверить `GITHUB_PRIVATE_FLEET_PASS` и `FLEET_VAULT_UNLOCKED`.
 
-```bash
-pct config 1231 | grep -Fx 'hostname: ansible-serzhan-home'
-pct config 1231 | grep -Fx 'unprivileged: 1'
-pct exec 1231 -- bash -euc '
-  test "$(hostname)" = "ansible-serzhan-home"
-  ! systemctl is-active --quiet dh-semaphore-catalog-sync.service
-  cd /opt/digitalhouses/src
-  git fetch --depth=1 origin e1499370833a469799501b12441eac81392671d2
-  tmp="$(mktemp /root/dh-catalog-seeder.XXXXXXXX.py)"
-  trap '\''rm -f "$tmp"'\'' EXIT
-  git show e1499370833a469799501b12441eac81392671d2:bootstrap/semaphore-project.py > "$tmp"
-  python3 -m py_compile "$tmp"
-  install -o root -g root -m 0644 "$tmp" /opt/digitalhouses/bootstrap/semaphore-project.py
-  echo "CATALOG_SEEDER_UPDATED=PASS"
-'
-```
-
-Это **не** новый Bootstrap, не recovery, не обновление Media/PVE workers. Обновляется один фиксированный root-owned Python-файл, который использует существующая задача №00. Затем оператор запускает №00 повторно из Semaphore. Она должна добавить две новые задачи №05 и №06, сохранив исходную №00 и остальные шаблоны.
-
-Не показывать в чате пароль Vault, GitHub OAuth token или содержимое приватного репозитория. При сбое `05` или `06` проверить журнал соответствующей задачи и исправить только фактический блокер, не уничтожая runner.
+**Никаких ручных обновлений seeder, пересылки файлов в LXC, `git pull` на действующем runner, `--resume` или локальных hotfix** в тестовом цикле. Изменения сначала в GitHub, новый immutable pin, затем полная установка одной командой. Не удалять CT1231 повторно без нового разрешения.
 
 ## Использование в playbooks
 
