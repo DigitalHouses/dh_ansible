@@ -39,6 +39,7 @@ jobs:
       - name: Validate PVE installer and release launcher shell syntax
         run: |
           bash -n bootstrap/install.sh
+          bash -n bootstrap/task-00-setup.sh
           bash -n bootstrap/remote-commander-install-request.sh
           bash -n bootstrap/semaphore-catalog-sync-request.sh
           bash -n bootstrap/semaphore-launch.sh
