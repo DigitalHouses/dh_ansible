@@ -82,9 +82,9 @@ Git также является source of truth для **зашифрованн�
 
 Нормативная DR-модель:
 
-> новый runner + Git repository + один operator-held master password = восстановление site configuration и всех сохранённых infrastructure credentials из единого fleet Vault.
+> новый runner + приватный Git + **отдельный operator-held Vault password этого объекта** = восстановление его site configuration и зашифрованных infrastructure credentials.
 
-Master password не хранится в Git и не зависит от конкретного runner. Credential container не привязывается к имени site в filesystem path; site принадлежность задаётся только namespace внутри encrypted fleet Vault. Plaintext/runtime copies на runner являются только рабочим состоянием и не считаются backup/source of truth. Подробный контракт — ADR-0007.
+Для **новых** объектов каждый site имеет отдельный зашифрованный Ansible Vault и отдельный пароль. Пароль хранится владельцем вне Git и runtime runner, а рабочая копия доступна Ansible с минимальными правами. Для **уже существующего** общего Fleet Vault допускается только переходная совместимость до отдельной миграции; общий master password не является целевой моделью. SSH identities перевыпускаются и регистрируются на управляемых узлах при восстановлении либо восстанавливаются из защищённого backup. Секреты в Git всегда зашифрованы; plaintext/runtime copies не являются source of truth. Подробный жизненный цикл: [Site credentials onboarding](runbooks/site-credentials-onboarding.md); прежний контракт ADR-0007 нуждается в актуализации до его полного вывода из эксплуатации.
 
 ## IV. Эксплуатация
 
