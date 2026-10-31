@@ -271,14 +271,27 @@ def run(*argv, timeout=120, env=None, reveal=False):
         stage = sys._getframe(2).f_code.co_name
     started = time.monotonic()
     trace_command("START", sequence, argv, stage=stage)
+    # The launcher runs with umask 077 to protect OAuth/Vault secrets.
+    # Proxmox pct create inherits that mask when it prepares the LXC
+    # rootfs. A 0700 root-owned parent cannot be traversed by the
+    # unprivileged extraction process (host UID 100000), causing
+    # "tar: /var/lib/lxc/<id>/rootfs: Cannot open: Permission denied".
+    # Use 022 ONLY while spawning the standard pct create, then restore
+    # the original restrictive mask for every other operation.
+    is_ct_create = tuple(argv[:3]) == ("pct", "create", str(CTID))
+    previous_umask = os.umask(0o022) if is_ct_create else None
     try:
-        p = subprocess.run(argv, timeout=timeout, check=False,
-                           text=True, capture_output=not reveal, env=env)
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        trace_command("END", sequence, argv, stage=stage, rc=-1,
-                      elapsed=time.monotonic() - started,
-                      error=type(exc).__name__)
-        raise Blocked(f"Command unavailable or timed out: {argv[0]}") from None
+        try:
+            p = subprocess.run(argv, timeout=timeout, check=False,
+                               text=True, capture_output=not reveal, env=env)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            trace_command("END", sequence, argv, stage=stage, rc=-1,
+                          elapsed=time.monotonic() - started,
+                          error=type(exc).__name__)
+            raise Blocked(f"Command unavailable or timed out: {argv[0]}") from None
+    finally:
+        if previous_umask is not None:
+            os.umask(previous_umask)
     trace_command("END", sequence, argv, stage=stage, rc=p.returncode,
                   elapsed=time.monotonic() - started,
                   stdout=p.stdout, stderr=p.stderr)
