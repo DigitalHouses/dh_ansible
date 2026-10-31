@@ -22,9 +22,9 @@ No user credentials or site inventories may enter public CI logs, fixtures, arti
 1. **LXC:** маленький Bash `bootstrap/install.sh` скачивает официальный Debian 13 (если отсутствует), создаёт на PVE отсутствующий unprivileged runner LXC с обычным `pct`, корректирует /etc mode при необходимости и запускает CT. Никаких изменений соседних VM/LXC.
 2. **Git:** в только что созданном LXC устанавливается Git, клонируется `DigitalHouses/dh_ansible` и проверяется pinned Git SHA. **Публичный код не требует GitHub OAuth**.
 3. **Ansible + Semaphore:** уже существующий гостевой установщик `bootstrap/semaphore-guest-install.py` создаёт изолированный Ansible runtime и Semaphore HTTPS внутри LXC. **На PVE Ansible не устанавливается**.
-4. **Задача №00:** `bootstrap/task-00-setup.sh` создаёт только минимальный локальный inventory runner, использует существующий Semaphore API seeder для регистрации **ровно одной** задачи `00-Обновить список задач` и запускает ограниченный каталоговый watcher.
+4. **Задача №00 + подготовка №40 (новая ревизия):** `bootstrap/task-00-setup.sh` создаёт минимальный inventory, регистрирует **ровно одну** задачу №00, включает каталоговый watcher и заранее готовит **отдельный fixed-purpose watcher №40** из того же pinned Git SHA. Сам Remote Desktop Commander, Node.js и его systemd-сервис до явного запуска №40 не устанавливаются.
 
-**Строгая граница:** Bootstrap не получает private Fleet, не восстанавливает Vault/PVE identities, не переносит credentials, не разворачивает Media Server и не устанавливает worker для задач 10–90. Эти действия относятся к отдельно авторизованным задачам после установки.
+**Строгая граница:** Bootstrap не получает private Fleet, не восстанавливает Vault/PVE identities, не переносит credentials, не разворачивает Media Server и не устанавливает PVE/Media workers. Единственное новое ограниченное исключение — пассивный watcher №40 без Remote Commander agent; он может исполнить только pinned installer по запросу №40. Эти действия относятся к отдельно авторизованным задачам после установки.
 
 **Передача управления:** задача №00 **не запускается автоматически**. Оператор запускает её **через Semaphore**, после чего она получает актуальный каталог из GitHub, привязывает его к проверенному revision и синхронизирует остальные шаблоны (без автозапуска). История и секреты уже имеющегося Semaphore не удаляются. Все дальнейшие инфраструктурные задачи запускаются из Semaphore по их стандартным правилам.
 
@@ -39,3 +39,5 @@ No user credentials or site inventories may enter public CI logs, fixtures, arti
 Audit → plan → explicitly approved apply. No hidden guest recreation, mutable unpinned releases or production cutovers. Every site-specific operation must first verify site identity and declared scope. Home runner pilot acceptance precedes any production migration.
 
 **Status:** private staging. Public visibility is forbidden until a clean Git history, complete secret scan, CI, and site E2E acceptance.
+
+**Обновление существующего runner №40 без удаления CT:** [runbook](runbooks/remote-commander-commissioning.md) фиксирует отдельный pinned PVE updater, который проверяет site/CT/guest SHA и ставит только watcher. №00 сама обновить уже установленный root worker не может. Новая схема пока не проходила live E2E.
