@@ -174,7 +174,7 @@ def configure_local_runner_admin(service) -> None:
         raise Blocked("Existing local Semaphore sudo policy must be audited")
     fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o440)
     with os.fdopen(fd, "w") as stream:
-        stream.write("semaphore ALL=(ALL:ALL) NOPASSWD: ALL\\n")
+        stream.write("semaphore ALL=(ALL:ALL) NOPASSWD: ALL\n")
     os.chmod(path, 0o440)
     command("visudo", "-cf", str(path))
     print("SEMAPHORE_LOCAL_ADMIN=PASS (runner LXC only)", flush=True)
