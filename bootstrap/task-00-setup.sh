@@ -46,6 +46,57 @@ systemctl daemon-reload
 systemctl enable --now dh-semaphore-catalog-sync.path
 [[ $(systemctl is-active dh-semaphore-catalog-sync.path) == active ]] || { echo "BLOCKED: task 00 watcher inactive" >&2; exit 2; }
 
+# Prepare the fixed-purpose #40 installer during trusted root bootstrap.
+# This installs only pinned assets and a request watcher; the Remote Commander
+# package/service are NEVER installed until the operator explicitly runs task 40.
+# Semaphore itself remains unprivileged and cannot select arbitrary root code.
+REMOTE_BASE=/opt/digitalhouses/bootstrap/remote-commander
+REMOTE_FILES=(
+  playbooks/apply-runner-remote-commander.yml
+  roles/runner_remote_commander/defaults/main.yml
+  roles/runner_remote_commander/tasks/main.yml
+  roles/runner_remote_commander/handlers/main.yml
+  roles/runner_remote_commander/templates/digitalhouses-remote-commander.service.j2
+)
+for file in "${REMOTE_FILES[@]}"; do
+  [[ -f "$SRC/$file" && ! -L "$SRC/$file" ]] || {
+    echo "BLOCKED: pinned task 40 asset missing: $file" >&2; exit 2;
+  }
+done
+for file in   bootstrap/remote-commander-install-request.sh   bootstrap/dh-remote-commander-install.service   bootstrap/dh-remote-commander-install.path; do
+  [[ -f "$SRC/$file" && ! -L "$SRC/$file" ]] || {
+    echo "BLOCKED: pinned task 40 worker missing: $file" >&2; exit 2;
+  }
+done
+# Reject linked destination parents/files; an existing unknown worker is not adopted.
+for path in "$REMOTE_BASE" "$REMOTE_BASE/playbooks" "$REMOTE_BASE/roles"   "$REMOTE_BASE/roles/runner_remote_commander"   "$REMOTE_BASE/roles/runner_remote_commander/defaults"   "$REMOTE_BASE/roles/runner_remote_commander/tasks"   "$REMOTE_BASE/roles/runner_remote_commander/handlers"   "$REMOTE_BASE/roles/runner_remote_commander/templates"   /usr/local/sbin/dh-remote-commander-install   /etc/systemd/system/dh-remote-commander-install.service   /etc/systemd/system/dh-remote-commander-install.path; do
+  [[ ! -L "$path" ]] || { echo "BLOCKED: linked task 40 destination: $path" >&2; exit 2; }
+done
+[[ ! -e /usr/local/sbin/dh-remote-commander-install &&
+   ! -e /etc/systemd/system/dh-remote-commander-install.service &&
+   ! -e /etc/systemd/system/dh-remote-commander-install.path ]] || {
+  echo "BLOCKED: pre-existing task 40 worker requires separate adoption" >&2; exit 2;
+}
+for file in "${REMOTE_FILES[@]}"; do
+  install -D -o root -g root -m 0644 "$SRC/$file" "$REMOTE_BASE/$file"
+done
+install -o root -g root -m 0700   "$SRC/bootstrap/remote-commander-install-request.sh"   /usr/local/sbin/dh-remote-commander-install
+for kind in service path; do
+  install -o root -g root -m 0644     "$SRC/bootstrap/dh-remote-commander-install.$kind"     "/etc/systemd/system/dh-remote-commander-install.$kind"
+done
+systemctl daemon-reload
+systemctl enable --now dh-remote-commander-install.path
+[[ $(systemctl is-active dh-remote-commander-install.path) == active ]] || {
+  echo "BLOCKED: task 40 watcher inactive" >&2; exit 2;
+}
+[[ $(systemctl is-enabled dh-remote-commander-install.path) == enabled ]] || {
+  echo "BLOCKED: task 40 watcher not enabled" >&2; exit 2;
+}
+[[ $(systemctl is-active digitalhouses-remote-commander.service 2>/dev/null || true) != active ]] || {
+  echo "BLOCKED: Remote Commander service unexpectedly active during bootstrap" >&2; exit 2;
+}
+echo "TASK_40_WATCHER=PASS REMOTE_AGENT_INSTALLED=NO"
+
 # Independent API acceptance: exactly one template; no task has been launched.
 python3 - "$SITE" <<'PY'
 import pathlib
