@@ -31,7 +31,8 @@ class PveRuntimeContractTests(unittest.TestCase):
     def test_pve_deployment_and_cloudflare_planning_reconcile_first(self):
         for path in ("playbooks/plan-pve-media-vm.yml",
                      "playbooks/media-acceptance.yml",
-                     "playbooks/plan-cloudflare-tunnel.yml"):
+                     "playbooks/plan-cloudflare-tunnel.yml",
+                     "playbooks/audit-pve-access.yml"):
             with self.subTest(path=path):
                 content = (ROOT / path).read_text()
                 self.assertIn("name: site_inventory_prepare", content)
