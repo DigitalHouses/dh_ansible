@@ -39,7 +39,8 @@ all:
           ansible_connection: local
           ansible_python_interpreter: /opt/ansible/venv/bin/python
 YAML
-printf '%s\n' '---' 'site:' "  id: $SITE" "  owner_slug: $OWNER" "  type: $TYPE" > "$BASE/group_vars/all.yml"
+printf '%s\n' '---' 'site:' "  id: $SITE" "  owner_slug: $OWNER" "  type: $TYPE" \
+  "  credentials_profile: site_vault_v1" > "$BASE/group_vars/all.yml"
 chown root:semaphore "$BASE/hosts.yml" "$BASE/group_vars/all.yml"
 chmod 0640 "$BASE/hosts.yml" "$BASE/group_vars/all.yml"
 # Local bootstrap observation, not a Fleet declaration. Reverify it against
