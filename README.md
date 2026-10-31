@@ -15,54 +15,32 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
-**Единый механизм для всех задач:** `scripts/dh-task-runner.py`, устанавливаемый только как root-owned pinned asset через Bootstrap. Он выполняет задачи из `catalog/semaphore-tasks.json` от пользователя `semaphore` с проверкой SHA, site и survey. Это не расширяет разрешения ChatGPT или Remote Desktop Commander. 
+**После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и privileged workers могут появиться только как отдельная задача, **не** как часть Tiny Bootstrap.
 
-**Сначала открыть [единый операционный runbook](docs/runbooks/ai-agent-execution.md)** (также обязателен [AGENTS.md](AGENTS.md)). Здесь описаны штатная задача Semaphore, прямой запуск от `semaphore`, публикация pinned worker release, preflight и независимый verify. Не начинать с истории чатов, нового инструмента или просьбы к владельцу повторить рутинный запуск. При явном security-deny останавливать именно заблокированную операцию, не обходить ограничения подключения.
+## Единая точка входа · Tiny Bootstrap
 
-## Единая точка входа
-
-`bootstrap/install.sh` входит в `dh_ansible`. Отдельный старый репозиторий installer остаётся временным rollback и не участвует в целевой архитектуре.
-
-Выполнять **только на выбранном PVE**, из-под root, после отдельного разрешения на изменение CT. В примере ниже Site ID вводится в терминале и подтверждается оператором:
+Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
 
 ```bash
-clear
-dh_install() {
-  local REF="33dab4decbaf3397a259de5fb81e08ddb9d0731d"
-  local SHA="b95ea7d58c5bc51ca95eeebd6911559dd49264d5"
-  local DEST="/root/dh-ansible-install.sh"
-  curl -fsSL --retry 3 \
-    "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
-    -o "$DEST" || return 1
-  python3 - "$DEST" "$SHA" <<'PY' || return 2
-import hashlib
-import pathlib
-import sys
-raw = pathlib.Path(sys.argv[1]).read_bytes()
-digest = hashlib.sha1(b"blob " + str(len(raw)).encode() + b"\0" + raw).hexdigest()
-if digest != sys.argv[2]:
-    raise SystemExit("BLOCKED: unexpected installer content")
-print("INSTALLER_GIT_BLOB=VERIFIED")
-PY
-  bash -n "$DEST" || return 2
-  bash "$DEST"
-  local RC=$?
-  echo "INSTALLER_RC=$RC"
-  return "$RC"
-}
-dh_install
-echo "TERMINAL REMAINS OPEN"
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/da78782bc0c6b2ca208e4896e9c8c58c43da2bdc/bootstrap/install.sh)
 ```
 
-При каждом запуске установщик **обязательно запрашивает Site ID интерактивно** (например, `serzhan-home`) и предлагает подтвердить `y/n`. `n` возвращает к повторному вводу Site ID; некорректный формат также позволяет повторить ввод. `y` фиксирует окончательный ID, который передаётся как `--site` в pinned Bootstrap для проверки с PRIVATE Fleet inventory. Ввод через аргумент отключён во избежание случайного выбора неверного объекта. EOF/Ctrl+D до подтверждения блокирует установку; Ctrl+C прерывает её. **Подтверждение происходит до OAuth, чтения Vault и любых инфраструктурных изменений PVE** (единственное исключение — создание защищённого файла диагностического журнала до ввода Site ID). После проверки PRIVATE Fleet, Vault, escrow и PVE preflight отсутствующий runner создаётся автоматически, без дополнительного ввода `CREATE CT1231`. Существующий CT не удаляется и не перезаписывается без отдельного разрешения; допустимые режимы продолжения: `--resume`, `--resume-fresh`, `--resume-ansible`, `--resume-semaphore`.
+Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
 
-Каждый запуск установщика ведёт **структурированный журнал на PVE** в `/var/log/digitalhouses/ansible/install-*.log`. Каталог `root:root 0700`, файлы `0600`; в журнал попадают этапы, коды ошибок и состояние проверки Site ID, но **не** произвольный вывод CLI, GitHub device code, Vault master password или другие секреты. Путь выводится в начале и в конце; снимать лог можно только с PVE. При ошибках `pct exec` журнал показывает команду из безопасного списка и код возврата. Полный вывод по-прежнему виден в терминале.
+1. Получить официальный шаблон Debian 13, создать **только отсутствующий** непривилегированный LXC (`CT1231`, адрес последнего октета `.231/24` из `vmbr0`).
+2. Клонировать публичный `DigitalHouses/dh_ansible` **внутри нового LXC** и проверить закреплённый Git SHA.
+3. Запустить внутри гостя существующий установщик Ansible + Semaphore (с TLS, mDNS, systemd, закрытым файлом начального пароля).
+4. Подготовить минимальный локальный site inventory и через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач` с ограниченным on-demand watcher.
 
-В установщике закреплены SHA публичного Bootstrap, SHA его Git blob, версия/checksum GitHub CLI и независимо закреплённый Fleet commit. Ввод Vault master остаётся только на PVE. Отказ или неверный slug блокируют установку.
+Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
+
+**Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. При E2E на Jonsbo после неуспеха оператор отдельно удаляет только идентифицированный тестовый CT по [runbook](docs/runbooks/ai-agent-execution.md), сохраняет HAOS VM2253 и запускает ту же команду с нуля. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
+
+Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
 ## PVE Access · принятый E2E
 
-20 октября 2026: **PVE Access и зашифрованный Fleet Vault приняты** для `serzhan-home`.
+**Историческая приёмка на прежнем PVE (20 октября 2026):** PVE Access и зашифрованный Fleet Vault были приняты для `serzhan-home`. Это **не** приёмка нового Jonsbo, а Tiny Bootstrap намеренно не переносит старые credentials.
 Канонические пользователи `ansible-audit@pve`, `ansible-writer@pve` и Linux `ansible-linux` созданы на PVE.
 Независимо подтверждены SSH/sudo, оба API-токена (только GET), совпадение SSH/TLS pin и восстановление
 двух токенов с исходным защищённым escrow из зашифрованного Fleet Vault в режиме read-only.
