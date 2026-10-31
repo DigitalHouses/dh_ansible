@@ -11,7 +11,7 @@ A site differs by declarative data, **not code**.
 
 ## Runner / deployment
 
-A site-local Debian LXC runner provides Semaphore and Ansible. Installers pin two immutable Git commits independently. Owner authorization is required only for private Fleet Detail. Semaphore uses a credential-free HTTPS repository for public code and a separate read-only SSH repository for site inventory. General playbooks use `inventory_dir`, while the CLI wrapper uses `DH_FLEET_DETAIL_DIR`.
+A site-local Debian 13 LXC runner provides Semaphore and Ansible. Tiny Bootstrap uses one pinned, public code revision and no private Fleet checkout or credentials. Private Fleet Detail, site-specific PVE identities, and protected inventories are commissioned later by explicitly approved Semaphore tasks. Semaphore uses a credential-free HTTPS repository for public code; protected site inventory/credentials, if needed for later infrastructure tasks, are staged separately with their own approval. General playbooks use `inventory_dir`, while the CLI wrapper uses `DH_FLEET_DETAIL_DIR` when that separate capability has been enabled.
 
 No user credentials or site inventories may enter public CI logs, fixtures, artifacts or repository history. The encrypted Fleet Vault is *still sensitive*: it permits offline password guessing and does not in itself enforce site-scoped ciphertext access.
 
