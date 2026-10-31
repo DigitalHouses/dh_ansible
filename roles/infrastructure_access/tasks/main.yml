@@ -1,0 +1,46 @@
+---
+# Reusable read-only preflight for Linux administrative operations.
+# Never configures sudoers, creates users, installs packages or stores secrets.
+# The caller must authorize/commission its own target-specific become identity.
+- name: Validate declared administrative operation
+  ansible.builtin.assert:
+    that:
+      - site is defined
+      - site.id is defined
+      - infrastructure_access_capability is defined
+      - infrastructure_access_capability in ['software_manage', 'service_manage', 'filesystem_manage', 'host_manage']
+    fail_msg: "INFRASTRUCTURE_ACCESS_BAD_CONTEXT"
+
+- name: Check administrative access without changing the target
+  block:
+    - name: Read effective UID with standard Ansible privilege escalation
+      ansible.builtin.command:
+        argv: [id, -u]
+      become: true
+      register: infrastructure_access_uid
+      changed_when: false
+      check_mode: false
+
+    - name: Require effective root identity
+      ansible.builtin.assert:
+        that:
+          - infrastructure_access_uid.rc == 0
+          - infrastructure_access_uid.stdout == '0'
+        fail_msg: "INFRASTRUCTURE_ACCESS_NOT_ROOT"
+  rescue:
+    - name: Explain missing per-target infrastructure administrative access
+      ansible.builtin.fail:
+        msg: >-
+          INFRASTRUCTURE_ACCESS_NOT_COMMISSIONED: admin/become rights are missing
+          for this managed target. Commission one reusable infrastructure
+          administrative identity for the target; do not install a task-specific
+          worker or grant ad-hoc sudo to Semaphore.
+
+- name: Report verified target access, not operation approval
+  ansible.builtin.debug:
+    msg:
+      result: INFRASTRUCTURE_ACCESS_READY
+      target: "{{ inventory_hostname }}"
+      requested_capability: "{{ infrastructure_access_capability }}"
+      effective_uid: 0
+      note: "Access is verified; owner approval for changes is separate."
