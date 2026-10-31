@@ -47,9 +47,14 @@ bash replace-site-runner.sh serzhan-home serzhan-lab <verified-40-char-sha> <act
    начальный пароль читать **только локально** с PVE с помощью
    `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`.
 2. Запустить №00 для получения каталога.
-3. Запустить №05 и подтвердить GitHub Device Flow, затем №06
-   с master password Fleet Vault (Secret). После удаления CT старые
-   локальные credentials не остаются.
+3. До №06 в private Fleet должен быть **отдельный зашифрованный**
+   `secrets/sites/serzhan-lab.vault.yml` (см.
+   [site Vault onboarding](site-credentials-onboarding.md)).
+   Затем запустить №05, подтвердить GitHub Device Flow и в №06
+   один раз ввести пароль **этого Vault**, не прежнего общего Fleet.
+   Копия пароля хранится на runner `0600`; внешний recovery password
+   остаётся у владельца. Без encrypted site Vault №06 завершается
+   `SITE_VAULT_MISSING`, никаких секретов старого дома не подставляет.
 4. Запустить №40 и привязать новое устройство Remote Desktop Commander.
    Старое подключение `ansible-serzhan-home` перестанет работать.
 5. Выполнить [общее подключение PVE](pve-native-commissioning.md);
