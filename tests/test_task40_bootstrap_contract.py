@@ -16,13 +16,15 @@ class Task40BootstrapContractTest(unittest.TestCase):
         for name in (
             "bootstrap/task-00-setup.sh",
             "bootstrap/remote-commander-install-request.sh",
+            "bootstrap/stage-remote-commander-watcher.sh",
+            "bootstrap/upgrade-task40-watcher.sh",
             "bootstrap/semaphore-catalog-sync-request.sh",
         ):
             with self.subTest(name=name):
                 subprocess.run(["bash", "-n", str(ROOT / name)], check=True)
 
     def test_task40_assets_are_pinned_and_present(self):
-        script = (ROOT / "bootstrap/task-00-setup.sh").read_text()
+        script = (ROOT / "bootstrap/stage-remote-commander-watcher.sh").read_text()
         for name in (
             "playbooks/apply-runner-remote-commander.yml",
             "roles/runner_remote_commander/defaults/main.yml",
@@ -41,13 +43,21 @@ class Task40BootstrapContractTest(unittest.TestCase):
         script = (ROOT / "bootstrap/task-00-setup.sh").read_text()
         self.assertIn('[[ $(git -C "$SRC" rev-parse HEAD) == "$SHA" ]]', script)
         self.assertIn("TASK_00_ONLY=PASS", script)
-        self.assertIn("TASK_40_WATCHER=PASS REMOTE_AGENT_INSTALLED=NO", script)
-        self.assertIn("systemctl enable --now dh-remote-commander-install.path", script)
-        self.assertNotIn("systemctl enable --now digitalhouses-remote-commander", script)
-        self.assertNotIn("npm install", script)
-        self.assertNotIn("desktop-commander remote", script)
-        self.assertIn("pre-existing task 40 worker requires separate adoption", script)
-        self.assertIn("BLOCKED: linked task 40 destination", script)
+        self.assertIn("stage-remote-commander-watcher.sh", script)
+        stage = (ROOT / "bootstrap/stage-remote-commander-watcher.sh").read_text()
+        self.assertIn("TASK_40_WATCHER=PASS REMOTE_AGENT_INSTALLED=NO", stage)
+        self.assertIn("systemctl enable --now dh-remote-commander-install.path", stage)
+        self.assertNotIn("systemctl enable --now digitalhouses-remote-commander", stage)
+        self.assertNotIn("npm install", stage)
+        self.assertNotIn("desktop-commander remote", stage)
+        self.assertIn("BLOCKED: linked destination:", stage)
+        self.assertIn("BLOCKED: altered artifact", stage)
+        upgrade = (ROOT / "bootstrap/upgrade-task40-watcher.sh").read_text()
+        self.assertIn("TASK_40_EXISTING_RUNNER=PASS", upgrade)
+        self.assertIn("pct exec", upgrade)
+        self.assertNotIn("pct destroy", upgrade)
+        self.assertNotIn("pct stop", upgrade)
+        self.assertNotIn("git pull", upgrade)
 
     def test_request_worker_is_fixed_purpose(self):
         worker = (ROOT / "bootstrap/remote-commander-install-request.sh").read_text()
