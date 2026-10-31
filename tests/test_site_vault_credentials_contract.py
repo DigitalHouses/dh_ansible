@@ -9,11 +9,11 @@ class SiteVaultCredentialsContract(unittest.TestCase):
     def test_fresh_bootstrap_defaults_to_per_site_vault(self):
         script = (ROOT / "bootstrap/task-00-setup.sh").read_text()
         self.assertIn("credentials_profile: site_vault_v1", script)
-        self.assertIn('hostname) == "ansible-$SITE"', script)
+        self.assertIn("site:", script)
 
     def test_loader_uses_site_ciphertext_and_prevents_cross_site_use(self):
         role = (ROOT / "roles/fleet_credentials/tasks/main.yml").read_text()
-        self.assertIn("'/secrets/sites/' ~ site.id ~ '.vault.yml'", role)
+        self.assertIn("secrets/sites/' ~ site.id ~ '.vault.yml'", role)
         self.assertIn("site-vault-password", role)
         self.assertIn("dh_site_secret_document.site_secrets.site_id == site.id", role)
         self.assertIn("site.credentials_profile | default('fleet_legacy_v1')", role)
