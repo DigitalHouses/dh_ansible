@@ -1,8 +1,8 @@
 # ADR 0018 — Minimal Semaphore Bootstrap and remote management entrypoint
 
-**Status:** Target architecture; implementation and fresh E2E pending.
+**Status:** Tiny Bootstrap + task 00 accepted by live Fresh E2E (2026-10-31). Cloudflare task 10 still requires separate commissioning; tasks 05/06 implemented in Git, live E2E pending.
 **Decision date:** 2026-10-21.
-**Scope:** All DigitalHouses site runners. Does not change the accepted CT1231 backup or the pinned Bootstrap artifact.
+**Scope:** All DigitalHouses site runners. Tiny Bootstrap remains pinned and unchanged; protected Fleet and PVE operations remain separate.
 
 ## Goal
 A site differs by declarative Fleet data, not separate code. After a one-command
@@ -123,9 +123,9 @@ appears after the first successful task 00 synchronization.
   **read-only planning only**. It does not create Cloudflare accounts, tokens,
   Access policies, routes, or tunnels. A separately authorized provisioner
   and runtime acceptance are still required.
-- This implementation is not yet production accepted: public CI and fresh
-  destructive E2E must pass, and the immutable installer pin must be advanced.
-- Do not assume a restored older CT includes the sync worker or initial 00 task.
+- Tiny Bootstrap and task 00 have passed live Fresh E2E on Jonsbo, as recorded in [acceptance](../acceptance/tiny-bootstrap-2026-10-31.md). Public CI remains blocked by unrelated existing public-boundary findings; do not claim green CI.
+- Tasks 05/06 are new onboarding operations (GitHub Device Flow, one-time Vault password). Their actual live E2E is pending, and the installed seeder needs the one-time compatibility update documented in [credential setup](../runbooks/credential-setup.md).
+- Do not assume an older CT includes the sync worker, initial 00 task, new 05/06 templates, or protected PVE workers.
 
 ## Pending task-10 lifecycle consolidation (2026-10-21)
 
@@ -156,3 +156,12 @@ but will remain in older Semaphore databases until its execution logs are
 safely archived; removing the template through Semaphore 2.19.16 API
 cascades to task records and output. Do not delete 11 without a verified
 out-of-band backup of the task history. Fresh installs expose only task 10.
+\n## Fleet credential onboarding (2026-10-31, implemented / not yet live-tested)
+
+After explicit operator synchronization with task 00:
+
+- **05-Получить credentials GitHub:** perform GitHub Device Flow from the unprivileged Semaphore runner. Show one-time code in task output; wait for browser approval; verify private repo access; save `gh` credential and checkout under `/var/lib/semaphore/.dh-credentials`. No extra service or permanent agent.
+- **06-Ввести master password Fleet Vault:** use native Semaphore `secret` survey, verify Ansible Vault ciphertext decrypts, and save a verified local password file `0600` for subsequent runs and host reboots. Neither password nor GitHub token printed in task output.
+- A minimal `fleet_credentials` Ansible role can read the saved Vault and select `fleet_secrets.sites[site.id]` for tasks updated to use it. This is a conscious, less isolated pilot credential store, not a claim that PVE/Media/Cloudflare workers have been installed.
+
+**This is an onboarding choice, not permission to modify live PVE or restore private Fleet automatically.** Future tasks continue to require their own execution preconditions. Tiny Bootstrap remains exactly four steps; tasks 05 and 06 appear only after user-invoked 00.\n
