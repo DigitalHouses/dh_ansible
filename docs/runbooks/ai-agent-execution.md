@@ -10,8 +10,8 @@
 
 - Правило относится **только к указанному тестовому CT1231 на Jonsbo до приёмки**; не распространяется на чужие PVE, старые production runner, media VM и другие VM/LXC.
 - Перед каждым удалением автоматически проверить, что операция выполняется на PVE с адресом `192.168.11.6/24` на `vmbr0` и CT1231 имеет точные `hostname=ansible-serzhan-home`, `unprivileged=1`, `net0 ip=192.168.11.231/24`, `rootfs=local-lvm:vm-1231-disk-0`. Несовпадение = BLOCKED. Сохранить HAOS VM 2253 и все прочие гости. Удаление исполняет авторизованный оператор через штатные `pct stop` / `pct destroy`; не внедрять автоматическую очистку в обычный production Bootstrap.
-- Исправлять **общий** Bootstrap в `dh_ansible`, pin SHA и README, а затем запускать **обычную единую команду GitHub** без `--resume`. Каждый прогон интерактивный и проверяемый; **не создавать бесконечные автоматические попытки**.
-- После полного завершения требуются `RESULT_RC=0`, `DONE` и штатные постусловия Ansible, Semaphore, Fleet и PVE Access. Промежуточные `CT_CREATE=PASS` или `SEMAPHORE_HTTPS=PASS` не означают принятия Bootstrap.
+- Исправлять **четырёхэтапный** Tiny Bootstrap в `dh_ansible`, закреплять Git SHA в README, затем запускать **единую команду GitHub** без `--resume`. Старый Python orchestrator не возвращать. Каждый прогон интерактивный и проверяемый; **не создавать бесконечные автоматические попытки**.
+- **Для нового Tiny Bootstrap** после полного завершения требуются `RESULT_RC=0`, `BOOTSTRAP_FRESH_DONE=PASS`, `CT_CREATE=PASS`, `SEMAPHORE_INSTALL=PASS`, `TASK_00_ONLY=PASS`, HTTPS и отдельный ручной запуск №00 через Semaphore. Private Fleet и PVE Access сознательно **не** входят в Bootstrap: ими занимаются последующие отдельно утверждённые задачи. Промежуточные PASS не означают приёмку.
 
 ## 0. Короткая памятка на 30 секунд
 
