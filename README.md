@@ -28,8 +28,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="5a61834c217cae922ebc77bbdb69762177d14490"
-  local SHA="f58223df36a0aae3277cf668d3cc509a04ebd768"
+  local REF="cc5e928fd6218520351b8e0f48d2f718c7f8b83c"
+  local SHA="e7236c9ba1daab296237022373edc03d32a08a2c"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
