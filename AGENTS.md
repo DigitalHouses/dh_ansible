@@ -12,7 +12,7 @@
 
 **Не искать процедуру в истории чатов и не создавать альтернативный исполнитель.** История — только свидетельство, а актуальная инструкция — единственный нормативный источник. Для специфики медиасервера после неё читать [media runbook](docs/runbooks/media-semaphore-launch.md). Не дублировать команды запуска в верхних документах.
 
-**Матрица полномочий всех задач:** [реестр targets/credentials/operations](docs/standards/task-privilege-matrix.md). Каждая новая или изменяемая задача обязана указывать, каким Linux/API principal и с какими разрешениями она работает. Нельзя выдавать произвольный root доступ через копирование per-task worker.
+**Матрица полномочий всех задач:** [реестр targets/credentials/operations](docs/standards/task-privilege-matrix.md). **Общий onboarding административного доступа:** [runbook per-target infrastructure credentials](docs/runbooks/infrastructure-access-commissioning.md). Каждая новая или изменяемая задача обязана указывать, каким Linux/API principal и с какими разрешениями она работает. Нельзя выдавать произвольный root доступ через копирование per-task worker.
 
 **Задача №40 и общий доступ к установке ПО:** сначала читать [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md) и [runbook Remote Desktop Commander](docs/runbooks/remote-commander-commissioning.md). Для всех software/service задач использовать `infrastructure_access` и штатное `become` с авторизованными target credentials. При отсутствующем административном доступе `BLOCKED`, а не создание временного root-worker. Сервис active сам по себе не означает Online: проверить pairing и подключение.
 
