@@ -460,9 +460,44 @@ def read_public_catalog():
     return tasks
 
 
+def equivalent_secret_survey(title, existing, wanted):
+    """Treat Semaphore's harmless API defaults as equivalent for task 06 only.
+
+    Never overwrite a live secret survey to 'fix' an API representation.
+    Do not accept renamed fields, an optional/unhidden password, stored
+    defaults or an environment-target survey. Other surveys stay strict.
+    """
+    if (title != "06-Ввести master password Fleet Vault"
+            or not isinstance(existing, list) or len(existing) != 1
+            or not isinstance(wanted, list) or len(wanted) != 1
+            or not isinstance(existing[0], dict)
+            or not isinstance(wanted[0], dict)):
+        return False
+    observed, desired = existing[0], wanted[0]
+    for field in ("name", "title", "description", "type", "required"):
+        if observed.get(field) != desired.get(field):
+            return False
+    if (desired.get("name") != "fleet_master_password"
+            or desired.get("type") != "secret"
+            or desired.get("required") is not True
+            or observed.get("values") not in (None, [])):
+        return False
+    # Ignore only server-injected empty/default representation, not a
+    # prefilled password. Never print a survey value to diagnostics.
+    if any(observed.get(field) not in (None, "")
+           for field in ("default", "default_value", "value")):
+        return False
+    # In Semaphore the ordinary Ansible extra-var target can be omitted.
+    if observed.get("target") not in (None, "", "extra", "extra_vars", "variable"):
+        return False
+    return True
+
+
 def allowed_survey_upgrade(title, existing, wanted):
     """Migrate only the known old media survey; do not overwrite custom surveys."""
     if existing in ([], wanted):
+        return True
+    if equivalent_secret_survey(title, existing, wanted):
         return True
     if title != "80-Медиасервер · Развёртывание":
         return False
@@ -532,7 +567,10 @@ def sync_existing_template(api, path, desired, *, apply=False):
         observed_survey = current.get("survey_vars") or []
         if not allowed_survey_upgrade(title, observed_survey, desired["survey_vars"]):
             raise Blocked("Unexpected existing survey variables: " + title)
-        allowed_change += ("survey_vars",)
+        # The API may add harmless fields to a secret survey. Preserve it
+        # byte-for-byte so task 06 keeps its ID, input behavior and history.
+        if not equivalent_secret_survey(title, observed_survey, desired["survey_vars"]):
+            allowed_change += ("survey_vars",)
     changed = [k for k in allowed_change
                if (current.get(k) or [] if k == "survey_vars" else current.get(k))
                != desired.get(k)]
