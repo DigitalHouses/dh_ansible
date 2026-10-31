@@ -59,6 +59,7 @@ matches = [p for p in projects if p.get("name") == sys.argv[1]]
 assert len(matches) == 1, "Expected exactly one site project"
 templates = api.request("GET", f"/project/{matches[0]['id']}/templates?sort=name&order=asc")
 assert len(templates) == 1 and templates[0].get("name") == "00-Обновить список задач", "Expected only task 00"
+assert templates[0].get("playbook") == "playbooks/request-semaphore-catalog-sync.yml", "Unexpected recovery playbook"
 assert templates[0].get("autorun") in (None, False), "Task 00 autorun forbidden"
 print("TASK_00_ONLY=PASS")
 PY
