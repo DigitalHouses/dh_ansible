@@ -895,7 +895,25 @@ def validate_fleet_password(checkout):
 
 
 def pct_guest(*argv, timeout=180):
-    return run("pct", "exec", str(CTID), "--", *argv, timeout=timeout)
+    # PVE may interrupt the pct exec attach with rc=129 (SIGHUP), even
+    # though a running guest is healthy. Only install -d is safe to retry
+    # universally: it is idempotent for the same path/owner/mode. Never
+    # retry package installs, file writes, tokens or arbitrary guest code.
+    is_directory_install = len(argv) >= 2 and argv[:2] == ("install", "-d")
+    attempts = 3 if is_directory_install else 1
+    for attempt in range(1, attempts + 1):
+        try:
+            return run("pct", "exec", str(CTID), "--", *argv, timeout=timeout)
+        except Blocked as error:
+            if not (is_directory_install
+                    and str(error) == "Command failed: pct, rc=129"):
+                raise
+            print(f"GUEST_DIRECTORY_ATTACH_INTERRUPTED=attempt:{attempt}/{attempts}",
+                  flush=True)
+            if attempt == attempts:
+                raise Blocked("Guest directory creation interrupted after 3 attempts") from None
+            time.sleep(1)
+    raise AssertionError("Unreachable guest directory retry state")
 
 
 def stage_guest_root_directory(path: str, *, stage: str) -> None:
