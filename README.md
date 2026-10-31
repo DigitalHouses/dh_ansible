@@ -24,7 +24,7 @@
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/89de50a074268752fa264972a48e5f697ae55ab8/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/603d11ff72e04e92c84b58b6321bf4bc55cf83e5/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
@@ -34,7 +34,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/89d
 3. Запустить внутри гостя существующий установщик Ansible + Semaphore (с TLS, mDNS, systemd, закрытым файлом начального пароля).
 4. Подготовить минимальный локальный site inventory, через HTTPS API Semaphore создать **только** задачу `00-Обновить список задач`, включить watcher синхронизатора, а в новой версии дополнительно подготовить **отдельный фиксированный watcher №40** без установки Remote Desktop Commander.
 
-Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
+Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens.
+
+**Задача №40 на уже работающем CT:** №00 не умеет доустанавливать root-owned watcher. Для существующего guest применяется один явно разрешённый **недеструктивный pinned upgrade** без пересоздания LXC и повторной №05/06; только затем запускается №40 через Semaphore. Полный порядок и границы: [runbook №40](docs/runbooks/remote-commander-commissioning.md). Новая схема ещё не имеет живой приёмки. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
 
 **Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. 31.10.2026 владелец дал **новое явное разрешение** удалить только подтверждённый тестовый CT1231 для следующего Fresh E2E. Это не общая политика удаления других LXC/VM. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
 
