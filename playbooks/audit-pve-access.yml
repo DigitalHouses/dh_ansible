@@ -9,6 +9,13 @@
     - name: Load canonical site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Resolve PVE address from the host observation, never a Fleet guess
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - pve.yml
+
     - name: Load site PVE endpoint
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/pve.yml"
