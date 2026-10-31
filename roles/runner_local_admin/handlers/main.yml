@@ -1,0 +1,6 @@
+---
+- name: Restart Semaphore after local admin commissioning
+  ansible.builtin.systemd_service:
+    name: digitalhouses-semaphore.service
+    daemon_reload: true
+    state: restarted
