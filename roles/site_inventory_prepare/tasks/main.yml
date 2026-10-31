@@ -1,106 +1,115 @@
 ---
-# Reusable gate before accessing any site-specific component inventory.
-# Private Fleet credentials remain on PVE, never in the Semaphore process.
-# Refresher is a pre-commissioned root-only systemd worker; no extra UI task.
+# One reusable site-data dependency. Task 05 already downloaded the private
+# Fleet checkout; materialize only this runner's requested component YAML.
+# No PVE access, root worker, per-task handler or new credential provider.
 - name: Validate local site data contract
   ansible.builtin.assert:
     that:
       - site is mapping
-      - site.id is match('^[a-z][a-z0-9-]+$')
+      - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
       - site.id == site.owner_slug ~ '-' ~ site.type
       - inventory_hostname == 'runner'
       - (ansible_connection | default('')) == 'local'
       - inventory_dir == '/var/lib/ansible/site-data/' ~ site.id
       - site_inventory_required_files is sequence
+      - site_inventory_required_files is not string
       - site_inventory_required_files | length > 0
       - site_inventory_required_files | unique | list | length == site_inventory_required_files | length
-    fail_msg: "SITE_DATA_IDENTITY_BLOCKED: current task is not a trusted site-local run."
+    fail_msg: "SITE_DATA_IDENTITY_BLOCKED: expected one local, canonical site runner."
 
-- name: Validate requested site file names
+- name: Reject special or unsafe file names
   ansible.builtin.assert:
     that:
-      - item is match('^[a-z][a-z0-9_-]*\\.yml$')
-      - item not in ['secrets.yml', 'vault.yml', 'fleet.vault.yml']
-    fail_msg: "SITE_DATA_SCOPE_BLOCKED: only component YAML data is eligible."
+      - item is match('^[a-z][a-z0-9_-]*[.]yml$')
+      - item not in ['all.yml', 'hosts.yml', 'secrets.yml', 'vault.yml', 'fleet.vault.yml']
+    fail_msg: "SITE_DATA_SCOPE_BLOCKED: use only component YAML of this site."
   loop: "{{ site_inventory_required_files }}"
   loop_control:
     label: "{{ item }}"
 
-- name: Require trusted local site-data root worker
-  ansible.builtin.command:
-    argv: [systemctl, is-active, dh-site-data.path]
-  register: site_data_watcher
+- name: Check local private Fleet checkout from task 05
+  ansible.builtin.stat:
+    path: /var/lib/semaphore/.dh-credentials/fleet/.git
+    follow: false
+  register: site_inventory_fleet_git
   changed_when: false
-  failed_when: false
 
-- name: Block before loading stale or missing Fleet data when worker absent
+- name: Require pre-existing private Fleet authorization
   ansible.builtin.assert:
     that:
-      - site_data_watcher.stdout == 'active'
+      - site_inventory_fleet_git.stat.isdir | default(false)
+      - not (site_inventory_fleet_git.stat.islnk | default(false))
     fail_msg: >-
-      SITE_DATA_PROVIDER_NOT_COMMISSIONED: The single-task Fleet refresh
-      worker must be commissioned before this template can run.
-      No data or PVE resources were modified.
+      SITE_DATA_FLEET_NOT_READY: complete task 05 to download private Fleet
+      credentials before using site-specific operations.
 
-- name: Ask reusable trusted worker to reconcile each required site file
-  ansible.builtin.include_tasks: refresh-one.yml
-  loop: "{{ site_inventory_required_files }}"
-  loop_control:
-    loop_var: site_inventory_required_file
-
-- name: Inspect each required local site file
+- name: Inspect requested component files inside this site's Fleet directory
   ansible.builtin.stat:
-    path: "{{ inventory_dir }}/{{ item }}"
+    path: "/var/lib/semaphore/.dh-credentials/fleet/inventories/{{ site.id }}/{{ item }}"
     follow: false
   loop: "{{ site_inventory_required_files }}"
   loop_control:
     label: "{{ item }}"
-  register: site_inventory_required_status
+  register: site_inventory_sources
   changed_when: false
 
-- name: Detect missing or unsafe site data
-  ansible.builtin.set_fact:
-    site_inventory_missing_files: >-
-      {{
-        site_inventory_required_status.results
-        | rejectattr('stat.exists')
-        | map(attribute='item')
-        | list
-      }}
-    site_inventory_unsafe_files: >-
-      {{
-        site_inventory_required_status.results
-        | selectattr('stat.exists')
-        | rejectattr('stat.isreg')
-        | map(attribute='item')
-        | list
-      }}
-  changed_when: false
-
-- name: Require valid, root-owned and semaphore-readable site files
+- name: Require canonical regular source files before any writes
   ansible.builtin.assert:
     that:
-      - site_inventory_unsafe_files | length == 0
-      - item.stat.pw_name == 'root'
-      - item.stat.gr_name == 'semaphore'
-      - item.stat.mode == '0640'
-      - item.stat.isreg | bool
-      - not item.stat.islnk | default(false) | bool
-    fail_msg: "SITE_DATA_PERMISSIONS_BLOCKED: site inventory is not canonical root:semaphore 0640."
-  loop: "{{ site_inventory_required_status.results | selectattr('stat.exists') | list }}"
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+    fail_msg: "SITE_DATA_MISSING_OR_UNSAFE: required component is absent in private Fleet."
+  loop: "{{ site_inventory_sources.results }}"
   loop_control:
     label: "{{ item.item }}"
 
-- name: Verify every requested Fleet file is available after refresh
+- name: Verify common Linux administrative access for site inventory writes
+  ansible.builtin.include_role:
+    name: infrastructure_access
+  vars:
+    infrastructure_access_capability: filesystem_manage
+
+- name: Materialize site component files with standard Ansible file management
+  ansible.builtin.copy:
+    src: "/var/lib/semaphore/.dh-credentials/fleet/inventories/{{ site.id }}/{{ item }}"
+    dest: "{{ inventory_dir }}/{{ item }}"
+    remote_src: true
+    owner: root
+    group: semaphore
+    mode: "0640"
+  become: true
+  loop: "{{ site_inventory_required_files }}"
+  loop_control:
+    label: "{{ item }}"
+  no_log: true
+
+- name: Verify installed site components and permissions
+  ansible.builtin.stat:
+    path: "{{ inventory_dir }}/{{ item }}"
+    follow: false
+  become: true
+  loop: "{{ site_inventory_required_files }}"
+  loop_control:
+    label: "{{ item }}"
+  register: site_inventory_installed
+  changed_when: false
+
+- name: Accept only regular files owned by root and readable by Semaphore
   ansible.builtin.assert:
     that:
-      - site_inventory_missing_files | length == 0
-    fail_msg: "SITE_DATA_REFRESH_INCOMPLETE: trusted worker returned without required files."
+      - item.stat.isreg | default(false)
+      - not (item.stat.islnk | default(false))
+      - item.stat.pw_name == 'root'
+      - item.stat.gr_name == 'semaphore'
+      - item.stat.mode == '0640'
+    fail_msg: "SITE_DATA_PERMISSIONS_BLOCKED: managed component permissions drifted."
+  loop: "{{ site_inventory_installed.results }}"
+  loop_control:
+    label: "{{ item.item }}"
 
-- name: Report reusable site data dependency fulfilled
+- name: Report reusable private site configuration ready
   ansible.builtin.debug:
     msg:
+      result: SITE_DATA_READY
       site: "{{ site.id }}"
       required_files: "{{ site_inventory_required_files }}"
-      result: SITE_DATA_READY
-      modified: false
