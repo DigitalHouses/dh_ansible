@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 # Immutable public code revision; the standard installation command pins this file.
-CODE_RELEASE="57cbc594a51b78c01fa6f061da5768dd1b75e20c"
+CODE_RELEASE="2dbcfcdc7e6e0bd34bb547b41a888aab92c755df"
 CTID=1231
 GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 [[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
@@ -12,7 +12,7 @@ GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 }
 read -r -p "Site ID (<owner>-<type>): " SITE
 SITE="${SITE%$'\r'}"
-[[ $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
+[[ ${#SITE} -le 31 && $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
   echo "BLOCKED: invalid Site ID" >&2; exit 2;
 }
 read -r -p "Confirm site $SITE (y/n): " YES
