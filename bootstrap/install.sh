@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 # Immutable public code revision; the standard installation command pins this file.
-CODE_RELEASE="e89d9043ba88607a077e7636d9b0890e65f96811"
+CODE_RELEASE="cc3c5c13792270124648d46b212a17eb5f159ef4"
 CTID=1231
 GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 [[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
