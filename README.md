@@ -17,14 +17,14 @@
 
 **После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общий task runner и privileged workers могут появиться только как отдельная задача, **не** как часть Tiny Bootstrap.
 
-**Fresh E2E принят 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
+**Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
 
 ## Единая точка входа · Tiny Bootstrap
 
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/261645fb4ab49bad8c0b115a49e88db7a47029fe/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/89de50a074268752fa264972a48e5f697ae55ab8/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
@@ -36,7 +36,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/261
 
 Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens. Не создаёт никаких других Semaphore tasks и **не запускает №00 сам**. Только после открытия Semaphore оператор запускает №00 для получения полного актуального каталога из GitHub.
 
-**Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. На Jonsbo тестовый цикл удаления CT закрыт успешной приёмкой; действующий CT1231 не удалять без нового адресного разрешения. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
+**Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. 31.10.2026 владелец дал **новое явное разрешение** удалить только подтверждённый тестовый CT1231 для следующего Fresh E2E. Это не общая политика удаления других LXC/VM. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
 
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
@@ -51,7 +51,7 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 **Для Ansible:** role `fleet_credentials` читает Vault через сохранённый пароль и предоставляет `fleet_site_credentials` только для текущего `site.id`. Другие задачи должны явно включать эту роль, когда им нужны secrets; старые protected workers/PVE Access не появляются автоматически от успешной №05/06.
 
-**Текущий пилот CT1231:** первоначальный pinned Bootstrap установил старую версию catalog seeder, которая поддерживала только enum surveys. Перед первым запуском №00 с обновлённым каталогом №05/06 требуется **однократно обновить только `bootstrap/semaphore-project.py`** на runner (см. [runbook](docs/runbooks/credential-setup.md)). Это не перезапуск Bootstrap и не пересоздание CT. Фактический E2E №05/06 после создания в Git ещё не проводился; статус — **IMPLEMENTED / NOT DEPLOYED**.
+**Следующий тест:** по новому явному разрешению владельца удаляем **только идентифицированный тестовый CT1231** и запускаем эту же единую команду **с нуля**. Новая закреплённая ревизия сразу содержит поддержку поля `secret` и задачи №05/06 — без ручного обновления файлов, `--resume` или правки старого LXC. Живой E2E этой ревизии ещё не проведён; №05/06 будут проверены отдельно после №00.
 
 ## PVE Access · отдельная приёмка, не часть Bootstrap
 
