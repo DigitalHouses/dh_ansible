@@ -1,0 +1,100 @@
+---
+# One-time common target commissioning, never a per-application root worker.
+# Invoke as root INSIDE the approved runner LXC; does not touch Proxmox host.
+- name: Read current effective user
+  ansible.builtin.command:
+    argv: [id, -u]
+  register: runner_admin_uid
+  changed_when: false
+
+- name: Read current host identity
+  ansible.builtin.command:
+    argv: [hostname]
+  register: runner_admin_hostname
+  changed_when: false
+
+- name: Require root on the exact local site runner
+  ansible.builtin.assert:
+    that:
+      - runner_admin_uid.stdout == '0'
+      - site is mapping
+      - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+      - site.id == site.owner_slug ~ '-' ~ site.type
+      - runner_admin_hostname.stdout == 'ansible-' ~ site.id
+      - inventory_hostname == 'runner'
+      - (ansible_connection | default('')) == 'local'
+    fail_msg: "RUNNER_ADMIN_WRONG_TARGET: run as local guest root, not on PVE."
+
+- name: Inspect existing Semaphore systemd service
+  ansible.builtin.stat:
+    path: /etc/systemd/system/digitalhouses-semaphore.service
+    follow: false
+  register: runner_admin_unit
+
+- name: Require a regular systemd service already installed by Bootstrap
+  ansible.builtin.assert:
+    that:
+      - runner_admin_unit.stat.isreg | default(false)
+      - not (runner_admin_unit.stat.islnk | default(false))
+      - runner_admin_unit.stat.pw_name == 'root'
+    fail_msg: "RUNNER_ADMIN_SEMAPHORE_MISSING"
+
+- name: Install native sudo for Ansible become inside this LXC
+  ansible.builtin.apt:
+    name: sudo
+    state: present
+    update_cache: true
+    cache_valid_time: 86400
+
+- name: Commission general local runner privilege escalation
+  ansible.builtin.copy:
+    dest: /etc/sudoers.d/digitalhouses-semaphore
+    content: "semaphore ALL=(ALL:ALL) NOPASSWD: ALL\n"
+    owner: root
+    group: root
+    mode: "0440"
+    validate: /usr/sbin/visudo -cf %s
+
+- name: Remove privilege-blocking legacy systemd restrictions
+  ansible.builtin.replace:
+    path: /etc/systemd/system/digitalhouses-semaphore.service
+    regexp: '^(?:NoNewPrivileges=true|ProtectSystem=strict|ReadWritePaths=/var/lib/semaphore|ProtectHome=true)\n'
+    replace: ''
+  notify: Restart Semaphore after local admin commissioning
+
+- name: Activate systemd changes before testing
+  ansible.builtin.meta: flush_handlers
+
+- name: Verify sudo from the unprivileged Semaphore account
+  ansible.builtin.command:
+    argv: [runuser, -u, semaphore, --, sudo, -n, id, -u]
+  register: runner_admin_become
+  changed_when: false
+
+- name: Check Semaphore is active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, digitalhouses-semaphore.service]
+  register: runner_admin_service
+  changed_when: false
+
+- name: Check systemd does not prohibit escalation
+  ansible.builtin.command:
+    argv: [systemctl, show, --value, --property=NoNewPrivileges, digitalhouses-semaphore.service]
+  register: runner_admin_nnp
+  changed_when: false
+
+- name: Accept native root escalation for this runner alone
+  ansible.builtin.assert:
+    that:
+      - runner_admin_become.stdout == '0'
+      - runner_admin_service.stdout == 'active'
+      - runner_admin_nnp.stdout in ['no', 'false', '0']
+    fail_msg: "RUNNER_ADMIN_NOT_READY"
+
+- name: Report commissioned runner permissions
+  ansible.builtin.debug:
+    msg:
+      result: RUNNER_ADMIN_READY
+      target: "{{ runner_admin_hostname.stdout }}"
+      become_user: root
+      scope: RUNNER_LXC_ONLY
