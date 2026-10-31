@@ -2,7 +2,7 @@
 
 Прочитать `docs/engineering-principles.md`, `docs/scope.md`, `docs/architecture.md` и связанные ADR **до** изменения кода. Эти правила распространяются на все новые роли, модули, playbooks, тесты и operator workflows.
 
-**Целевая архитектура Bootstrap (утверждена 31.10.2026):** [docs/architecture.md](docs/architecture.md), раздел **Tiny Bootstrap → Ansible → Semaphore**. Bootstrap должен быть минимальным: одна команда → доверенный код и Ansible на PVE → один Ansible playbook → LXC c Ansible/Semaphore → **только задача №00**. №00 запускается пользователем в Semaphore, чтобы загрузить остальные задачи из GitHub. Не добавлять новую инфраструктурную логику в legacy Python Bootstrap. Текущий legacy-установщик пока не приведён к новой архитектуре: **не выдавать утверждение дизайна за готовую реализацию**.
+**Реализуемый Tiny Bootstrap (решение 31.10.2026):** [docs/architecture.md](docs/architecture.md) — **ровно четыре этапа**: стандартный Debian 13 LXC через `pct` на PVE → публичный pinned Git checkout внутри LXC → гостевой установщик Ansible + Semaphore → **ровно задача №00**. На PVE Ansible не устанавливается. Bootstrap **не** загружает private Fleet, не создаёт PVE identities, не устанавливает Media workers и не вызывает задачи 10–90; это зона отдельно разрешённых задач Semaphore. После установки пользователь вручную запускает №00 через Semaphore. Не возвращать старый Python orchestrator. Fresh E2E на Jonsbo до приёмки — только с удалением идентифицированного тестового CT1231 *между* попытками (сам Bootstrap никогда не уничтожает guests).
 
 ## ПЕРВОЕ ДЕЙСТВИЕ AI-агента: запуск/обновление/диагностика инфраструктуры
 
