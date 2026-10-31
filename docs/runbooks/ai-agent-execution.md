@@ -4,6 +4,15 @@
 
 **Приоритет и границы:** [AGENTS.md](../../AGENTS.md), [инженерные принципы](../engineering-principles.md), [стандарт Semaphore](../standards/semaphore-task-design.md), разрешения владельца, Fleet и ограничения подключённого инструмента имеют силу. Данный документ **не выдаёт нового доступа**, не отменяет approvals, не является универсальным разрешением на production. Детали медиасервера и диагностики приложений — в [media-semaphore-launch.md](media-semaphore-launch.md).
 
+## Fresh Bootstrap E2E — Jonsbo, до первой полной приёмки
+
+**Решение владельца от 31.10.2026:** на новом standalone PVE Jonsbo `192.168.11.6`, в тестовом цикле установки Ansible-2 (`site=serzhan-home`, `CT1231`, `ansible-serzhan-home`, `192.168.11.231/24`) каждый неуспешный Bootstrap означает **удаление этого тестового LXC и повторный полный запуск Bootstrap с нуля**. `--resume`, `--resume-fresh`, `--resume-ansible` и `--resume-semaphore` в этой приёмке **не использовать**. Цель — добиться успешного **Fresh E2E**, а не довести частичную установку до успеха через resume.
+
+- Правило относится **только к указанному тестовому CT1231 на Jonsbo до приёмки**; не распространяется на чужие PVE, старые production runner, media VM и другие VM/LXC.
+- Перед каждым удалением автоматически проверить, что операция выполняется на PVE с адресом `192.168.11.6/24` на `vmbr0` и CT1231 имеет точные `hostname=ansible-serzhan-home`, `unprivileged=1`, `net0 ip=192.168.11.231/24`, `rootfs=local-lvm:vm-1231-disk-0`. Несовпадение = BLOCKED. Сохранить HAOS VM 2253 и все прочие гости. Удаление исполняет авторизованный оператор через штатные `pct stop` / `pct destroy`; не внедрять автоматическую очистку в обычный production Bootstrap.
+- Исправлять **общий** Bootstrap в `dh_ansible`, pin SHA и README, а затем запускать **обычную единую команду GitHub** без `--resume`. Каждый прогон интерактивный и проверяемый; **не создавать бесконечные автоматические попытки**.
+- После полного завершения требуются `RESULT_RC=0`, `DONE` и штатные постусловия Ansible, Semaphore, Fleet и PVE Access. Промежуточные `CT_CREATE=PASS` или `SEMAPHORE_HTTPS=PASS` не означают принятия Bootstrap.
+
 ## 0. Короткая памятка на 30 секунд
 
 1. Проверь доступные подключения: в пилоте рабочий путь — **Remote Desktop Commander → `ansible-serzhan-home` (site runner, CT1231)**. На runner установлен `semaphore`, Ansible и защищённый root-worker.
