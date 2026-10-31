@@ -293,8 +293,11 @@ def run(*argv, timeout=120, env=None, reveal=False):
         # PVE diagnostic. The operator must not need to replay pct create by
         # hand or invent a second troubleshooting workflow.
         if len(argv) >= 4 and tuple(argv[:3]) == ("pct", "create", str(CTID)):
-            raw_lines = (p.stderr or p.stdout or "").splitlines()
-            for raw_line in raw_lines[-6:]:
+            # pct prints the underlying tar/zstd failure to stdout while
+            # the final wrapper message is often alone in stderr. Always
+            # inspect BOTH channels, never only the final stderr lines.
+            raw_lines = (p.stdout or "").splitlines() + (p.stderr or "").splitlines()
+            for raw_line in raw_lines[-20:]:
                 printable = "".join(
                     ch if ch.isprintable() else " " for ch in raw_line
                 ).strip()[:400]
