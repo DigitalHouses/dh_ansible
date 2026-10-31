@@ -1,202 +1,113 @@
 #!/usr/bin/env bash
-# Single-repository public PVE entrypoint: immutable dh_ansible code + private Fleet Detail data.
+# DigitalHouses tiny fresh Bootstrap: LXC -> Git -> Ansible/Semaphore -> task 00.
 set -Eeuo pipefail
 umask 077
 
-SITE=""
-CODE_RELEASE="37a39812151124196f82de36101481f1b8e78e32"
-CODE_INSTALLER_BLOB="8bc1470343018359e89c42c730e9d9fa48508b4e"
-FLEET_RELEASE="e4cc4da268808f677a436eebd0635566381c6878"
-GH_VERSION="2.102.0"
-GH_SHA256="bb766f710eef8ede859c18578c72c327597cd4c8a85b06001b1f3843c6019386"
-
-RESUME_ARGS=()
-if (( $# == 1 )); then
-  case "$1" in
-    --resume|--resume-fresh|--resume-ansible|--resume-semaphore) RESUME_ARGS=("$1") ;;
-    *) echo "BLOCKED: unknown argument. Site ID is entered interactively." >&2; exit 2 ;;
-  esac
-elif (( $# == 2 )); then
-  if [[ "$1" == "--resume-semaphore" && "$2" == "--restore-pve-access" ]]; then
-    RESUME_ARGS=("$1" "$2")
-  else
-    echo "BLOCKED: --restore-pve-access requires --resume-semaphore" >&2
-    exit 2
-  fi
-elif (( $# != 0 )); then
-  echo "BLOCKED: usage: install.sh [--resume|--resume-fresh|--resume-ansible|--resume-semaphore [--restore-pve-access]]" >&2
-  exit 2
-fi
-if (( EUID != 0 )) || [[ ! -f /etc/pve/user.cfg ]]; then
-  echo "BLOCKED: root terminal on Proxmox VE required" >&2
-  exit 2
-fi
-
-confirm_site_id() {
-  local candidate answer original
-  echo "=== CANONICAL SITE CONFIRMATION ==="
-  while true; do
-    if ! IFS= read -r -p "Введите Site ID (<owner>-<type>): " candidate; then
-      echo "BLOCKED: Site ID input interrupted; no actions performed" >&2
-      return 2
-    fi
-    # Pasted terminal text can carry trailing spaces, TAB or CR (Windows).
-    # Trim only edge whitespace; never silently modify the Site ID itself.
-    original="$candidate"
-    while [[ -n "$candidate" && "${candidate:0:1}" =~ [[:space:]] ]]; do
-      candidate="${candidate:1}"
-    done
-    while [[ -n "$candidate" && "${candidate: -1}" =~ [[:space:]] ]]; do
-      candidate="${candidate:0:${#candidate}-1}"
-    done
-    if [[ "$original" != "$candidate" ]]; then
-      echo "SITE_INPUT_TRIMMED=YES (краевые пробельные символы удалены)"
-    fi
-    if [[ ! "$candidate" =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]]; then
-      echo "Некорректный Site ID. Формат: <owner>-<type> (например, serzhan-home). Повторите ввод."
-      continue
-    fi
-    echo "OBJECT_SLUG=$candidate"
-    echo "DOWNSTREAM_SITE=$candidate"
-    while true; do
-      if ! IFS= read -r -p "Site ID '$candidate' указан верно? (y/n): " answer; then
-        echo "BLOCKED: Site ID confirmation interrupted; no actions performed" >&2
-        return 2
-      fi
-      case "$answer" in
-        y|Y)
-          SITE="$candidate"
-          echo "SITE_CONFIRMATION=YES $SITE"
-          return 0
-          ;;
-        n|N)
-          echo "Повторный ввод Site ID."
-          break
-          ;;
-        *)
-          echo "Ответьте y или n."
-          ;;
-      esac
-    done
-  done
+# Immutable public code revision; the standard installation command pins this file.
+CODE_RELEASE="57cbc594a51b78c01fa6f061da5768dd1b75e20c"
+CTID=1231
+GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
+[[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
+  echo "BLOCKED: run without arguments as root on Proxmox VE" >&2; exit 2;
 }
-# Root-only structured diagnostic journal. Never record raw terminal output:
-# GitHub device codes, Vault passwords and other arbitrary child output stay off disk.
-LOG_DIR="/var/log/digitalhouses/ansible"
-if [[ -L "$LOG_DIR" ]]; then
-  echo "BLOCKED: installer log directory is a symlink" >&2
-  exit 2
-fi
+read -r -p "Site ID (<owner>-<type>): " SITE
+SITE="${SITE%$'\r'}"
+[[ $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
+  echo "BLOCKED: invalid Site ID" >&2; exit 2;
+}
+read -r -p "Confirm site $SITE (y/n): " YES
+[[ $YES == y || $YES == Y ]] || { echo "BLOCKED: site not confirmed" >&2; exit 2; }
+
+LOG_DIR=/var/log/digitalhouses/ansible
 install -d -o root -g root -m 0700 "$LOG_DIR"
-if [[ "$(stat -c '%a:%u:%g:%F' "$LOG_DIR")" != "700:0:0:directory" ]]; then
-  echo "BLOCKED: unsafe installer log directory" >&2
-  exit 2
-fi
-LOG_FILE=$(mktemp "$LOG_DIR/install-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")
-chmod 0600 "$LOG_FILE"
-COMMAND_LOG_FILE=$(mktemp "$LOG_DIR/commands-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")
-chmod 0600 "$COMMAND_LOG_FILE"
-export DH_BOOTSTRAP_COMMAND_LOG="$COMMAND_LOG_FILE"
-# Only known structured progress/error lines are persisted. Full output remains
-# visible in the terminal. Never log GitHub OAuth device codes or prompts.
-LOG_PATTERN='^(=== |LOG_FILE=|COMMAND_LOG_FILE=|COMMAND_FAILURE_STEP=|PVE_VAULT_TEMP_|PVE_VAULT_CLEANUP_|LOG_MODE=|RESULT_RC=|SITE_CONFIRMATION=|SITE_INPUT_TRIMMED=|OBJECT_SLUG=|DOWNSTREAM_SITE=|CODE_RELEASE=|CODE_GIT_SHA=|CODE_AND_FLEET_ARTIFACTS=|FLEET_RELEASE=|FLEET_GIT_SHA=|FLEET_MASTER_PASSWORD=PASS|FULL_VAULT_DECRYPTION=|OWNER_GITHUB_SESSION=|DH_ANSIBLE_INSTALLER_SOURCE=|PVE_ESCROW=|PVE_HOST_PREFLIGHT=|CT[0-9]+[=:]|CT_CREATE=|PCT_EXEC_FAILURE=|PCT_CREATE_DIAGNOSTIC=|DEBIAN_TEMPLATE|GUEST_|FRESH_DEBIAN|NETWORK_IDENTITY_MDNS=|ANSIBLE_|SEMAPHORE_|SITE_INVENTORY_|CANONICAL_SITE_ID=|REMOTE_COMMANDER_|TLS_CERT_SHA256=|PASSWORD_ROTATION_REQUIRED=|PVE_WRITE_OPERATIONS=|PLAN: |BLOCKED: |INSTALL=BLOCKED: |DONE: )'
-exec > >(tee >(LC_ALL=C grep -aE --line-buffered "$LOG_PATTERN" >> "$LOG_FILE")) 2>&1
-WORK=""
-installer_cleanup() {
+LOG="$(mktemp "$LOG_DIR/tiny-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")"
+chmod 0600 "$LOG"
+MOUNTED=0
+on_exit() {
   local rc=$?
   trap - EXIT
-  if [[ -n "$WORK" ]]; then
-    rm -rf "$WORK"
-  fi
+  if (( MOUNTED )); then pct unmount "$CTID" || true; fi
   echo "RESULT_RC=$rc"
-  echo "LOG_FILE=$LOG_FILE"
-  echo "COMMAND_LOG_FILE=$COMMAND_LOG_FILE"
+  echo "LOG_FILE=$LOG"
   echo "TERMINAL STAYS OPEN"
 }
-trap installer_cleanup EXIT
-echo "LOG_FILE=$LOG_FILE"
-echo "COMMAND_LOG_FILE=$COMMAND_LOG_FILE"
-echo "LOG_MODE=SAFE_EVENTS_AND_COMMAND_TRACE"
+trap on_exit EXIT
+exec > >(tee -a "$LOG") 2>&1
 
-confirm_site_id || exit 2
-
-WORK=$(mktemp -d /root/ansible-network.XXXXXX)
-mkdir -m 700 "$WORK/gh-config"
-
-echo "=== DIGITALHOUSES · PUBLIC NETWORK BOOTSTRAP ==="
-echo "CODE_RELEASE=$CODE_RELEASE"
-echo "FLEET_RELEASE=$FLEET_RELEASE"
-curl -fsSL --max-time 120 \
-  "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
-  -o "$WORK/gh.tgz"
-printf '%s  %s\n' "$GH_SHA256" "$WORK/gh.tgz" | sha256sum -c -
-tar -xzf "$WORK/gh.tgz" -C "$WORK" "gh_${GH_VERSION}_linux_amd64/bin/gh"
-export PATH="$WORK/gh_${GH_VERSION}_linux_amd64/bin:$PATH"
-export GH_CONFIG_DIR="$WORK/gh-config"
-export BROWSER=false
-unset GH_TOKEN GITHUB_TOKEN || true
-
-echo "=== OWNER · AUTHORIZE IN YOUR OWN BROWSER ==="
-echo "https://github.com/login/device"
-gh auth login --web --git-protocol https
-gh auth status >/dev/null
-
-echo "=== FETCH IMMUTABLE DH ANSIBLE BOOTSTRAP ==="
-gh api \
-  "repos/DigitalHouses/dh_ansible/contents/bootstrap/semaphore-host-install.py?ref=$CODE_RELEASE" \
-  > "$WORK/release.json"
-
-python3 - "$WORK/release.json" "$WORK/code-install.py" "$CODE_INSTALLER_BLOB" <<'PY'
-import base64, hashlib, json, os, pathlib, sys
-source, target, expected_sha = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
-record = json.loads(source.read_text())
-if record.get("type") != "file" or record.get("encoding") != "base64":
-    raise SystemExit("BLOCKED: pinned dh_ansible bootstrap file missing")
-blob = base64.b64decode(record["content"])
-identity = hashlib.sha1(b"blob " + str(len(blob)).encode() + b"\0" + blob).hexdigest()
-if identity != expected_sha or record.get("sha") != expected_sha:
-    raise SystemExit("BLOCKED: dh_ansible bootstrap immutable Git identity mismatch")
-fd = os.open(target, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o700)
-with os.fdopen(fd, "wb") as output:
-    output.write(blob)
-print("DH_ANSIBLE_INSTALLER_SOURCE=VERIFIED")
-PY
-
-echo "=== READ NETWORK CONFIGURATION ==="
-BRIDGE_IP=$(ip -4 -o addr show dev vmbr0 | awk '$3=="inet" {print $4}')
-DEFAULT_GW=$(ip -4 route show default | awk '$1=="default" && $2=="via" {print $3}')
-readarray -t NETWORK < <(python3 - "$BRIDGE_IP" "$DEFAULT_GW" <<'PY'
-import ipaddress,sys
-try:
-    interface = ipaddress.IPv4Interface(sys.argv[1])
-    gateway = ipaddress.IPv4Address(sys.argv[2])
-    assert interface.network.prefixlen == 24
-    assert gateway in interface.network
-    address = ipaddress.IPv4Address(int(interface.network.network_address) + 231)
-    assert address != interface.ip and address != gateway
-except (IndexError, ValueError, AssertionError):
-    raise SystemExit("BLOCKED: unsupported or ambiguous PVE LAN")
-print(interface.ip)
-print(str(address) + "/24")
-print(gateway)
+HOST_CIDR="$(ip -4 -o addr show dev vmbr0 | awk '$3 == "inet" {print $4}')"
+HOST_GW="$(ip -4 route show default | awk '$1 == "default" && $2 == "via" {print $3}')"
+read -r RUNNER_CIDR GATEWAY < <(python3 - "$HOST_CIDR" "$HOST_GW" <<'PY'
+import ipaddress, sys
+iface = ipaddress.IPv4Interface(sys.argv[1])
+gw = ipaddress.IPv4Address(sys.argv[2])
+assert iface.network.prefixlen == 24 and gw in iface.network
+runner = ipaddress.IPv4Address(int(iface.network.network_address) + 231)
+assert runner not in (iface.ip, gw)
+print(f"{runner}/24 {gw}")
 PY
 )
-if (( ${#NETWORK[@]} != 3 )); then
-  echo "BLOCKED: PVE network resolution failed" >&2; exit 2
+RUNNER_IP="${RUNNER_CIDR%/*}"
+echo "SITE=$SITE PVE=$HOST_CIDR RUNNER=$RUNNER_CIDR CODE=$CODE_RELEASE"
+# An existing CT/VM is never reused, overwritten or destroyed by Bootstrap.
+if pct config "$CTID" >/dev/null 2>&1 || qm config "$CTID" >/dev/null 2>&1; then
+  echo "BLOCKED: guest ID $CTID already exists; fresh Bootstrap only" >&2; exit 2
 fi
-echo "PVE=${NETWORK[0]} RUNNER=${NETWORK[1]}"
-echo "=== RUN PINNED DH ANSIBLE INSTALLER ==="
-python3 "$WORK/code-install.py" \
-  --site "$SITE" \
-  --pve-ip "${NETWORK[0]}" \
-  --runner-cidr "${NETWORK[1]}" \
-  --gateway "${NETWORK[2]}" \
-  --expected-commit "$CODE_RELEASE" \
-  --expected-fleet-commit "$FLEET_RELEASE" \
-  --use-github-session --apply "${RESUME_ARGS[@]}"
 
-echo "=== SEMAPHORE · ДОСТУП ==="
-echo "URL: https://${NETWORK[1]%/*}:3000/"
-echo "Логин: admin"
-echo "Показать пароль на PVE: pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password"
-echo "=== DONE ==="
+echo "=== 1/4 · DEBIAN 13 LXC ==="
+pveam update
+TEMPLATE="$(pveam available --section system |
+  awk '$2 ~ /^debian-13-standard_[[:alnum:].+-]+_amd64\.tar\.zst$/ {print $2}' |
+  sort -V | tail -n1)"
+[[ -n $TEMPLATE ]] || { echo "BLOCKED: official Debian 13 template unavailable" >&2; exit 2; }
+if ! pveam list local | grep -Fq "local:vztmpl/$TEMPLATE"; then
+  pveam download local "$TEMPLATE"
+fi
+# PVE unprivileged rootfs extraction needs an accessible root directory;
+# restrict the relaxed umask to this single standard pct create invocation.
+(umask 022; pct create "$CTID" "local:vztmpl/$TEMPLATE" \
+  --hostname "ansible-$SITE" --ostype debian \
+  --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:16 \
+  --unprivileged 1 --features nesting=1 \
+  --net0 "name=eth0,bridge=vmbr0,ip=$RUNNER_CIDR,gw=$GATEWAY" \
+  --onboot 0 --protection 1 --start 0)
+# The Debian 13 template may ship /etc mode 0700, which breaks guest D-Bus.
+pct mount "$CTID"
+MOUNTED=1
+ETC="/var/lib/lxc/$CTID/rootfs/etc"
+[[ -d $ETC && ! -L $ETC ]] || { echo "BLOCKED: untrusted guest /etc" >&2; exit 2; }
+case "$(stat -c %a "$ETC")" in
+  700) chmod 0755 "$ETC" ;;
+  755) ;;
+  *) echo "BLOCKED: unexpected guest /etc mode" >&2; exit 2 ;;
+esac
+pct unmount "$CTID"
+MOUNTED=0
+pct start "$CTID"
+[[ $(pct exec "$CTID" -- hostname) == "ansible-$SITE" ]] || {
+  echo "BLOCKED: container hostname mismatch" >&2; exit 2;
+}
+echo "CT_CREATE=PASS"
+
+echo "=== 2/4 · PINNED GITHUB CHECKOUT ==="
+pct exec "$CTID" -- apt-get update -o APT::Update::Error-Mode=any
+pct exec "$CTID" -- env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+  --no-install-recommends git python3 iproute2 ca-certificates
+pct exec "$CTID" -- install -d -o root -g root -m 0700 /opt/digitalhouses
+pct exec "$CTID" -- git clone -q "$GIT_URL" /opt/digitalhouses/src
+pct exec "$CTID" -- git -C /opt/digitalhouses/src checkout -q --detach "$CODE_RELEASE"
+ACTUAL="$(pct exec "$CTID" -- git -C /opt/digitalhouses/src rev-parse HEAD)"
+[[ $ACTUAL == "$CODE_RELEASE" ]] || { echo "BLOCKED: Git revision mismatch" >&2; exit 2; }
+echo "CODE_GIT_SHA=PASS $ACTUAL"
+
+echo "=== 3/4 · ANSIBLE + SEMAPHORE ==="
+pct exec "$CTID" -- python3 /opt/digitalhouses/src/bootstrap/semaphore-guest-install.py \
+  --site "$SITE" --runner-ip "$RUNNER_IP" \
+  --requirements /opt/digitalhouses/src/requirements/runner.txt --apply
+echo "SEMAPHORE_INSTALL=PASS"
+
+echo "=== 4/4 · SINGLE TASK 00 ==="
+pct exec "$CTID" -- bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh "$SITE" "$CODE_RELEASE"
+echo "BOOTSTRAP_FRESH_DONE=PASS"
+echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
+echo "ADMIN_PASSWORD_FILE=CT$CTID:/root/dh-semaphore-initial-admin-password"
+echo "ONLY_TASK=00-Обновить список задач"
