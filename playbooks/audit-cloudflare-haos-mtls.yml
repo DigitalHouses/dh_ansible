@@ -13,6 +13,13 @@
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
 
+    - name: Reconcile HAOS component inventory from authorized private Fleet
+      ansible.builtin.include_role:
+        name: site_inventory_prepare
+      vars:
+        site_inventory_required_files:
+          - haos.yml
+
     - name: Load HAOS desired state from private site inventory
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/haos.yml"
