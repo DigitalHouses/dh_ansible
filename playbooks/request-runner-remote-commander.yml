@@ -32,12 +32,20 @@
       ansible.builtin.command:
         argv: [systemctl, is-active, dh-remote-commander-install.path]
       register: remote_request_watcher
+      failed_when: false
       changed_when: false
       check_mode: false
     - name: Require prepared on-demand installer
       ansible.builtin.assert:
         that:
+          - remote_request_watcher.rc == 0
           - remote_request_watcher.stdout == 'active'
+        fail_msg: >-
+          TASK_40_WATCHER_MISSING: на ранее установленном runner №00 обновляет
+          только шаблоны и не может установить привилегированный обработчик.
+          Выполните однократный pinned upgrade согласно
+          docs/runbooks/remote-commander-commissioning.md.
+          Новый Fresh Bootstrap готовит watcher автоматически.
   tasks:
     - name: Check existing Remote Commander service
       ansible.builtin.command:
