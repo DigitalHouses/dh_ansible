@@ -11,6 +11,8 @@
 
 **Обязательный сетевой стандарт:** все новые сетевые VM/LXC, создаваемые Ansible, должны публиковать своё имя `<hostname>.local` через Bonjour/mDNS (`avahi-daemon` для Linux без штатного mDNS; на других ОС — встроенный механизм) и проходить проверку обнаружения с другого узла LAN. Применяется ко всему Fleet, не только к медиасерверу. Правила безопасности, исключений и приёмки: [guest-network-mdns.md](docs/standards/guest-network-mdns.md).
 
+**Новый объект Jonsbo:** при переходе c `serzhan-home` на самостоятельный `serzhan-lab` использовать [Fresh runbook](docs/runbooks/serzhan-lab-fresh.md). Он заменяет только CT1231 после строгого preflight; VM2253 и диски не затрагиваются. После переустановки требуются новая авторизация №05/06 и привязка №40.
+
 **PVE IP — всегда фактический:** Proxmox-хост не участвует в нумерации VM/LXC. Bootstrap считывает IPv4 `vmbr0` непосредственно на PVE и сохраняет его **только в локальном runtime inventory** Ansible runner, не как исключение в Git. Задачи PVE, подключённые к общему загрузчику site inventory, используют этот адрес, а не устаревший `pve.host` из Fleet; legacy-задачи ещё требуют проверки. [Единый стандарт PVE endpoint](docs/standards/pve-endpoint-runtime.md). Для постоянного site runner подключение к PVE выполняется **однократно с хоста PVE** через [универсальный commissioning](docs/runbooks/pve-native-commissioning.md), без task-specific workers.
 
 **Обязательное именование ZFS-хранилищ:** вновь создаваемые Ansible пулы данных имеют имя `<owner>-pool` (например, `serzhan-pool`, где `owner` — `site.owner_slug` из Fleet). Существующие пулы при `keep + import` не переименовываются. [Стандарт именования ZFS-пулов](docs/standards/storage-pool-naming.md).
