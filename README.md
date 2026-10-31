@@ -40,6 +40,19 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
+## Первое получение credentials — задачи №05 и №06
+
+После `00-Обновить список задач` в UI появляются две дополнительные административные операции:
+
+- **`05-Получить credentials GitHub`** — GitHub CLI показывает в журнале одноразовый код. Оператор подтверждает его на `https://github.com/login/device`; задача ждёт разрешения, проверяет доступ к `DigitalHouses/dh_ansible_fleet_detail` и клонирует private Fleet на runner. Пока GitHub-токен работает, повторный ввод кода не требуется.
+- **`06-Ввести master password Fleet Vault`** — одно скрытое поле Semaphore типа **secret**. Пароль проверяется через `ansible-vault view`, сохраняется локально `0600` и остаётся доступным после перезагрузки. Не передавать его в чат или терминальный журнал.
+
+**Хранение — минимально:** `/var/lib/semaphore/.dh-credentials/` (пользователь `semaphore`, каталог `0700`; GitHub CLI config, private Fleet checkout и `fleet-vault-password` с `0600`). Master password хранится локально в открытом виде **по решению оператора**, но не в публичном Git. Никаких новых служб или центрального Credentials Provider.
+
+**Для Ansible:** role `fleet_credentials` читает Vault через сохранённый пароль и предоставляет `fleet_site_credentials` только для текущего `site.id`. Другие задачи должны явно включать эту роль, когда им нужны secrets; старые protected workers/PVE Access не появляются автоматически от успешной №05/06.
+
+**Текущий пилот CT1231:** первоначальный pinned Bootstrap установил старую версию catalog seeder, которая поддерживала только enum surveys. Перед первым запуском №00 с обновлённым каталогом №05/06 требуется **однократно обновить только `bootstrap/semaphore-project.py`** на runner (см. [runbook](docs/runbooks/credential-setup.md)). Это не перезапуск Bootstrap и не пересоздание CT. Фактический E2E №05/06 после создания в Git ещё не проводился; статус — **IMPLEMENTED / NOT DEPLOYED**.
+
 ## PVE Access · отдельная приёмка, не часть Bootstrap
 
 Историческая приёмка PVE Access и восстановления Fleet Vault на **прежнем PVE** проходила в октябре 2026 года. Tiny Bootstrap на Jonsbo **не** переносит identities, private Fleet и защищённые workers; они требуют отдельных задач Semaphore, явного разрешения и собственных проверок. Старые результаты нельзя принимать как подтверждение нового PVE.
