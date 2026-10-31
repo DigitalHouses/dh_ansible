@@ -417,21 +417,29 @@ def read_public_catalog():
                         or not 1 <= len(variable["title"]) <= 100
                         or not isinstance(variable.get("description"), str)
                         or len(variable["description"]) > 500
-                        or variable.get("type") != "enum"
+                        or variable.get("type") not in ("enum", "secret")
                         or variable.get("required") is not True
                         or not isinstance(variable.get("values"), list)
-                        or not 2 <= len(variable["values"]) <= 10):
-                    raise Blocked("Invalid catalog enum survey definition")
-                options = variable["values"]
-                if (any(not isinstance(option, dict) or set(option) != {"name", "value"}
-                        or not isinstance(option["name"], str)
-                        or not 1 <= len(option["name"]) <= 100
-                        or not isinstance(option["value"], str)
-                        or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", option["value"]) is None
-                        for option in options)
-                        or len({option["value"] for option in options}) != len(options)
                         or variable["name"] in names):
-                    raise Blocked("Invalid catalog survey options")
+                    raise Blocked("Invalid catalog survey definition")
+                options = variable["values"]
+                if variable["type"] == "secret":
+                    # Only the fixed task 06 may request one hidden Vault password.
+                    # Never accept a catalog-provided default or enum options.
+                    if (title != "06-Ввести master password Fleet Vault"
+                            or variable["name"] != "fleet_master_password"
+                            or options):
+                        raise Blocked("Invalid catalog secret survey definition")
+                elif (not 2 <= len(options) <= 10
+                      or any(not isinstance(option, dict)
+                             or set(option) != {"name", "value"}
+                             or not isinstance(option["name"], str)
+                             or not 1 <= len(option["name"]) <= 100
+                             or not isinstance(option["value"], str)
+                             or re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", option["value"]) is None
+                             for option in options)
+                      or len({option["value"] for option in options}) != len(options)):
+                    raise Blocked("Invalid catalog enum survey options")
                 names.add(variable["name"])
         seen.add(title)
         # Playbooks must exist in the same public immutable source revision.
