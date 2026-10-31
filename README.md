@@ -21,8 +21,6 @@
 
 ## Единая точка входа
 
-**Адрес runner по умолчанию остаётся `<LAN>.231` — существующие объекты не перенумеровывать.** Если несколько автономных PVE расположены в одной LAN, нестандартный адрес допускается только при явной паре `site_runner.bootstrap.runner_ipv4_exception` + `runner_ipv4_exception_reason` в *PRIVATE* Fleet `runner.yml`; публичный Bootstrap проверяет исключение и общее правило до создания CT. Для `serzhan-lab` утверждён адрес `192.168.11.232/24`, потому что `.231` уже занят `serzhan-home`. Прежний код стандартного сценария и работающий runner не заменять.
-
 `bootstrap/install.sh` входит в `dh_ansible`. Отдельный старый репозиторий installer остаётся временным rollback и не участвует в целевой архитектуре.
 
 Выполнять **только на выбранном PVE**, из-под root, после отдельного разрешения на изменение CT. В примере ниже Site ID вводится в терминале и подтверждается оператором:
@@ -30,8 +28,8 @@
 ```bash
 clear
 dh_install() {
-  local REF="0fe67583418199242f7b8276540d1068babf65a1"
-  local SHA="7f7e43433a9a6e1e21326502474feb65d17e19f1"
+  local REF="18f3541170bbec92e138b62cb2d8e109c9362b59"
+  local SHA="d2e6a453eb9ec2b2f8e82555ebde72f1ab470f9e"
   local DEST="/root/dh-ansible-install.sh"
   curl -fsSL --retry 3 \
     "https://raw.githubusercontent.com/DigitalHouses/dh_ansible/$REF/bootstrap/install.sh" \
