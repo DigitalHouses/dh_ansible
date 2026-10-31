@@ -21,6 +21,15 @@
 - Новый runner: `bootstrap/semaphore-guest-install.py` устанавливает `sudo`,
   проверяет sudoers через `visudo`, а unit Semaphore больше не блокирует `become`
   через `NoNewPrivileges`, `ProtectSystem` и `ProtectHome`.
+- **Locale при ручном запуске через `pct exec`:** PVE shell может передать в CT
+  `LANG/LC_ALL`, которых там нет; это приводит к ошибке Ansible
+  `unsupported locale setting` ещё до playbook. Debian 13 CT имеет
+  `C.UTF-8` (может отображаться как `C.utf8` в `locale -a`).
+  Для любой ручной команды `ansible-playbook` из PVE в runner использовать:
+  `pct exec <CTID> -- env -u LANGUAGE LANG=C.UTF-8 LC_ALL=C.UTF-8 ...`.
+  Это **окружение запуска**, не `locale-gen`, не глобальная смена PVE locale,
+  не новая задача и не изменение контейнера. Ошибка до запуска playbook
+  не означает частично выполненное commissioning.
 - Существующий runner: root **внутри уже созданного LXC** выполняет единый
   `playbooks/commission-runner-local-admin.yml` из проверенной ревизии Git.
   Роль `runner_local_admin` идемпотентно ставит `sudo`, меняет systemd unit,
