@@ -12,6 +12,8 @@
 
 **Не искать процедуру в истории чатов и не создавать альтернативный исполнитель.** История — только свидетельство, а актуальная инструкция — единственный нормативный источник. Для специфики медиасервера после неё читать [media runbook](docs/runbooks/media-semaphore-launch.md). Не дублировать команды запуска в верхних документах.
 
+**Задача №40 и самостоятельный доступ AI:** сначала прочитать [runbook ввода Remote Desktop Commander](docs/runbooks/remote-commander-commissioning.md). Чистый Bootstrap не устанавливает watcher №40; до его отдельной постановки задача завершается на preflight. Сервис active сам по себе не означает Online: проверить device pairing и доступ через подключённый инструмент.
+
 **Первичная авторизация Fleet — только после №00:** задача `05-Получить credentials GitHub` показывает одноразовый device code; задача `06-Ввести master password Fleet Vault` принимает одно скрытое значение и сохраняет его локально на runner. [Операторский runbook №05/06](docs/runbooks/credential-setup.md). **Fresh E2E №00→№05→№06 принят 31.10.2026** на Jonsbo CT1231: GitHub Device Flow, private Fleet checkout, успешная расшифровка Vault и сохранение пароля `0600` подтверждены журналами. [Отчёт](docs/acceptance/fleet-credentials-2026-10-31.md). Reboot и downstream задачи 10–90 этим тестом не приняты. Никакого нового Credentials Provider, Vault master password в Bootstrap или автоматической установки PVE workers. Тестируем только через свежую установку из закреплённого Git SHA; **ручные замены seeder и hotfix в LXC запрещены**. Операционная последовательность — [runbook](docs/runbooks/credential-setup.md).
 
 ## Non-negotiable
