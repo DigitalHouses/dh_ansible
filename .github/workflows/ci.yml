@@ -36,6 +36,8 @@ jobs:
           bash -n bootstrap/pve-access-audit-request.sh
       - name: Validate native runner Bootstrap Python syntax
         run: python3 -m py_compile bootstrap/semaphore-guest-install.py
+      - name: Validate PVE host commissioning Python syntax
+        run: python3 -m py_compile bootstrap/commission-pve-runner.py
       - name: Validate runner wrapper syntax
         run: bash -n bin/ansimble-run
       - name: Validate PVE installer and release launcher shell syntax
@@ -94,6 +96,7 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-cloudflare-tunnel.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-pve-access.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-pve-native.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-netalertx-install.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/apply-netalertx-native.yml
