@@ -1,25 +1,39 @@
-# Задача №40 — первое подключение Remote Desktop Commander
+# Задача №40 — Remote Desktop Commander (on-demand)
 
-**Назначение:** включить постоянный Remote Desktop Commander на уже работающем site runner через штатную задачу Semaphore №40, чтобы AI-агент мог подключаться к своему авторизованному устройству. **Не выдаёт** AI-агенту право выполнять разрушительные операции без отдельного разрешения владельца.
+**Цель:** Remote Desktop Commander устанавливается одной кнопкой **40-Установить Remote Desktop Commander** после первого №00. При этом установка требует заранее размещённого *закреплённого* root-owned watcher, но сам удалённый агент до №40 не стартует.
 
-## Обнаруженный prerequisite (2026-10-31)
+## Контракт новой версии Bootstrap (ещё НЕ принят live E2E)
 
-Fresh Tiny Bootstrap устанавливает только root-owned watcher задачи №00. Шаблон `40-Установить Remote Desktop Commander` из Git-каталога уже существует, но его playbook ожидает запущенный `dh-remote-commander-install.path`. На новом CT1231 этот watcher **не установлен**, поэтому №40 немедленно остановится в preflight. Это не проблема GitHub №05, Vault №06 или reboot.
+Четвёртый этап свежего pinned Tiny Bootstrap под root теперь:
+1. создаёт root-owned assets `/opt/digitalhouses/bootstrap/remote-commander/` из того же проверенного Git SHA;
+2. размещает fixed-purpose `/usr/local/sbin/dh-remote-commander-install` и два systemd unit `dh-remote-commander-install.{path,service}`;
+3. включает **только watcher** `dh-remote-commander-install.path`;
+4. выводит `TASK_40_WATCHER=PASS REMOTE_AGENT_INSTALLED=NO`;
+5. по-прежнему регистрирует **только №00** через Semaphore. Node.js, npm, Remote Desktop Commander и его сервис **не устанавливаются автоматически**.
 
-Штатные файлы для narrowly scoped worker уже находятся в **закреплённом** public Git checkout внутри LXC: `playbooks/apply-runner-remote-commander.yml`, `roles/runner_remote_commander/`, `bootstrap/remote-commander-install-request.sh`, `bootstrap/dh-remote-commander-install.{service,path}`.
+Root handler принимает лишь `INSTALL:<uuid>` или `PAIR:<uuid>` от локального `semaphore`, выполняет ровно закреплённый `playbooks/apply-runner-remote-commander.yml`. Semaphore не получает root shell или возможность выбора произвольного playbook.
 
-## Первый ввод в эксплуатацию
+## Важно: уже установленный CT1231 (2026-10-31)
 
-1. На PVE проверить идентичность host и target CT; не удалять и не пересоздавать guest.
-2. Внутри только этого CT проверить hostname/site и точный SHA pinned `/opt/digitalhouses/src`.
-3. Установить **только штатные root-owned assets** в `/opt/digitalhouses/bootstrap/remote-commander/` и fixed worker `/usr/local/sbin/dh-remote-commander-install`, плюс две systemd units. Никакого `git pull`, изменённого YAML, изменения Semaphore SQLite, sudo для `semaphore` или замены кода на лету.
-4. `systemctl daemon-reload && systemctl enable --now dh-remote-commander-install.path`; проверить `systemctl is-active dh-remote-commander-install.path` = `active`.
-5. **После этого** инженер запускает задачу №40 в Semaphore. Она создаёт лишь идентифицированный запрос `INSTALL:<uuid>`; root worker из root-owned pinned файлов запускает ровно `playbooks/apply-runner-remote-commander.yml` и устанавливает managed service.
-6. Оператор подтверждает показанный в №40 одноразовый код на `https://mcp.desktopcommander.app/device/verify`. Наличие active systemd service — не доказательство успешной авторизации.
-7. AI-агент проверяет именно этот актуальный runner в списке подключённых устройств: `Online`, затем выполняет безопасную read-only проверку identity. Только этот критерий означает удалённую доступность.
+На принятом ранее CT1231 **этот watcher отсутствует**: журнал №40 показывает `systemctl is-active dh-remote-commander-install.path` → `inactive`/`rc=4`, ручной read-only осмотр показывает `unit not found`.
 
-**Обязательные проверки:** `systemctl is-active digitalhouses-remote-commander.service`, `systemctl is-enabled digitalhouses-remote-commander.service`, `Online` в подключении и успешный read-only вызов от агента. Состояния `SERVICE_ACTIVE`, `CODE`, `CONNECTED` и `Online` различать. Не обещать удалённый доступ до внешней проверки.
+**№00 меняет только каталог задач через уже установленный fixed worker.** Обновление `dh_ansible` в GitHub, `git pull` или повтор №00 **не может** поставить новый root-owned watcher в работающий CT1231. Это запрет на повышение прав через публичный, изменяемый каталог, а не баг №40. Нельзя лечить выдачей sudo пользователю `semaphore`, редактированием его systemd unit, SQL или подменой root handler.
 
-Прямое выполнение старого `bootstrap/semaphore-host-install.py` или повтор Tiny Bootstrap ради №40 **не требуется**. Первый root-owned stage должен быть оформлен отдельным повторяемым commissioning-шагом, а не ручным патчем установленного seeder. Это deployment штатных pinned assets, не выдача произвольного root shell непривилегированной Semaphore.
+Для **существующего CT1231** нужна отдельная авторизованная операция установки этой fixed root capability (с verify pinned SHA и scope CT) **либо** новое разрешённое Fresh E2E с новым Bootstrap. Без одного из них последовательность `№00 → №40` на этом госте остаётся заблокированной. **Действующее разрешение на уничтожение CT1231 отсутствует.**
 
-**Операционное правило:** после подключения Remote Desktop Commander AI-агент начинает с [AI agent execution runbook](ai-agent-execution.md), выполняет операции в предоставленных пределах; destructive действия требуют одобрения владельца, а заблокированные подключённым инструментом операции не обходятся.
+## Штатный пользовательский путь на новом установленном runner
+
+1. Bootstrap подтверждает `TASK_00_ONLY=PASS`, `TASK_40_WATCHER=PASS`, `REMOTE_AGENT_INSTALLED=NO`.
+2. Оператор запускает №00 через Semaphore; №40 появляется среди других шаблонов.
+3. Оператор запускает №40: Semaphore помещает проверенный запрос, root worker устанавливает фиксированную версию Node.js и Remote Desktop Commander, создаёт managed `digitalhouses-remote-commander.service`.
+4. Оператор подтверждает одноразовый код на `https://mcp.desktopcommander.app/device/verify`.
+5. AI-агент находит **текущий** runner в своём подключении, видит `Online` и самостоятельно выполняет разрешённый read-only вызов. `SERVICE_ACTIVE` не означает `Online`.
+
+## Приёмка
+
+- Bootstrap из опубликованного pinned SHA: `CODE_GIT_SHA=PASS`, `TASK_00_ONLY=PASS`, `TASK_40_WATCHER=PASS`, `REMOTE_AGENT_INSTALLED=NO`, `RESULT_RC=0`.
+- Запуск №00, затем №40: фиксированный worker `PASS`, systemd agent `active/enabled`; display device-code или `ALREADY_AUTHORIZED`.
+- Независимое подтверждение `Online` через действительное Remote Desktop Commander подключение, read-only вызов агентом, повтор №40 не меняет необходимые конфигурации.
+- Пока нового живого Fresh E2E и удалённого `Online` нет — статус **IMPLEMENTED IN GIT / NOT LIVE ACCEPTED**.
+
+Для рамок самостоятельных операций AI-агентов см. [основной runbook](ai-agent-execution.md) и [AGENTS.md](../../AGENTS.md). Подключение к runner не выдаёт дополнительных прав на PVE/production или destructive операции.
