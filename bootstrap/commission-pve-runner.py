@@ -182,6 +182,17 @@ def install_guest_trust(ctid, ip, node, fingerprint):
     )
     guest_file(ctid, base + "/pve-runtime.yml", observed,
                "root:semaphore", "0640")
+    # The PVE CA certificate is public trust material, not a password or key.
+    # Copy only the actual host-root CA after the live server was fingerprinted.
+    # This enables standard certificate-validated Ansible URI checks for root@pam.
+    ca = Path("/etc/pve/pve-root-ca.pem")
+    require(ca.is_file() and not ca.is_symlink(), "PVE_ROOT_CA_MISSING")
+    pem = ca.read_text(encoding="ascii")
+    require(pem.startswith("-----BEGIN CERTIFICATE-----") and
+            "-----END CERTIFICATE-----" in pem and len(pem) < 16384,
+            "PVE_ROOT_CA_INVALID")
+    guest_file(ctid, base + "/pve-root-ca.pem", pem,
+               "root:semaphore", "0640")
     return known
 
 
