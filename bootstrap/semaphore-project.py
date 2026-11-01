@@ -246,6 +246,61 @@ def ensure_template(api, path, title, legacy_title, desired, *, apply=False):
     return matches_after[0]
 
 
+def reconcile_site_inventory(api, project_id, site, ssh_key_id,
+                             site_repo_id, *, apply=False):
+    """Upgrade the known bad absolute-path inventory in place.
+
+    Semaphore file inventories without repository_id are resolved relative to
+    the code checkout. The local-repository binding keeps inventory_dir at the
+    root-owned site-data directory and preserves template/history identities.
+    """
+    path = f"/project/{project_id}/inventory"
+    items = api.request("GET", path + "?sort=name&order=asc")
+    if not isinstance(items, list):
+        raise Blocked("Cannot read site-local inventory")
+    old = one_named(items, "Runner (local)")
+    wanted = {
+        "name": "Runner (local)", "project_id": project_id,
+        "type": "file", "inventory": "hosts.yml",
+        "repository_id": site_repo_id, "ssh_key_id": ssh_key_id,
+    }
+    guarded = ("name", "project_id", "type", "inventory",
+               "repository_id", "ssh_key_id")
+    if old is None:
+        return ensure(api, path + "?sort=name&order=asc",
+                      wanted["name"], wanted, apply=apply,
+                      compare=guarded)
+    if all(old.get(k) == wanted[k] for k in guarded):
+        return old
+    legacy = dict(wanted, inventory=f"{SITE_INVENTORY_BASE}/{site}/hosts.yml",
+                  repository_id=None)
+    if (any(old.get(k) != legacy[k] for k in guarded)
+            or old.get("become_key_id") not in (None, 0)
+            or old.get("template_id") not in (None, 0)
+            or old.get("runner_tag") not in (None, "")):
+        raise Blocked("SEMAPHORE_INVENTORY_UNEXPECTED_DRIFT")
+    inventory_id = old.get("id")
+    if type(inventory_id) is not int or inventory_id < 1:
+        raise Blocked("SEMAPHORE_INVENTORY_ID_INVALID")
+    if not apply:
+        print("PLAN_REPAIR_SITE_INVENTORY=id=" + str(inventory_id), flush=True)
+        return old
+    detail = api.request("GET", path + "/" + str(inventory_id))
+    if not isinstance(detail, dict) or any(
+            detail.get(k) != old.get(k) for k in guarded + ("id",)):
+        raise Blocked("SEMAPHORE_INVENTORY_CHANGED_DURING_REPAIR")
+    update = dict(detail)
+    update.update(wanted)
+    update["id"] = inventory_id
+    api.request("PUT", path + "/" + str(inventory_id), update)
+    after = api.request("GET", path + "/" + str(inventory_id))
+    if not isinstance(after, dict) or after.get("id") != inventory_id or any(
+            after.get(k) != wanted[k] for k in guarded):
+        raise Blocked("SEMAPHORE_INVENTORY_REPAIR_NOT_VERIFIED")
+    print("SITE_INVENTORY_REPAIRED_IN_PLACE=id=" + str(inventory_id), flush=True)
+    return after
+
+
 def provision(api, site: str, project_title: str, apply: bool, *, templates=None):
     if templates is None:
         templates = BOOTSTRAP_TEMPLATES
@@ -282,15 +337,20 @@ def provision(api, site: str, project_title: str, apply: bool, *, templates=None
                        compare=("git_url", "git_branch", "ssh_key_id"))
     if code_repo is None:
         return {"state": "PLAN_ONLY"}
-    local_inventory = ensure(api, prefix + "/inventory?sort=name&order=asc",
-                             "Runner (local)",
-                             {"name": "Runner (local)", "project_id": pid,
-                              "type": "file",
-                              "inventory": f"{SITE_INVENTORY_BASE}/{site}/hosts.yml",
-                              "ssh_key_id": local_key["id"]},
-                             apply=apply,
-                             compare=("type", "inventory", "ssh_key_id",
-                                      "repository_id"))
+    # Semaphore 2.20 resolves an unbound file inventory relative to the
+    # public code checkout, not the filesystem root. A separate built-in
+    # local repository points inventory_dir to the real site-data directory.
+    local_site_repo = ensure(
+        api, prefix + "/repositories?sort=name&order=asc",
+        "Site inventory (local)",
+        {"name": "Site inventory (local)", "project_id": pid,
+         "git_url": f"{SITE_INVENTORY_BASE}/{site}",
+         "git_branch": "main", "ssh_key_id": public_key["id"]},
+        apply=apply, compare=("project_id", "git_url", "git_branch", "ssh_key_id"))
+    if local_site_repo is None:
+        return {"state": "PLAN_ONLY"}
+    local_inventory = reconcile_site_inventory(
+        api, pid, site, local_key["id"], local_site_repo["id"], apply=apply)
     if local_inventory is None:
         return {"state": "PLAN_ONLY"}
     env = ensure(api, prefix + "/environment?sort=name&order=asc", "Empty",
