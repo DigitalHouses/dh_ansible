@@ -1,5 +1,9 @@
 # Semaphore 2.20 Beta — получение и проверка credentials объекта (№05/06)
 
+## Live acceptance · 02.11.2026 · serzhan-home
+
+**READY (подтверждено живыми журналами):** №00 создала 12 задач и сохранила себя; №05 записала `DH_PVE_ROOT_PASSWORD` в Semaphore Variable Group без ошибок; PVE commissioning завершился `PVE_NATIVE_SSH=PASS`, `PVE_HARDWARE_AUDIT=PASS`, `PVE_COMMISSIONING=PASS`; №06 (run #6, source `50d5b3b`) прошла TLS/сертификат, аутентификацию `root@pam` и получение ожидаемого узла `pve`: `pve.status=READY`, `overall=READY`, `failed=0`. Объект `serzhan-home`, PVE `192.168.11.6`, runner `192.168.11.231`. Пароль повторно не требуется. Исправлены ошибки Semaphore inventory [#103](https://github.com/DigitalHouses/dh_ansible/pull/103), Jinja [#105](https://github.com/DigitalHouses/dh_ansible/pull/105), старого CA PVE8 [#107](https://github.com/DigitalHouses/dh_ansible/pull/107). Точный [отчёт приёмки](../acceptance/semaphore-beta-fresh-2026-11-02.md). **Не пройдены:** downstream задачи 10–90, GitHub №07, полный legacy CI.
+
 ## Назначение и статус
 
 **Исторический промежуточный этап 02.11.2026:** №00 реально выполнилась (создано 12 шаблонов, failed=0), №05 успешно сохранила только PVE root password в native Semaphore Variable Group. Host-root PVE commissioning прошёл SSH/TLS/hardware PASS. Первое исполнение №06 обнаружило несовместимость Python 3.13 `VERIFY_X509_STRICT` с legacy Proxmox 8.4 CA без `keyUsage`; исправление №06 в [PR #107](https://github.com/DigitalHouses/dh_ansible/pull/107) прошло изолированные TLS-тесты, но реальный PVE login через обновлённую №06 ожидает проверки.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
