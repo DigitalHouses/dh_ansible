@@ -40,7 +40,7 @@
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/d7e1cf825eb9019a6f8e05cfe4c97d8c2fd7e051/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/d318bfb56661000774e766ba9ce9168e38d6de41/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
@@ -59,6 +59,8 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
 ## Первое получение credentials — задачи №05 и №06 (Semaphore Beta)
+
+**Исправление №00 от 02.11.2026:** в старом Bootstrap Semaphore `type=file` inventory ошибочно разрешался относительно public Git checkout и №00 выводила `skipping: no hosts matched`. Выпущен [PR #103](https://github.com/DigitalHouses/dh_ansible/pull/103): будущий новый Bootstrap уже включает исправление, а для **установленного CT1231** используется строго version-pinned [in-place upgrade](bootstrap/upgrade-semaphore-site-inventory.sh) без переустановки; подробности в [runbook](docs/runbooks/credential-setup.md#исправление-inventory-в-semaphore-220-00-завершилась-с-skipped-no-hosts-matched). После его успешного применения снова запустить №00.
 
 **После свежего Bootstrap** в Semaphore есть только №00. Она синхронизирует каталог **из main**; PR #101 уже объединён, поэтому №00 можно запускать для получения №05/06. Не проводить ручную замену root-owned seeder и не возвращаться к старому GitHub Device Flow/Fleet master password.
 
