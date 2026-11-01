@@ -1,4 +1,4 @@
-"""Offline contract for the two optional, deliberately simple Fleet credential tasks."""
+"""Offline contracts for accepted Semaphore-native site credential tasks 05/06."""
 import importlib.util
 import io
 import json
@@ -21,49 +21,57 @@ def seeder_module():
 def test_task_05_06_are_not_bootstrap_tasks():
     tasks = json.loads(CATALOG.read_text())["tasks"]
     assert [item["title"][:2] for item in tasks[:4]] == ["00", "05", "06", "10"]
-    assert tasks[1]["playbook"] == "playbooks/request-github-credentials.yml"
-    assert tasks[2]["playbook"] == "playbooks/request-fleet-master-password.yml"
+    assert tasks[1]["playbook"] == "playbooks/obtain-site-credentials.yml"
+    assert tasks[2]["playbook"] == "playbooks/check-site-credentials.yml"
     assert len(seeder_module().BOOTSTRAP_TEMPLATES) == 1
     assert all(t["view"] == "01 · Подготовка" for t in tasks[:3])
 
 
-def test_hidden_password_survey_has_no_default_or_choices():
+def test_native_survey_has_no_default_or_choices():
     tasks = json.loads(CATALOG.read_text())["tasks"]
-    item = next(x for x in tasks if x["title"].startswith("06-"))
-    assert item["survey_vars"] == [{
-        "name": "fleet_master_password",
-        "title": "Master password Fleet Vault",
-        "description": "Введите один раз. Пароль сохранится в runner и будет использоваться после перезагрузки.",
-        "type": "secret",
-        "required": True,
-        "values": [],
-    }]
-    assert "survey_vars" not in next(x for x in tasks if x["title"].startswith("05-"))
+    item05 = next(x for x in tasks if x["title"] == "05-Ввести credentials объекта")
+    item06 = next(x for x in tasks if x["title"] == "06-Проверить credentials объекта")
+    fields = item05["survey_vars"]
+    assert len(fields) == 5
+    assert [f["name"] for f in fields] == [
+        "DH_INPUT_GITHUB_PROVISION_TOKEN",
+        "DH_INPUT_MQTT_USERNAME",
+        "DH_INPUT_MQTT_PASSWORD",
+        "DH_INPUT_PVE_ROOT_PASSWORD",
+        "DH_INPUT_CLOUDFLARE_API_TOKEN",
+    ]
+    assert [f["type"] for f in fields] == [
+        "secret", "text", "secret", "secret", "secret",
+    ]
+    assert all(f["target"] == "env" and f["required"] is False and f["values"] == []
+               and "default" not in f and "default_value" not in f
+               for f in fields)
+    assert "survey_vars" not in item06
 
 
-def test_05_prints_only_device_code_and_never_vault_password():
-    txt = (ROOT / "playbooks/request-github-credentials.yml").read_text()
-    assert "gh_2.102.0_linux_amd64" in txt
-    assert "checksum: sha256:" in txt
-    assert "auth login --web" in txt
-    assert "github.com/login/device" in txt
-    assert "async:" in txt and "ansible.builtin.async_status:" in txt
-    assert "repos/DigitalHouses/dh_ansible_fleet_detail" in txt
-    assert "GH_CONFIG_DIR" in txt
-    assert "fleet-vault-password" not in txt
-    assert "become: false" in txt
-
-
-def test_06_writes_secret_once_without_echoing_or_sudo():
-    txt = (ROOT / "playbooks/request-fleet-master-password.yml").read_text()
-    assert "type: secret" not in txt  # Defined by the catalog, not printed by tasks
-    assert "content: \"{{ fleet_master_password }}\\n\"" in txt
-    assert "mode: '0600'" in txt
-    assert "ansible-vault view --vault-password-file" in txt
-    assert "dh_unlock_check.rc == 0" in txt
+def test_05_uses_native_api_without_custom_credential_worker():
+    txt = (ROOT / "playbooks/obtain-site-credentials.yml").read_text()
+    assert "ansible.builtin.uri:" in txt
+    assert "ansible.builtin.slurp:" in txt
+    assert "target=env" in txt
+    assert "dh_secret_group_name: Empty" in txt
+    assert "when: item in dh_supplied" in txt
     assert "no_log: true" in txt
-    assert "become: false" in txt
-    assert "master password" in txt
+    assert "validate_certs: true" in txt
+    assert "semaphore-obtain-credentials.py" not in txt
+    assert "fleet-vault-password" not in txt
+
+
+def test_06_checks_root_pve_over_trusted_https():
+    txt = (ROOT / "playbooks/check-site-credentials.yml").read_text()
+    assert "DH_PVE_ROOT_PASSWORD" in txt
+    assert "root@pam" in txt
+    assert "/api2/json/access/ticket" in txt
+    assert "/api2/json/nodes" in txt
+    assert "PVE_TRUST_NOT_COMMISSIONED" in txt
+    assert "validate_certs: true" in txt
+    assert "no_log: true" in txt
+    assert "fleet_master_password" not in txt
 
 
 class Response:
@@ -98,22 +106,29 @@ def fake_urlopen_for(catalog):
     return open_url
 
 
-def test_seeder_accepts_only_fixed_secret_survey(monkeypatch):
+def test_seeder_accepts_only_fixed_native_05_survey(monkeypatch):
     m = seeder_module()
     catalog = json.loads(CATALOG.read_text())
     monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen_for(catalog))
     tasks = m.read_public_catalog()
     assert len(tasks) == len(catalog["tasks"])
-    assert tasks[2][4][0]["type"] == "secret"
+    assert tasks[1][4][0]["type"] == "secret"
+    assert tasks[1][4][0]["target"] == "env"
 
     bad = json.loads(json.dumps(catalog))
-    bad["tasks"][2]["survey_vars"][0]["name"] = "anything_else"
+    bad["tasks"][1]["survey_vars"][0]["name"] = "anything_else"
     monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen_for(bad))
-    with pytest.raises(m.Blocked, match="secret survey"):
+    with pytest.raises(m.Blocked, match="Invalid Task 05 native credential survey"):
         m.read_public_catalog()
 
     bad = json.loads(json.dumps(catalog))
-    bad["tasks"][2]["survey_vars"][0]["values"] = [{"name": "wrong", "value": "bad"}]
+    bad["tasks"][1]["survey_vars"][0]["values"] = [{"name": "wrong", "value": "bad"}]
     monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen_for(bad))
-    with pytest.raises(m.Blocked, match="secret survey"):
+    with pytest.raises(m.Blocked, match="Invalid Task 05 native credential survey"):
+        m.read_public_catalog()
+
+    bad = json.loads(json.dumps(catalog))
+    bad["tasks"][1]["survey_vars"][0]["target"] = "extra"
+    monkeypatch.setattr(m.urllib.request, "urlopen", fake_urlopen_for(bad))
+    with pytest.raises(m.Blocked, match="Invalid Task 05 native credential survey"):
         m.read_public_catalog()
