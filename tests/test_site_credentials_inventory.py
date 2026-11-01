@@ -41,7 +41,9 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
         root = next(x for x in manual if x["id"] == "pve_root_password")
         self.assertEqual(root["fixed_login"], "root")
         self.assertEqual(root["api_identity"], "root@pam")
-        self.assertEqual(root["store"], "key_store_login_password")
+        self.assertEqual(root["store"], "variable_group_secret")
+        self.assertEqual(root["semaphore_secret_type"], "var")
+        self.assertEqual(root["runtime_name"], "DH_PVE_ROOT_PASSWORD")
         self.assertNotIn("pve_api_audit_token", {x["id"] for x in manual})
         self.assertNotIn("pve_api_write_token", {x["id"] for x in manual})
 
