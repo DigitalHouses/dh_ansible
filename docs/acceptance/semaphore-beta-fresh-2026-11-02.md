@@ -69,7 +69,7 @@ qm config 1231
 
 ## Unit-тест №05/06: первый запуск, корректировка ожидания
 
-Проверка владельца на CT1231 (Ansible Core 2.21.4 / Python 3.13.5), 02.11.2026: 7 тестов, **6 PASS, 1 FAIL**. Ошибка только в `test_partial_keep_and_safe_write_contract`: тест требовал Python-текст `if item in dh_supplied`, тогда как playbook корректно применяет Ansible `when: item in dh_supplied`. Исправление в ветке PR #101, commit `1d216c4bbd645584236211c149f10b999a86b36b`: условие проверяется структурно через `yaml.safe_load` и поиск шага `Prepare only submitted secret upserts`. Повторный живой unit test после изменения **PENDING**, ни один секрет и Semaphore API не изменялись.
+Проверка владельца на CT1231 (Ansible Core 2.21.4 / Python 3.13.5), 02.11.2026: 7 тестов, **6 PASS, 1 FAIL**. Ошибка только в `test_partial_keep_and_safe_write_contract`: тест требовал Python-текст `if item in dh_supplied`, тогда как playbook корректно применяет Ansible `when: item in dh_supplied`. Исправление в ветке PR #101, commit `1d216c4bbd645584236211c149f10b999a86b36b`: условие проверяется структурно через `yaml.safe_load` и поиск шага `Prepare only submitted secret upserts`. Повторный живой unit test **PASS**: `Ran 7 tests in 0.025s`, `OK`, `ANSIBLE_05_06_UNIT_TESTS=PASS` (журнал владельца `1(20261101-215359).txt`). Все 7 контрактных unit-тестов прошли на CT1231. Это тесты структуры/контрактов: они **не проверяют** реальное сохранение секретов в Semaphore API. Ни один секрет и production Semaphore API не изменялись.
 
 ## Изолированная проверка синтаксиса на CT1231 — PASS
 
