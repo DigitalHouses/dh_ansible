@@ -10,6 +10,11 @@ GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 [[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
   echo "BLOCKED: run without arguments as root on Proxmox VE" >&2; exit 2;
 }
+# PVE shell LANG may be unavailable in a minimal Debian LXC. Normalize the
+# environment inherited by pct exec and all guest bootstrap subprocesses.
+# LC_ALL is limited to this installer process, never persisted globally.
+export LANG=C.UTF-8 LC_ALL=C.UTF-8
+unset LANGUAGE
 read -r -p "Site ID (<owner>-<type>): " SITE
 SITE="${SITE%$'\r'}"
 [[ ${#SITE} -le 31 && $SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
