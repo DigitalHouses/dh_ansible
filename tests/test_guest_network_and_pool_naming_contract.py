@@ -26,8 +26,8 @@ def test_multicast_parser_reads_actual_guest_ipv4_not_router_dns():
     query = struct.pack("!HHHHHH", 0, 0x8400, 1, 1, 0, 0)
     query += q + struct.pack("!HH", 1, 1)
     answer = b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 120, 4)
-    assert parser.records(query + answer + bytes([192, 168, 11, 238])) == [
-        ("mediaserver-serzhan.local", "192.168.11.238")]
+    assert parser.records(query + answer + bytes([198, 51, 100, 238])) == [
+        ("mediaserver-serzhan.local", "198.51.100.238")]
     assert parser.records(b"\x00" * 12) == []
     try:
         parser.name_at(b"\xc0\x00", 0)
