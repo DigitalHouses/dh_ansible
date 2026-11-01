@@ -108,26 +108,43 @@ def test():
                     return request(method, path, body)
 
             api = IsolatedAPI()
-            result = app["enroll"](api, "serzhan-lab", "DUMMY-KEY-001", "DUMMY-VAR-001")
-            assert result == {"key_store": "CREATED", "variable_group": "CREATED"}, result
-            print("BOTH_NATIVE_SECRETS_CREATED=PASS")
-            result = app["enroll"](api, "serzhan-lab", "", "DUMMY-VAR-002")
-            assert result == {"key_store": "KEEP", "variable_group": "UPDATED"}, result
-            print("PARTIAL_UPDATE_KEEP_KEY_STORE=PASS")
-            result = app["enroll"](api, "serzhan-lab", "DUMMY-KEY-002", "")
-            assert result == {"key_store": "UPDATED", "variable_group": "KEEP"}, result
-            print("PARTIAL_UPDATE_KEEP_VARIABLE_GROUP=PASS")
-            keys = request("GET", prefix + "/keys?sort=name&order=asc")
+            result = app["enroll"](api, "serzhan-lab", {
+                "github_provision_token": "DUMMY-GH-001",
+                "mqtt_username": "dummy-user",
+                "mqtt_password": "DUMMY-MQTT-001",
+                "pve_api_audit_token": "DUMMY-PVE-AUDIT",
+                "pve_api_write_token": "DUMMY-PVE-WRITE",
+                "cloudflare_api_token": "DUMMY-CF-001",
+            })
+            assert all(v == "CREATED" for v in result.values()), result
+            print("SIX_FIELDS_CREATED=PASS")
+            result = app["enroll"](api, "serzhan-lab", {
+                "mqtt_password": "DUMMY-MQTT-002",
+            })
+            assert result["mqtt_password"] == "UPDATED", result
+            assert all(v == "KEEP" for k, v in result.items()
+                       if k != "mqtt_password"), result
+            print("ONLY_MQTT_PASSWORD_UPDATED=PASS")
+            result = app["enroll"](api, "serzhan-lab", {
+                "mqtt_username": "new-dummy-user",
+            })
+            assert result["mqtt_username"] == "UPDATED", result
+            print("ONLY_MQTT_USERNAME_UPDATED=PASS")
             groups = request("GET", prefix + "/environment?sort=name&order=asc")
-            key_records = [k for k in keys if k.get("name") == app["TEST_KEY_NAME"]]
-            var_records = [g for g in groups if g.get("name") == app["TEST_VAR_GROUP"]]
-            assert len(key_records) == 1, "Key Store duplicate or missing"
+            var_records = [g for g in groups
+                           if g.get("name") == app["SITE_VARIABLE_GROUP"]]
             assert len(var_records) == 1, "Variable Group duplicate or missing"
+            group_id = var_records[0]["id"]
+            detail = request("GET", prefix + "/environment/" + str(group_id))
+            assert json.loads(detail["env"])["DH_MQTT_USERNAME"] == "new-dummy-user"
+            assert len(detail["secrets"]) == 5, "Unexpected secret count"
             print("NATIVE_METADATA_VERIFIED=PASS")
-            # The SQLite payload must not contain literal dummy password strings.
+            # The SQLite payload must not contain any literal dummy secret.
             blobs = b"".join(p.read_bytes() for p in folder.glob("test-database.sqlite*"))
-            for literal in (b"DUMMY-KEY-001", b"DUMMY-KEY-002",
-                            b"DUMMY-VAR-001", b"DUMMY-VAR-002"):
+            for literal in (
+                b"DUMMY-GH-001", b"DUMMY-MQTT-001", b"DUMMY-MQTT-002",
+                b"DUMMY-PVE-AUDIT", b"DUMMY-PVE-WRITE", b"DUMMY-CF-001",
+            ):
                 assert literal not in blobs, "Plaintext secret found in temporary SQLite"
             print("SQLITE_SECRETS_ENCRYPTED=PASS")
         finally:
