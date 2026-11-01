@@ -75,15 +75,74 @@ def test_locale_standardization_is_explicit_and_inherited(monkeypatch):
 
 
 def test_guest_default_locale_is_persistent_and_idempotent(monkeypatch, tmp_path):
+    """Reproduce stock Debian 13: dangling compatibility symlink -> canonical."""
     m = module()
     monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
     target = tmp_path / "etc/default/locale"
+    canonical = tmp_path / "etc/locale.conf"
     target.parent.mkdir(parents=True)
-    target.write_text("LANG=en_US.UTF-8\n")
+    target.symlink_to("../locale.conf")
+    assert target.is_symlink() and not target.exists()
     m.persist_guest_locale()
     m.persist_guest_locale()
+    assert target.is_symlink()
+    assert os.readlink(target) == "../locale.conf"
+    assert canonical.read_text() == "LANG=C.UTF-8\n"
     assert target.read_text() == "LANG=C.UTF-8\n"
-    assert target.stat().st_mode & 0o777 == 0o644
+    assert canonical.stat().st_mode & 0o777 == 0o644
+
+
+def test_guest_locale_regular_legacy_file_kept_consistent(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    old = tmp_path / "etc/default/locale"
+    old.parent.mkdir(parents=True)
+    old.write_text("LANG=en_US.UTF-8\n")
+    m.persist_guest_locale()
+    assert old.read_text() == "LANG=C.UTF-8\n"
+    assert (tmp_path / "etc/locale.conf").read_text() == "LANG=C.UTF-8\n"
+
+
+@pytest.mark.parametrize("bad_target", ["../../etc/passwd", "/tmp/evil", "other-file"])
+def test_guest_locale_rejects_unexpected_legacy_symlinks(monkeypatch, tmp_path, bad_target):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    legacy = tmp_path / "etc/default/locale"
+    legacy.parent.mkdir(parents=True)
+    legacy.symlink_to(bad_target)
+    with pytest.raises(m.Blocked, match="symlink target"):
+        m.persist_guest_locale()
+    assert not (tmp_path / "etc/locale.conf").exists()
+
+
+def test_guest_locale_rejects_symlink_at_canonical_location(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    path = tmp_path / "etc/locale.conf"
+    path.parent.mkdir(parents=True)
+    path.symlink_to("other-file")
+    with pytest.raises(m.Blocked, match="locale.conf file type"):
+        m.persist_guest_locale()
+
+
+def test_guest_locale_rejects_legacy_directory(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    (tmp_path / "etc/default/locale").mkdir(parents=True)
+    with pytest.raises(m.Blocked, match="locale file type"):
+        m.persist_guest_locale()
+
+
+def test_guest_locale_allows_canonical_absolute_legacy_link(monkeypatch, tmp_path):
+    # This variant is supported by some Debian image builders.
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    old = tmp_path / "etc/default/locale"
+    old.parent.mkdir(parents=True)
+    old.symlink_to("/etc/locale.conf")
+    m.persist_guest_locale()
+    assert old.is_symlink()
+    assert (tmp_path / "etc/locale.conf").read_text() == "LANG=C.UTF-8\n"
 
 
 def test_existing_ansible_must_be_explicitly_adopted_and_never_reinstalled():
