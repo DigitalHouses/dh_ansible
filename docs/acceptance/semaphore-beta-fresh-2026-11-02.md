@@ -120,6 +120,7 @@ pct exec 1231 -- bash -c '
 ```bash
 pct exec 1231 -- runuser -u semaphore -- bash -c '
 set -euo pipefail
+cd /tmp
 d=$(mktemp -d)
 trap "rm -rf \"$d\"" EXIT
 git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \
