@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Generic guarded replacement of disposable site runner CT1231 on actual PVE.
+# A fresh reinstall may reuse the same site ID; no guest data or secrets are migrated.
 # Args: expected-old-site new-site pinned-bootstrap-revision expected-PVE-IP
 set -Eeuo pipefail
 umask 077
@@ -11,8 +12,8 @@ EXPECTED_PVE_IP="$4"
 CTID=1231
 [[ $EUID == 0 && -f /etc/pve/user.cfg ]] || { echo "BLOCKED: PVE root required" >&2; exit 2; }
 [[ $OLD_SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || { echo "BLOCKED: invalid old site" >&2; exit 2; }
-[[ $NEW_SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ && $NEW_SITE != "$OLD_SITE" ]] || {
-  echo "BLOCKED: new site must differ" >&2; exit 2;
+[[ $NEW_SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$ ]] || {
+  echo "BLOCKED: invalid new site" >&2; exit 2;
 }
 [[ $PIN =~ ^[0-9a-f]{40}$ ]] || { echo "BLOCKED: invalid pinned SHA" >&2; exit 2; }
 CIDR="$(ip -4 -o addr show dev vmbr0 | awk '$3=="inet"{print $4}')"
@@ -97,5 +98,5 @@ pct exec "$CTID" -- test -f "/var/lib/ansible/site-data/$NEW_SITE/pve-runtime.ym
 echo "FRESH_RUNNER_SITE=$NEW_SITE"
 echo "FRESH_RUNNER=PASS"
 echo "SEMAPHORE=https://$RUNNER_IP:3000/"
-echo "NEXT=Run 00, authorize GitHub in 05, enter Fleet Vault password in 06"
+echo "NEXT=Run task 00 in Semaphore; credential tasks require separate acceptance"
 echo "DONE"
