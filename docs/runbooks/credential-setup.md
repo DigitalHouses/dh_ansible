@@ -2,9 +2,9 @@
 
 ## Назначение и статус
 
-**Новая реализация в PR #101; live E2E №05/06 ещё не выполнен.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
+**PR #101 объединён с `main` 02.11.2026 (`b883ff85`); live UI/PVE E2E №05/06 ещё не выполнен.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
 
-**Основной принцип:** Bootstrap создаёт только №00. Она загружает каталог из ветки **main**. Если PR ещё не принят в main, №00 регистрирует **прежнюю** №05 GitHub/№06 Fleet Vault, а не новые задачи. Ручных подмен Python-кода и файлов на runner не делать.
+**Основной принцип:** Bootstrap создаёт только №00, которая читает ветку **main**. Новая №05/06 уже опубликована: запускайте №00 вручную в Semaphore, чтобы зарегистрировать обе задачи. Никаких ручных подмен файлов внутри CT1231 и переустановки runner.
 
 ## Что делает новая №05
 
@@ -35,11 +35,11 @@ Ticket, пароль, API token и request body не выводятся в Task 
 
 Уже принятый **общий** PVE native commissioning `bootstrap/commission-pve-runner.py`, запускаемый из root Shell фактического PVE по проверенной pinned ревизии, устанавливает доверие к SSH/TLS на один объект и теперь копирует публичный `/etc/pve/pve-root-ca.pem` в `/var/lib/ansible/site-data/<site>/pve-root-ca.pem` (без приватных ключей). Подробности: [PVE native commissioning](pve-native-commissioning.md). В случае TLS/hostname mismatch проверки должны завершаться `BLOCKED`, а не отключать `validate_certs`.
 
-**Порядок приёмки после публикации каталога:** один раз выполнить generic PVE commissioning с проверкой `PVE_COMMISSIONING=PASS` → в Semaphore запустить №00 → №05 (PVE root password) → №06. При неверном пароле повтор №05 с одним полем, затем №06. Переустановка CT1231 для исправления пароля **не требуется**.
+**Текущий порядок после merge:** в Semaphore выполнить №00 → №05 (ввести только PVE root password) → выполнить generic PVE host-root commissioning с `PVE_COMMISSIONING=PASS`, если ещё не пройден → №06. При неверном пароле повтор №05 с одним полем, затем №06. Переустановка CT1231 для исправления пароля **не требуется**.
 
 ## Граница этой реализации
 
-- Новый путь №05 и №06 — нативные Ansible playbooks, но live UI E2E ещё **PENDING**.
+- Новый путь №05 и №06 опубликован в `main`; профильный CI 75/75 PASS и изолированный native Semaphore API/storage E2E PASS, но live UI и PVE TLS/root@pam E2E ещё **PENDING**.
 - №07 GitHub private site repository и общий `pre_tasks` gate для всех действующих задач — отдельные утверждённые work items и пока **не реализованы**.
 - Принятая 31.10.2026 историческая Fleet Vault авторизация относится к **старому** набору задач и не распространяется на новый сценарий.
 - Сохранять доступ к базе Semaphore и отдельно её `access_key_encryption` для будущих бэкапов. Ни один секрет не должен существовать только как успешная строка Task 05.
