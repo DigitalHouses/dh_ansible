@@ -48,4 +48,4 @@ def test_bootstrap_normalizes_host_locale_before_guest_commands():
     assert "export LANG=C.UTF-8 LC_ALL=C.UTF-8" in INSTALLER
     assert "unset LANGUAGE" in INSTALLER
     assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index("pct create")
-    assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index("pct exec")
+    assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index('pct exec "$CTID"')
