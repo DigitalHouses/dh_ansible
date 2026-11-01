@@ -10,7 +10,7 @@
 
 После того как `pct config 1231` больше не находит LXC, а `qm config 1231` не находит VM, выполняется **только стандартный Bootstrap**, закреплённый по проверенному commit. Актуальный источник команды — [README](../../README.md#единая-точка-входа--tiny-bootstrap); старые replacement-скрипты запрещены.
 
-При установке `serzhan-lab` получают новый CT1231 `ansible-serzhan-lab`, IP `192.168.11.231/24` для PVE с `vmbr0` в сети 192.168.11.0/24. Новая установка: Debian 13 → pinned Git → Ansible + Semaphore → только задача №00. Старые сертификаты, токены, база Semaphore, Vault, SSH-ключи **не переносятся**.
+При установке `serzhan-lab` получают новый CT1231 `ansible-serzhan-lab`, IP `<runner-IP>/24` для PVE с `vmbr0` в сети <PVE-LAN>/24. Новая установка: Debian 13 → pinned Git → Ansible + Semaphore → только задача №00. Старые сертификаты, токены, база Semaphore, Vault, SSH-ключи **не переносятся**.
 
 ## Приёмка
 
