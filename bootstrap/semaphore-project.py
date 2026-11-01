@@ -53,6 +53,11 @@ MANAGED_DESCRIPTION = "DigitalHouses · управляется каталого�
 # Explicit one-time display-name migration for the canonical Cloudflare lifecycle.
 # New title is published only with a playbook that provisions/reconciles a tunnel.
 CATALOG_RENAMES = {
+    # Controlled Task 05 transition; keep template ID and history.
+    "05-Ввести credentials объекта": (
+        "05-Получить credentials GitHub",
+        "playbooks/request-github-credentials.yml",
+    ),
     "80-Медиасервер · Развёртывание": (
         "80-Медиасервер · Аудит PCI/VM",
         "playbooks/plan-pve-media-vm.yml",
@@ -409,16 +414,21 @@ def read_public_catalog():
             names = set()
             for variable in survey_vars:
                 if (not isinstance(variable, dict)
-                        or set(variable) != {"name", "title", "description", "type",
-                                            "required", "values"}
+                        or set(variable) - {"name", "title", "description", "type",
+                                            "required", "values", "target"}
+                        or not {"name", "title", "description", "type",
+                                "required", "values"}.issubset(variable)
                         or not isinstance(variable.get("name"), str)
-                        or re.fullmatch(r"[a-z][a-z0-9_]{2,63}", variable["name"]) is None
+                        or re.fullmatch(r"[a-zA-Z][a-zA-Z0-9_]{2,63}", variable["name"]) is None
                         or not isinstance(variable.get("title"), str)
                         or not 1 <= len(variable["title"]) <= 100
                         or not isinstance(variable.get("description"), str)
                         or len(variable["description"]) > 500
                         or variable.get("type") not in ("enum", "secret")
-                        or variable.get("required") is not True
+                        or (variable.get("required") is not True
+                            and not (title == "05-Ввести credentials объекта"
+                                     and variable.get("type") == "secret"
+                                     and variable.get("required") is False))
                         or not isinstance(variable.get("values"), list)
                         or variable["name"] in names):
                     raise Blocked("Invalid catalog survey definition")
@@ -426,11 +436,19 @@ def read_public_catalog():
                 if variable["type"] == "secret":
                     # Only the fixed task 06 may request one hidden Vault password.
                     # Never accept a catalog-provided default or enum options.
-                    if (title != "06-Ввести master password Fleet Vault"
-                            or variable["name"] != "fleet_master_password"
-                            or options):
+                    if title == "05-Ввести credentials объекта":
+                        if (variable["name"] not in
+                                ("DH_TEST_KEYSTORE_PASSWORD", "DH_TEST_VARIABLE_SECRET")
+                                or variable.get("target") != "env"
+                                or variable["required"] is not False or options):
+                            raise Blocked("Invalid Task 05 secret-env survey")
+                    elif (title != "06-Ввести master password Fleet Vault"
+                          or variable["name"] != "fleet_master_password"
+                          or variable.get("target") not in (None, "")
+                          or options):
                         raise Blocked("Invalid catalog secret survey definition")
-                elif (not 2 <= len(options) <= 10
+                elif (variable.get("target") not in (None, "")
+                      or not 2 <= len(options) <= 10
                       or any(not isinstance(option, dict)
                              or set(option) != {"name", "value"}
                              or not isinstance(option["name"], str)
@@ -493,11 +511,38 @@ def equivalent_secret_survey(title, existing, wanted):
     return True
 
 
+def equivalent_task05_survey(title, existing, wanted):
+    """Tolerate only safe, empty API defaults on the exact Task 05 secret form."""
+    if (title != "05-Ввести credentials объекта"
+            or not isinstance(existing, list)
+            or not isinstance(wanted, list)
+            or len(existing) != len(wanted) or len(wanted) != 2):
+        return False
+    for actual, desired in zip(existing, wanted):
+        if not isinstance(actual, dict) or not isinstance(desired, dict):
+            return False
+        for field in ("name", "title", "description", "type", "target"):
+            if actual.get(field) != desired.get(field):
+                return False
+        if (actual.get("required") not in (None, False)
+                or desired.get("required") is not False
+                or actual.get("values") not in (None, [])
+                or any(actual.get(field) not in (None, "")
+                       for field in ("default", "default_value", "value"))
+                or set(actual) - {"name", "title", "description", "type",
+                                  "required", "values", "target",
+                                  "default", "default_value", "value"}):
+            return False
+    return True
+
+
 def allowed_survey_upgrade(title, existing, wanted):
     """Migrate only the known old media survey; do not overwrite custom surveys."""
     if existing in ([], wanted):
         return True
     if equivalent_secret_survey(title, existing, wanted):
+        return True
+    if equivalent_task05_survey(title, existing, wanted):
         return True
     if title != "80-Медиасервер · Развёртывание":
         return False
@@ -569,7 +614,8 @@ def sync_existing_template(api, path, desired, *, apply=False):
             raise Blocked("Unexpected existing survey variables: " + title)
         # The API may add harmless fields to a secret survey. Preserve it
         # byte-for-byte so task 06 keeps its ID, input behavior and history.
-        if not equivalent_secret_survey(title, observed_survey, desired["survey_vars"]):
+        if not (equivalent_secret_survey(title, observed_survey, desired["survey_vars"])
+                or equivalent_task05_survey(title, observed_survey, desired["survey_vars"])):
             allowed_change += ("survey_vars",)
     changed = [k for k in allowed_change
                if (current.get(k) or [] if k == "survey_vars" else current.get(k))
