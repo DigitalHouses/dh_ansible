@@ -25,7 +25,7 @@ button:disabled{opacity:.5;cursor:wait}.small{font-size:.88rem}#status{margin-to
 <script>
 "use strict";
 // Use the same VM address as the account portal: never bake a site IP into public HTML.
-document.getElementById("media-home").href="http://"+location.host.split(":")[0]+"/";
+document.getElementById("media-home").href="http://"+location.hostname+"/";
 const form=document.getElementById("change"),status=document.getElementById("status"),button=document.getElementById("submit");
 let csrf=null;
 function message(text,kind){status.textContent=text;status.className=kind||""}
