@@ -1,51 +1,38 @@
-# Semaphore 2.20 Beta — Fresh runner pilot (02.11.2026)
+# Semaphore 2.20 Beta — чистый Bootstrap, 02.11.2026
 
-## Decision and boundaries
+## Решение
 
-Owner approved destroying and recreating the existing **single** Ansible runner container, without migration, credential copying or reuse of the old Semaphore database. Target from the current runbook: **PVE `192.168.11.6`, CT1231, `ansible-serzhan-home`, site `serzhan-home`**. Other guests, disks and VMs are explicitly out of scope.
+Владелец разрешил переход на Semaphore `2.20.16-beta9` **без миграций**. Удаление CT1231 и стандартная установка — **две независимые операции**. Bootstrap `bootstrap/install.sh` сам **никогда не удаляет** существующие CT/VM.
 
-This document records preparation, **not a claim that PVE was modified**.
+Цель: PVE `192.168.11.6`, site `serzhan-home`, CT1231, ожидаемый IP `192.168.11.231`. Остальные гости и диски вне области работ.
 
-- Upstream release: `v2.20.16-beta9` (pre-release, 2026-10-28).
-- Official binary: `semaphore_2.20.16-beta9_linux_amd64.deb`.
-- SHA256: `7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a` (GitHub release API digest and independent temporary download).
-- Pinned application code: `e27aa2df524aaf1b614d71c4cf1b7a2935f016f8`.
-- Pinned installation launcher: `1f733203f35d79941eb32840e1dc3fac4146ca28`.
-- PR: https://github.com/DigitalHouses/dh_ansible/pull/101 (draft; not merged).
+## Проверено до запуска
 
-## Verified
+- Официальный upstream-пакет `semaphore_2.20.16-beta9_linux_amd64.deb`, SHA256 `7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a`: загружен временно и успешно проверен.
+- Извлечённый бинарный файл сообщает `2.20.16-beta9`; команды `migrate`, `users add`, `server` существуют.
+- На отдельном временном Semaphore Beta с тестовой SQLite и TLS пройден API E2E: вход, создание и частичное обновление 5 фиктивных credentials, metadata Key Store / Variable Groups, отсутствие plaintext секретов в SQLite.
+- Стандартный `bootstrap/install.sh`: четыре этапа, pinned SHA, `pct create`, отказ если CT/VM1231 уже существует, только задача №00, **без `pct stop`/`pct destroy`**.
+- Проверка исходников и тестовых контрактов — **не равнозначна живому E2E установки LXC на PVE**.
 
-1. The beta Debian package downloaded successfully and passed pinned SHA256 verification.
-2. The extracted **beta** binary reports `2.20.16-beta9`; its `migrate`, `users add`, and `server` entry points were checked without changing live software.
-3. New bootstrap contract tests: 3/3 PASS; Ansible guest installer Python syntax and both shell entry points PASS.
-4. Isolated beta Semaphore server, temporary TLS and SQLite: API login, five synthetic test credentials, selective update/KEEP, Key Store metadata, Variable Groups and encrypted SQLite payload: PASS. No production database writes. No real browser UI E2E.
-5. The replacement script verifies actual PVE vmbr0 IP, exact CTID, hostname, rootfs, unprivileged state, network address and absence of external mounts before any destructive action. It pre-downloads the Debian 13 template. **Same-site fresh rebuild is allowed**.
-6. The four-stage installer remains fresh-only and creates only Task 00. There are no data migration paths.
+## Инцидент и исправление
 
-## Not yet performed
+Временно добавленный `bootstrap/replace-site-runner.sh` ошибочно совмещал удаление и развёртывание. При запуске оператор получил `Unknown option: timeout` на `pct stop --timeout 60`, `RESULT_RC=255`. Строка `CT1231_IDENTITY=PASS` подтверждает, что в момент запуска скрипт видел CT1231; никакого подтверждения успешного удаления этот журнал не содержит.
 
-- Live PVE/CT1231 inventory and rootfs checks: NOT VERIFIED (connected Desktop Commander provides only the **guest** `ansible-serzhan-home`; `root@192.168.11.6` SSH was not authorized).
-- Destruction of CT1231: NOT EXECUTED.
-- New LXC creation, successful service start, HTTPS, Task 00 and browser E2E: NOT EXECUTED.
-- No production Semaphore secrets or current guest files have been removed or changed.
+**Исправлено:** replacement-скрипт удалён из ветки. Запускать его повторно нельзя. Документация и тесты должны ссылаться только на стандартный `bootstrap/install.sh`. Указание оператора «CT1231 удалён вручную» принято; live-проверка состояния PVE агентом на момент записи недоступна (Remote Desktop Commander гостя недоступен после удаления, SSH к PVE без авторизации).
 
-## One command on the approved PVE root console
+## Следующий шаг
 
-The URL and SHA are immutable. **The command is destructive for CT1231 after its guards pass**; it does not request a backup or migrate data.
+В root Shell фактического PVE сначала **только read-only**:
 
 ```bash
-curl -fsSL 'https://raw.githubusercontent.com/DigitalHouses/dh_ansible/1f733203f35d79941eb32840e1dc3fac4146ca28/bootstrap/replace-site-runner.sh' |
-  bash -s -- serzhan-home serzhan-home 1f733203f35d79941eb32840e1dc3fac4146ca28 192.168.11.6
+hostname
+ip -4 -o addr show vmbr0
+pct config 1231
+qm config 1231
 ```
 
-Expected new runner address `192.168.11.231/24` and Semaphore URL `https://192.168.11.231:3000/`. On failure, do not delete any additional containers blindly. After success, verify:
+Обе последние команды должны сообщить об отсутствии ресурса 1231. **Если CT1231 существует, остановиться, а не запускать новый скрипт для удаления.**
 
-```bash
-pct exec 1231 -- semaphore version
-pct exec 1231 -- systemctl is-active digitalhouses-semaphore.service
-pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password
-```
+После проверки — запустить стандартную команду из [README](../../README.md#единая-точка-входа--tiny-bootstrap), ввести `serzhan-home` и подтвердить `y`. При `BOOTSTRAP_FRESH_DONE=PASS` проверить Semaphore version, HTTPS и единственную №00. №00 запускать вручную, №05–07 ещё не приняты.
 
-The last command displays a newly generated password only on the operator's PVE console. It is **not** an exported or migrated password. The old Remote Desktop Commander connection will disappear on recreation, and a new connection needs a later explicit setup. Task 00 starts manually via Semaphore.
-
-**Acceptance remains PENDING** until live postconditions are independently observed.
+**Live acceptance: PENDING.** Мы не объявляем установку успешной до реальных postconditions.
