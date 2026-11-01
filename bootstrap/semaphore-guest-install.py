@@ -24,8 +24,8 @@ import urllib.error
 import ssl
 import time
 
-SEMAPHORE_VERSION = "2.19.16"
-SEMAPHORE_DEB_SHA256 = "56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8"
+SEMAPHORE_VERSION = "2.20.16-beta9"
+SEMAPHORE_DEB_SHA256 = "7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a"
 SEMAPHORE_URL = ("https://github.com/semaphoreui/semaphore/releases/download/v"
                  + SEMAPHORE_VERSION + "/semaphore_" + SEMAPHORE_VERSION
                  + "_linux_amd64.deb")
@@ -221,7 +221,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
     prepare_ansible_runtime_access()
     print("ANSIBLE_RUNTIME=PASS", flush=True)
 
-    release = Path("/root/dh-semaphore-2.19.16.deb")
+    release = Path(f"/root/dh-semaphore-{SEMAPHORE_VERSION}.deb")
     if release.exists() or release.is_symlink():
         raise Blocked("Stale Semaphore release file")
     # HTTPS verifies the upstream server; pinned SHA verifies exact release bytes.
