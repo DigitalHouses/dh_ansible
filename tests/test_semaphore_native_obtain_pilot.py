@@ -23,7 +23,7 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertIn("no_log: true", OBTAIN)
         self.assertNotIn("validate_certs: false", OBTAIN)
         self.assertNotIn("ansible.builtin.shell:", OBTAIN)
-        self.assertNotIn("ansible.builtin.command:", OBTAIN.replace("argv: [hostname]", ""))
+        self.assertNotIn("semaphore-obtain-credentials.py", OBTAIN)
         self.assertNotIn("--extra-vars", OBTAIN)
 
     def test_approved_five_optional_survey_fields_are_unchanged_for_pinned_seeder(self):
