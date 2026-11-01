@@ -1,5 +1,20 @@
 ---
 # Initial and recoverable Semaphore task, unprivileged and local-only.
+# Explicit localhost always exists, even when Semaphore selected an invalid
+# inventory. Abort in that case instead of reporting a false "skipped" success.
+- name: Reject missing site inventory before any catalog operation
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Require one parsed site runner
+      ansible.builtin.assert:
+        that:
+          - groups.get('site_runner', []) | length == 1
+          - groups.get('site_runner', []) == ['runner']
+        fail_msg: SEMAPHORE_SITE_INVENTORY_NOT_LOADED
+
 - name: Synchronize DigitalHouses Semaphore task catalog
   hosts: site_runner
   gather_facts: false

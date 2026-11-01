@@ -29,6 +29,14 @@
 
 Ticket, пароль, API token и request body не выводятся в Task output. №06 ничего не развёртывает и не меняет на PVE.
 
+## Исправление inventory в Semaphore 2.20 (№00 завершилась с skipped: no hosts matched)
+
+**Причина подтверждена:** Semaphore 2.20.16-beta9 интерпретирует `type=file` inventory без `repository_id` относительно Git checkout, даже если в поле указан абсолютный путь. Поэтому Ansible ищет `.../repository_.../var/lib/ansible/site-data/<site>/hosts.yml`, не находит группу `site_runner` и **ложно завершается успешным skipping**. Это не запуск синхронизации.
+
+Исправление [PR #103](https://github.com/DigitalHouses/dh_ansible/pull/103): стандартный Seeder создаёт *локальный Semaphore repository* `Site inventory (local)`, привязанный к root-owned `/var/lib/ansible/site-data/<site>`, и в inventory `Runner (local)` хранит только `hosts.yml` + `repository_id`. При обновлении сохраняется прежний inventory ID, привязки/история задач и существующая Variable Group с секретами. Не создаются публичные копии приватных inventory. №00 также имеет fail-closed preflight на случай отсутствия inventory.
+
+Для существующего CT1231 уже установленный root-owned Seeder закреплён старой Git-ревизией. После merge выполните [версионированный upgrade](../../bootstrap/upgrade-semaphore-site-inventory.sh) из checkout **точного Git SHA** — внутри CT1231, PVE root shell использует `pct exec`. Он проверяет site и права, обновляет inventory через native Semaphore API, устанавливает обновлённый root-owned Seeder, проверяет идемпотентность, не требует ввода паролей и не меняет LXC/VM/disks. Успех: `SEMAPHORE_SITE_INVENTORY_UPGRADE=PASS`. Затем снова запустите №00; в журнале должен быть `result: PASS` с созданными/обновлёнными задачами, а не `skipping`.
+
 ## Предварительная доверительная привязка к PVE
 
 Это **не дополнительное поле/секрет от владельца**. На чистом runner standard Bootstrap оставляет наблюдение `pve-runtime.yml` с `source: bootstrap_vmbr0`; этого недостаточно для передачи root-пароля по TLS.
