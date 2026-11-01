@@ -52,18 +52,15 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
-## Первое получение credentials — задачи №05 и №06
+## Первое получение credentials — задачи №05 и №06 (Semaphore Beta)
 
-После `00-Обновить список задач` в UI появляются две дополнительные административные операции:
+**После свежего Bootstrap** в Semaphore есть только №00. Она синхронизирует каталог **из main**; запускать её для новой схемы следует **после принятия соответствующего PR**. Не проводить ручную замену root-owned seeder и не возвращаться к старому GitHub Device Flow/Fleet master password.
 
-- **`05-Получить credentials GitHub`** — GitHub CLI показывает в журнале одноразовый код. Оператор подтверждает его на `https://github.com/login/device`; задача ждёт разрешения, проверяет доступ к `DigitalHouses/dh_ansible_fleet_detail` и клонирует private Fleet на runner. Пока GitHub-токен работает, повторный ввод кода не требуется.
-- **`06-Ввести master password Fleet Vault`** — одно скрытое поле Semaphore типа **secret**. Пароль проверяется через `ansible-vault view`, сохраняется локально `0600` и остаётся доступным после перезагрузки. Не передавать его в чат или терминальный журнал.
+- **№05 · Ввести credentials объекта:** штатная Survey-форма с пятью необязательными полями. Для первого подключения чистого Proxmox нужен **только пароль PVE root**. Пустые поля оставляют сохранённые credentials без изменений. Ansible сохраняет новые значения через native Semaphore API в Variable Group Secrets, без собственного Python-клиента. Пароль не выводится в задачах.
+- **№06 · Проверить credentials объекта:** не требует повторного пароля, берёт PVE secret из Semaphore, проверяет сертификат и идентичность PVE, аутентифицируется `root@pam` через HTTPS ticket и читает список PVE nodes. Без удостоверенного TLS доверия выводит `PVE_TRUST_NOT_COMMISSIONED`, **не передавая пароль**. GitHub/MQTT/Cloudflare пока `NOT_APPLICABLE` до своих этапов.
 
-**Хранение — минимально:** `/var/lib/semaphore/.dh-credentials/` (пользователь `semaphore`, каталог `0700`; GitHub CLI config, private Fleet checkout и `fleet-vault-password` с `0600`). Master password хранится локально в открытом виде **по решению оператора**, но не в публичном Git. Никаких новых служб или центрального Credentials Provider.
+До №06 выполняется принятый общий [PVE native commissioning](docs/runbooks/pve-native-commissioning.md) с PVE root Shell (публичный CA, SSH/TLS trust, без дополнительных паролей). Подробный [операторский runbook №05/06](docs/runbooks/credential-setup.md). **Live E2E новой схемы и №07 пока не приняты.**
 
-**Для Ansible:** role `fleet_credentials` читает Vault через сохранённый пароль и предоставляет `fleet_site_credentials` только для текущего `site.id`. Другие задачи должны явно включать эту роль, когда им нужны secrets; старые protected workers/PVE Access не появляются автоматически от успешной №05/06.
-
-**Новая установка:** CT1231, если существует, удаляется вручную **отдельно** после проверки и разрешения владельца. Только после его отсутствия запускается та же стандартная fresh-команда. Новая закреплённая ревизия сразу содержит поддержку поля `secret` и задачи №05/06 — без ручного обновления файлов, `--resume` или правки старого LXC. Живой E2E этой ревизии ещё не проведён; №05/06 будут проверены отдельно после №00.
 
 ## PVE Access · отдельная приёмка, не часть Bootstrap
 
