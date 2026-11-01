@@ -72,10 +72,13 @@ def send_verified(ip, hostname, port, ctx, fingerprint, method, route,
     # Each request performs full TLS verification AND pin check before sending
     # any credential or authentication cookie (including on reconnection).
     conn = http.client.HTTPSConnection(hostname, port, context=ctx, timeout=12)
-    conn._create_connection = lambda address, timeout=None, source_address=None: (
-        socket.create_connection((ip, port), timeout=12))
     try:
-        conn.connect()
+        raw = socket.create_connection((ip, port), timeout=12)
+        try:
+            conn.sock = ctx.wrap_socket(raw, server_hostname=hostname)
+        except BaseException:
+            raw.close()
+            raise
         cert = conn.sock.getpeercert(binary_form=True)
         digest = hashlib.sha256(cert).hexdigest().upper()
         observed = ":".join(digest[i:i + 2] for i in range(0, 64, 2))
@@ -138,9 +141,11 @@ def main():
         state = "PVE_TLS_IDENTITY_MISMATCH"
     except ssl.SSLCertVerificationError:
         state = "PVE_TLS_CERT_UNTRUSTED"
+    except ssl.SSLError:
+        state = "PVE_TLS_CERT_UNTRUSTED"
     except (socket.timeout, TimeoutError, ConnectionError, OSError):
         state = "UNREACHABLE"
-    except (ValueError, KeyError, TypeError, ssl.SSLError, http.client.HTTPException):
+    except (ValueError, KeyError, TypeError, http.client.HTTPException):
         state = "PVE_TLS_OR_API_UNAVAILABLE"
     if state not in STATES:
         state = "PVE_TLS_OR_API_UNAVAILABLE"
