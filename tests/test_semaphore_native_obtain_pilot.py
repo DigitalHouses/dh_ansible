@@ -1,6 +1,6 @@
-"""Offline regression tests for the Semaphore 2.19.16 Task 05 pilot.
+"""Unit regression for Task 05 native Semaphore Variable Group credentials.
 
-No network or real credentials. The fake API stores only dummy test values.
+Fake stores dummy secret values internally but never returns them from API reads.
 """
 import json
 from pathlib import Path
@@ -10,14 +10,14 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 app = runpy.run_path(str(ROOT / "scripts/semaphore-obtain-credentials.py"),
                      run_name="test_import")
-catalog_api = runpy.run_path(str(ROOT / "bootstrap/semaphore-project.py"),
-                             run_name="test_import")
+seeder = runpy.run_path(str(ROOT / "bootstrap/semaphore-project.py"),
+                        run_name="test_import")
 
 
 class FakeSemaphore:
     def __init__(self):
-        self.keys = {}
         self.groups = {}
+        self.values = {}
         self.calls = []
         self.next_id = 20
 
@@ -29,121 +29,130 @@ class FakeSemaphore:
         self.calls.append((method, url, body))
         if (method, url) == ("GET", "/projects"):
             return [{"name": "serzhan-lab", "id": 7}]
-        pre = "/project/7"
-        if (method, url) == ("GET", pre + "/keys?sort=name&order=asc"):
-            return list(self.keys.values())
-        if url.startswith(pre + "/keys/") and method == "GET":
-            return self.keys[int(url.rsplit("/", 1)[-1])]
-        if (method, url) == ("POST", pre + "/keys"):
-            row = {"name": body["name"], "type": body["type"],
-                   "project_id": body["project_id"], "id": self._id()}
-            self.keys[row["id"]] = row
-            return row
-        if url.startswith(pre + "/keys/") and method == "PUT":
-            key_id = int(url.rsplit("/", 1)[-1])
-            self.keys[key_id]["type"] = body["type"]
-            self.keys[key_id]["name"] = body["name"]
-            return None
-        if (method, url) == ("GET", pre + "/environment?sort=name&order=asc"):
+        pre = "/project/7/environment"
+        if (method, url) == ("GET", pre + "?sort=name&order=asc"):
             return list(self.groups.values())
-        if url.startswith(pre + "/environment/") and method == "GET":
+        if url.startswith(pre + "/") and method == "GET":
             return self.groups[int(url.rsplit("/", 1)[-1])]
-        if (method, url) == ("POST", pre + "/environment"):
-            group_id = self._id()
-            item = body["secrets"][0]
-            row = {"id": group_id, "name": body["name"],
-                   "project_id": body["project_id"],
-                   "json": body["json"], "env": body["env"],
-                   "secrets": [{"name": item["name"], "type": item["type"],
-                                "id": self._id()}]}
-            self.groups[group_id] = row
-            return row
-        if url.startswith(pre + "/environment/") and method == "PUT":
-            group_id = int(url.rsplit("/", 1)[-1])
-            row = self.groups[group_id]
-            row["json"] = body["json"]
-            row["env"] = body["env"]
-            for item in body["secrets"]:
-                existing = [x for x in row["secrets"] if x["name"] == item["name"]]
-                if not existing:
-                    row["secrets"].append({"id": self._id(), "name": item["name"],
-                                           "type": item["type"]})
+        if (method, url) == ("POST", pre):
+            gid = self._id()
+            group = {"id": gid, "name": body["name"],
+                     "project_id": 7, "json": body["json"], "env": body["env"],
+                     "secrets": []}
+            self.groups[gid] = group
+            self._secrets(gid, body["secrets"])
+            return group
+        if url.startswith(pre + "/") and method == "PUT":
+            gid = int(url.rsplit("/", 1)[-1])
+            group = self.groups[gid]
+            group["env"] = body["env"]
+            self._secrets(gid, body["secrets"])
             return None
-        raise AssertionError("Unexpected API request " + method + " " + url)
+        raise AssertionError("Unexpected API call " + method + " " + url)
+
+    def _secrets(self, gid, records):
+        for entry in records:
+            name = entry["name"]
+            group = self.groups[gid]
+            old = next((x for x in group["secrets"] if x["name"] == name), None)
+            if old is None:
+                assert entry["operation"] == "create"
+                group["secrets"].append({"name": name, "type": "env",
+                                         "id": self._id()})
+            else:
+                assert entry["operation"] == "update"
+                assert entry["id"] == old["id"]
+            self.values[name] = entry["secret"]
 
 
-class NativeCredentialPilotTest(unittest.TestCase):
+class NativeCredentialTest(unittest.TestCase):
     def setUp(self):
         self.api = FakeSemaphore()
 
-    def test_first_enrollment_uses_only_native_api(self):
-        result = app["enroll"](self.api, "serzhan-lab",
-                               "DUMMY-K1", "DUMMY-V1")
-        self.assertEqual(result, {"key_store": "CREATED", "variable_group": "CREATED"})
-        self.assertEqual(len(self.api.keys), 1)
+    def test_first_enrollment_and_hidden_values(self):
+        result = app["enroll"](self.api, "serzhan-lab", {
+            "github_provision_token": "DUMMY-GITHUB",
+            "mqtt_username": "testuser",
+            "mqtt_password": "DUMMY-MQTT",
+        })
+        self.assertEqual(result["github_provision_token"], "CREATED")
+        self.assertEqual(result["mqtt_username"], "CREATED")
+        self.assertEqual(result["mqtt_password"], "CREATED")
         self.assertEqual(len(self.api.groups), 1)
         group = next(iter(self.api.groups.values()))
-        self.assertEqual(group["secrets"][0]["type"], "env")
-        self.assertNotIn("DUMMY-K1", json.dumps(self.api.keys))
-        self.assertNotIn("DUMMY-V1", json.dumps(self.api.groups))
+        self.assertEqual(json.loads(group["env"])["DH_MQTT_USERNAME"], "testuser")
+        self.assertEqual(len(group["secrets"]), 2)
+        self.assertNotIn("DUMMY-MQTT", json.dumps(group))
+        self.assertNotIn("DUMMY-GITHUB", json.dumps(group))
 
-    def test_empty_input_never_touches_api(self):
-        self.assertEqual(app["enroll"](self.api, "serzhan-lab", "", ""),
-                         {"key_store": "KEEP", "variable_group": "KEEP"})
+    def test_zero_inputs_never_call_api(self):
+        result = app["enroll"](self.api, "serzhan-lab", {})
+        self.assertTrue(all(x == "KEEP" for x in result.values()))
         self.assertEqual(self.api.calls, [])
 
-    def test_change_only_one_never_updates_the_other(self):
-        app["enroll"](self.api, "serzhan-lab", "DUMMY-K1", "DUMMY-V1")
-        before = len(self.api.calls)
-        result = app["enroll"](self.api, "serzhan-lab", "", "DUMMY-V2")
-        self.assertEqual(result, {"key_store": "KEEP", "variable_group": "UPDATED"})
-        calls = self.api.calls[before:]
-        self.assertFalse(any("/keys" in url for _, url, _ in calls))
-        self.assertTrue(any(op == "PUT" and "/environment/" in url
-                            and body["secrets"][0]["operation"] == "update"
-                            for op, url, body in calls if body))
-        self.assertEqual(len(self.api.keys), 1)
+    def test_mqtt_password_only_preserves_github_and_cf(self):
+        app["enroll"](self.api, "serzhan-lab", {
+            "mqtt_username": "testuser",
+            "mqtt_password": "DUMMY-MQTT-1",
+            "cloudflare_api_token": "DUMMY-CF",
+            "github_provision_token": "DUMMY-GH",
+        })
+        before_values = dict(self.api.values)
+        outcome = app["enroll"](self.api, "serzhan-lab", {
+            "mqtt_password": "DUMMY-MQTT-2"
+        })
+        self.assertEqual(outcome["mqtt_password"], "UPDATED")
+        self.assertEqual(outcome["cloudflare_api_token"], "KEEP")
+        self.assertEqual(outcome["github_provision_token"], "KEEP")
+        self.assertEqual(self.api.values["DH_CLOUDFLARE_API_TOKEN"],
+                         before_values["DH_CLOUDFLARE_API_TOKEN"])
+        self.assertEqual(self.api.values["DH_GITHUB_PROVISION_TOKEN"],
+                         before_values["DH_GITHUB_PROVISION_TOKEN"])
+        self.assertEqual(self.api.values["DH_MQTT_PASSWORD"], "DUMMY-MQTT-2")
+        group = next(iter(self.api.groups.values()))
+        self.assertEqual(json.loads(group["env"])["DH_MQTT_USERNAME"], "testuser")
+        self.assertEqual(len(group["secrets"]), 3)
 
-    def test_keystore_update_is_explicit_override(self):
-        app["enroll"](self.api, "serzhan-lab", "DUMMY-K1", "")
-        before = len(self.api.calls)
-        result = app["enroll"](self.api, "serzhan-lab", "DUMMY-K2", "")
-        self.assertEqual(result["key_store"], "UPDATED")
-        calls = self.api.calls[before:]
-        edits = [body for method, url, body in calls
-                 if method == "PUT" and "/keys/" in url]
-        self.assertEqual(len(edits), 1)
-        self.assertIs(edits[0]["override_secret"], True)
-        self.assertEqual(len(self.api.groups), 0)
+    def test_change_nonsecret_username_preserves_secret_values(self):
+        app["enroll"](self.api, "serzhan-lab", {
+            "mqtt_password": "DUMMY-MQTT",
+            "mqtt_username": "old",
+        })
+        result = app["enroll"](self.api, "serzhan-lab", {
+            "mqtt_username": "new"
+        })
+        self.assertEqual(result["mqtt_username"], "UPDATED")
+        self.assertEqual(self.api.values["DH_MQTT_PASSWORD"], "DUMMY-MQTT")
+        group = next(iter(self.api.groups.values()))
+        self.assertEqual(json.loads(group["env"])["DH_MQTT_USERNAME"], "new")
 
-    def test_site_mismatch_fails_closed(self):
+    def test_refuse_wrong_site_and_undeclared_field(self):
         with self.assertRaises(app["Blocked"]):
-            app["enroll"](self.api, "another-home", "DUMMY", "")
-        self.assertEqual(len(self.api.keys), 0)
+            app["enroll"](self.api, "jodar-home", {"mqtt_password": "DUMMY"})
+        with self.assertRaises(app["Blocked"]):
+            app["enroll"](self.api, "serzhan-lab", {"unknown_field": "DUMMY"})
+        self.assertFalse(self.api.groups)
 
-    def test_pilot_catalog_uses_optional_secret_env_survey(self):
-        catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
-        task = [t for t in catalog["tasks"]
-                if t["title"] == "05-Ввести credentials объекта"][0]
-        self.assertEqual(task["playbook"], "playbooks/obtain-site-credentials.yml")
-        self.assertEqual([x["name"] for x in task["survey_vars"]],
-                         ["DH_TEST_KEYSTORE_PASSWORD", "DH_TEST_VARIABLE_SECRET"])
-        self.assertTrue(all(x["type"] == "secret" and x["target"] == "env"
-                            and x["required"] is False and not x["values"]
-                            for x in task["survey_vars"]))
-
-    def test_catalog_migration_accepts_safe_pilot_surveys(self):
-        cat = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
-        survey = next(t["survey_vars"] for t in cat["tasks"]
+    def test_survey_matches_six_registry_fields(self):
+        catalogue = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
+        survey = next(t["survey_vars"] for t in catalogue["tasks"]
                       if t["title"] == "05-Ввести credentials объекта")
-        self.assertTrue(catalog_api["allowed_survey_upgrade"](
+        approved = app["registry_fields"]()
+        self.assertEqual(len(survey), 6)
+        self.assertEqual([x["name"] for x in survey],
+                         [x["survey_env"] for x in approved])
+        self.assertTrue(all(x["target"] == "env" and not x["required"]
+                            and x["values"] == [] for x in survey))
+        self.assertEqual([x["type"] for x in survey],
+                         [x["input"] for x in approved])
+        self.assertTrue(seeder["allowed_survey_upgrade"](
             "05-Ввести credentials объекта", [], survey))
-        self.assertTrue(catalog_api["equivalent_task05_survey"](
+        self.assertTrue(seeder["equivalent_task05_survey"](
             "05-Ввести credentials объекта", survey, survey))
-        tampered = json.loads(json.dumps(survey))
-        tampered[0]["target"] = ""
-        self.assertFalse(catalog_api["equivalent_task05_survey"](
-            "05-Ввести credentials объекта", tampered, survey))
+        bad = json.loads(json.dumps(survey))
+        bad[0]["target"] = ""
+        self.assertFalse(seeder["equivalent_task05_survey"](
+            "05-Ввести credentials объекта", bad, survey))
 
 
 if __name__ == "__main__":
