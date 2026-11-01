@@ -10,6 +10,36 @@ concurrency:
 permissions:
   contents: read
 jobs:
+  native_credentials:
+    # Independent release evidence for the native 05/06 implementation.
+    # Full policy suite is still required and retains all legacy failures.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate source tree boundary
+        run: python3 bin/public-boundary-check.py
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install pinned runner dependencies
+        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
+      - name: Validate native Semaphore 05/06 and bootstrap compatibility
+        run: |
+          python -m pytest -q \
+            tests/test_semaphore_native_obtain_pilot.py \
+            tests/test_semaphore_native_catalog_migration.py \
+            tests/test_fleet_credentials_tasks.py \
+            tests/test_secret_survey_normalization.py \
+            tests/test_site_credentials_inventory.py \
+            tests/test_dh_task_runner.py \
+            tests/test_semaphore_beta_fresh_bootstrap.py \
+            tests/test_tiny_bootstrap_contract.py \
+            tests/test_semaphore_guest_install.py
+      - name: Validate Task 05/06 Ansible syntax
+        run: |
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/check-site-credentials.yml
+
   policy:
     runs-on: ubuntu-latest
     steps:
