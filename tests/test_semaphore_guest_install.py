@@ -79,10 +79,10 @@ def test_guest_default_locale_is_persistent_and_idempotent(monkeypatch, tmp_path
     monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
     target = tmp_path / "etc/default/locale"
     target.parent.mkdir(parents=True)
-    target.write_text("LANG=en_US.UTF-8\\n")
+    target.write_text("LANG=en_US.UTF-8\n")
     m.persist_guest_locale()
     m.persist_guest_locale()
-    assert target.read_text() == "LANG=C.UTF-8\\n"
+    assert target.read_text() == "LANG=C.UTF-8\n"
     assert target.stat().st_mode & 0o777 == 0o644
 
 
