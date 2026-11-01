@@ -32,11 +32,18 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
         self.assertEqual(
             {x["id"] for x in manual},
             {"github_provision_token", "mqtt_username", "mqtt_password",
-             "pve_api_audit_token", "pve_api_write_token", "cloudflare_api_token"})
+             "pve_root_password", "cloudflare_api_token"})
         self.assertTrue(all(x["store"] in {
-            "variable_group_secret", "variable_group_nonsecret"} for x in manual))
+            "variable_group_secret", "variable_group_nonsecret",
+            "key_store_login_password"} for x in manual))
         self.assertTrue(all(x["input"] in {"text", "secret"} for x in manual))
         self.assertTrue(all(x["activate"] and x["consumer"] for x in manual))
+        root = next(x for x in manual if x["id"] == "pve_root_password")
+        self.assertEqual(root["fixed_login"], "root")
+        self.assertEqual(root["api_identity"], "root@pam")
+        self.assertEqual(root["store"], "key_store_login_password")
+        self.assertNotIn("pve_api_audit_token", {x["id"] for x in manual})
+        self.assertNotIn("pve_api_write_token", {x["id"] for x in manual})
 
     def test_agent_credential_reuse(self):
         manual = {x["id"]: x for x in self.registry["manual"]}
