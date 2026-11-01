@@ -120,3 +120,27 @@ References:
 **Release blocker for Task 06:** The current owner-approved storage decision (PVE root password solely as a \`login_password\` Key Store entry) and the requirement to authenticate \`root@pam\` by HTTPS API ticket **cannot be connected through a supported generic Key Store-to-playbook secret input in OSS 2.19.16**. Do not claim this is implemented or bypass by reading/decrypting the Semaphore database or by creating a second untracked store. An approved architecture change could instead place the **one** user-entered PVE root password in **native Variable Groups → Secrets (type \`env\`)**, allowing Ansible to authenticate to Proxmox HTTPS, while Key Store would retain subsequently generated SSH keys; this would amend the specific field storage choice and requires owner approval before applying. A clean PVE may have a self-signed TLS certificate: the PVE HTTPS trust anchor/identity must also be commissioned and verified, not bypassed with \`validate_certs: false\`.
 
 **Status:** Draft PR only. No merge, production Semaphore migration, target host changes or real credential modifications. This evidence does **not** constitute acceptance of Task 05 UI or Task 06.
+
+
+### Task 05 secret-to-helper transport — finding and correction, 2026-11-02
+
+**A real command-line leak was reproduced before the correction.** On the authorized runner, an isolated dummy Ansible localhost task with a canary value in task-level \`environment:\` exposed that canary in a child \`sh\` process's \`/proc/<pid>/cmdline\`, **despite \`no_log: true\`**. This was synthetic test data only. The candidate Task 05 used exactly that unsafe second-hop transport.
+
+Fixed in this Draft PR:
+- \`playbooks/obtain-site-credentials.yml\`: read official Semaphore \`target=env\` values with controller-side Ansible \`lookup('env')\`, but pass the bounded JSON object through **\`ansible.builtin.command.stdin\`**, not through task-level \`environment:\` or \`--extra-vars\`. Keep \`no_log: true\`.
+- \`scripts/semaphore-obtain-credentials.py\`: accept a bounded, strictly validated JSON payload over stdin, with empty values = KEEP. No subprocess environment fallback.
+- \`tests/test_semaphore_native_obtain_pilot.py\`: test partial/invalid stdin and static no-environment contract.
+
+Actual dummy Ansible subprocess observations:
+- Old task-\`environment:\` approach: \`DUMMY_ANSIBLE_ENV_IN_CHILD_ARGV=EXPOSED\`.
+- New \`command.stdin\` approach: \`DUMMY_STDIN_IN_CHILD_ARGV=NOT_SEEN\`, \`DUMMY_STDIN_IN_CHILD_ENV=NOT_SEEN\`.
+- With \`become: true\` and a separate target user: \`DUMMY_STDIN_BECOME_ARGV=NOT_SEEN\`, and an actual JSON stdin delivery check returned \`ANSSIBLE_STDIN_PASSED=True\`.
+- This is a bounded observation over an executing dummy task, not a formal system-wide proof. The **Semaphore-to-Ansible** Survey \`target=env\` transport necessarily puts the secret in the trusted Ansible controller process's environment by design; do not claim it never exists there. The fix prevents an **additional** leak into local shell command-line arguments.
+
+On candidate commit \`b34adc010586e051cdd3496812be34c1330ea9e3\`, post-fix checks:
+- **20/20** focused standard-library unit tests PASS (11 enrollment/transport + 5 migration + 4 inventory).
+- Ansible \`--syntax-check\` for \`playbooks/obtain-site-credentials.yml\`: PASS.
+- Actual isolated Semaphore 2.19.16 REST persistence E2E: PASS, five fields and partial updates, teardown complete.
+- Real Semaphore **browser Task UI** submission still NOT TESTED. No production credentials, templates or infrastructure changed.
+
+The Task 06 Key Store → arbitrary HTTPS ticket credential binding blocker described above is **independent of this transport fix** and remains unresolved.
