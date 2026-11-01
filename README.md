@@ -21,7 +21,7 @@
 
 **Новые объекты и исправление паролей:** №05 позволяет повторно ввести только ошибочный credential, оставляя остальные сохранённые значения неизменными. После №05 (сохранение всех credentials) и успешной №06 (проверка) отдельная №07 создаёт приватный GitHub repo через штатный API; её повторное выполнение безопасно проверяет/adopt существующий репозиторий. Репозиторий объекта хранит конфигурацию и inventory, а секреты — только Semaphore. Это целевой контракт [ADR-0021](docs/decisions/0021-semaphore-native-credentials.md), пока **не внедрён**.
 
-**LIVE ACCEPTED · 02.11.2026 — `serzhan-home`:** стандартный четырёхэтапный Bootstrap, №00 (12 задач создано, 1 сохранена), №05 (введён только root-пароль PVE), native host-root commissioning и №06 (`root@pam=READY`, `overall=READY`, `failed=0`) приняты по реальным журналам Semaphore. PVE `192.168.11.6`, runner CT1231 `192.168.11.231`. Для PVE 8 legacy CA без Key Usage в №06 принята scoped TLS compatibility [PR #107](https://github.com/DigitalHouses/dh_ansible/pull/107): CA/hostname/cert pin обязательны. Отчёт: [Semaphore Beta live acceptance](docs/acceptance/semaphore-beta-fresh-2026-11-02.md). **Это не приёмка №07, задач 10–90 и полного legacy CI** ([issue #102](https://github.com/DigitalHouses/dh_ansible/issues/102)). Существующий CT1231 не переустанавливать.
+**LIVE ACCEPTED · 02.11.2026 — `serzhan-home`:** стандартный четырёхэтапный Bootstrap, №00 (12 задач создано, 1 сохранена), №05 (введён только root-пароль PVE), native host-root commissioning и №06 (`root@pam=READY`, `overall=READY`, `failed=0`) приняты по реальным журналам Semaphore. PVE `<actual-PVE-IP>`, runner CT1231 `<runner-IP>`. Для PVE 8 legacy CA без Key Usage в №06 принята scoped TLS compatibility [PR #107](https://github.com/DigitalHouses/dh_ansible/pull/107): CA/hostname/cert pin обязательны. Отчёт: [Semaphore Beta live acceptance](docs/acceptance/semaphore-beta-fresh-2026-11-02.md). **Это не приёмка №07, задач 10–90 и полного legacy CI** ([issue #102](https://github.com/DigitalHouses/dh_ansible/issues/102)). Существующий CT1231 не переустанавливать.
 
 **Историческая публикация №05/06 (до live acceptance):** [ADR-0021 — Semaphore-native credentials](docs/decisions/0021-semaphore-native-credentials.md), [PR #101](https://github.com/DigitalHouses/dh_ansible/pull/101) объединён с `main` (`b883ff85`). №05/06 используют native Semaphore Variable Group Secrets и Ansible URI. Профильный CI — 75/75 PASS, syntax PASS, изолированный API E2E PASS; **живой UI/PVE E2E ещё не завершён**, №07 и глобальный preflight не реализованы. Общий CI остаётся красным (59 исторических ошибок других подсистем), проверки не отключали.
 
@@ -39,14 +39,14 @@
 
 ## Единая точка входа · Tiny Bootstrap
 
-**Версия на 02.11.2026:** установщик зафиксирован на commit `95ace5c`: исправлены путь Semaphore Inventory для задачи №00 и runtime-проверка введённых значений №05 (Jinja). Это версия для **новых чистых объектов**, не команда обновления работающего CT1231. На CT1231 №00 уже выполнилась успешно (12 создано, 1 без изменений), а №05 после исправления требует повторного запуска с паролем через Semaphore Survey. Повторная установка CT1231 запрещена без нового явного разрешения.
+**Версия на 02.11.2026:** установщик зафиксирован на commit `50d5b3b`: включает исправления №00 (путь локального Inventory), №05 (Jinja) и №06 (совместимость TLS с CA Proxmox 8). Это версия для **новых чистых объектов**, не команда обновления работающего CT1231. На CT1231 №00 уже выполнилась успешно (12 создано, 1 без изменений), а №05 и №06 прошли живую проверку на текущем CT1231. Повторная установка CT1231 запрещена без нового явного разрешения.
 
 
 
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/e7b6fdf115a8bb2fe5bab94ee7cf01370285df9a/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/88e8e6893ac535f33df49debc2e7518065d0727c/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
