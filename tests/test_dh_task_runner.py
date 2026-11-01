@@ -119,7 +119,7 @@ def test_live_catalog_all_tasks_have_safe_unique_playbooks():
         assert (ROOT / selected["playbook"]).is_file()
         survey = selected.get("survey_vars", [])
         for variable in survey:
-            assert variable["type"] in {"enum", "secret", "string"}
+            assert variable["type"] in {"enum", "secret", "text"}
         if any(variable["type"] != "enum" for variable in survey):
             # This legacy CLI intentionally cannot transmit native Semaphore
             # secret/text Survey data: only the Semaphore UI/API can do so.
