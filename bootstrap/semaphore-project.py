@@ -439,9 +439,18 @@ def read_public_catalog():
                     if title == "05-Ввести credentials объекта":
                         # Current registry is authoritative for field names,
                         # input types and target. Other template surveys stay strict.
-                        approved = json.loads((Path(__file__).resolve().parents[1]
-                            / "catalog/site-credentials.json").read_text())["manual"]
-                        allowed = {x["survey_env"]: x["input"] for x in approved}
+                        # The installed seeder is root-owned under /opt,
+                        # not in the checked-out repository. Keep a tight
+                        # contract whitelist; its equality with the versioned
+                        # site-credentials registry is checked by tests.
+                        allowed = {
+                            "DH_INPUT_GITHUB_PROVISION_TOKEN": "secret",
+                            "DH_INPUT_MQTT_USERNAME": "text",
+                            "DH_INPUT_MQTT_PASSWORD": "secret",
+                            "DH_INPUT_PVE_API_AUDIT_TOKEN": "secret",
+                            "DH_INPUT_PVE_API_WRITE_TOKEN": "secret",
+                            "DH_INPUT_CLOUDFLARE_API_TOKEN": "secret",
+                        }
                         if (variable["name"] not in allowed
                                 or variable["type"] != allowed[variable["name"]]
                                 or variable.get("target") != "env"
