@@ -1,5 +1,16 @@
 # Site credentials: одно подключение на объект (Ansible Core + Semaphore OSS)
 
+> **SUPERSEDED AS TARGET ARCHITECTURE (2026-11-01):**
+> Целевое решение — [ADR-0021](../decisions/0021-semaphore-native-credentials.md):
+> одна №05 Obtain Credentials сохраняет весь комплект дома в **Key Store /
+> Variable Groups Secrets Semaphore**, №06 выполняет полный Check,
+> а все остальные задачи начинают со свежего глобального readiness gate.
+> Описанная ниже схема отдельного `site_vault_v1` и внешнего
+> Vault-пароля — **промежуточная реализация**, не применять её
+> как обязательное условие новых развёртываний.
+> Код №05/06 ещё нуждается в миграции и E2E.
+
+
 **Статус:** нормативная схема для новых объектов; переход старых объектов по отдельной
 проверенной миграции. Официальные механизмы: Ansible Vault / `--vault-id`,
 SSH public keys / `become` и штатный Semaphore Key Store. Без собственного
