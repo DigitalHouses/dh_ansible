@@ -447,8 +447,7 @@ def read_public_catalog():
                             "DH_INPUT_GITHUB_PROVISION_TOKEN": "secret",
                             "DH_INPUT_MQTT_USERNAME": "text",
                             "DH_INPUT_MQTT_PASSWORD": "secret",
-                            "DH_INPUT_PVE_API_AUDIT_TOKEN": "secret",
-                            "DH_INPUT_PVE_API_WRITE_TOKEN": "secret",
+                            "DH_INPUT_PVE_ROOT_PASSWORD": "secret",
                             "DH_INPUT_CLOUDFLARE_API_TOKEN": "secret",
                         }
                         if (variable["name"] not in allowed
@@ -531,7 +530,7 @@ def equivalent_task05_survey(title, existing, wanted):
     if (title != "05-Ввести credentials объекта"
             or not isinstance(existing, list)
             or not isinstance(wanted, list)
-            or len(existing) != len(wanted) or len(wanted) != 6):
+            or len(existing) != len(wanted) or len(wanted) != 5):
         return False
     for actual, desired in zip(existing, wanted):
         if not isinstance(actual, dict) or not isinstance(desired, dict):
