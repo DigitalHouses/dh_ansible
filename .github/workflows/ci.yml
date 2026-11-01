@@ -34,7 +34,8 @@ jobs:
             tests/test_dh_task_runner.py \
             tests/test_semaphore_beta_fresh_bootstrap.py \
             tests/test_tiny_bootstrap_contract.py \
-            tests/test_semaphore_guest_install.py
+            tests/test_semaphore_guest_install.py \
+            tests/test_semaphore_local_site_inventory.py
       - name: Validate Task 05/06 Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
