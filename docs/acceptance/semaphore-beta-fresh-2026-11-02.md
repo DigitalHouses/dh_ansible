@@ -121,8 +121,8 @@ pct exec 1231 -- bash -c '
 pct exec 1231 -- runuser -u semaphore -- bash -c '
 set -euo pipefail
 d=$(mktemp -d)
-trap "rm -rf \\"$d\\"" EXIT
-git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \\
+trap "rm -rf \"$d\"" EXIT
+git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \
   https://github.com/DigitalHouses/dh_ansible.git "$d/repo"
 /opt/ansible/venv/bin/python "$d/repo/tests/e2e_semaphore_native_2_20.py"
 '
