@@ -48,5 +48,5 @@ def test_playbook_uses_pinned_site_runner_pve_host_identity():
     assert "StrictHostKeyChecking=yes" in add_host["ansible_ssh_common_args"]
     assert playbook[1]["hosts"] == "dh_bonjour_pve_hosts"
     assert playbook[1]["roles"] == ["pve_bonjour_baseline"]
-    assert "192.168.11.30" not in PLAYBOOK.read_text()
-    assert "192.168.11.30" not in TASKS.read_text()
+    assert "198.51.100.30" not in PLAYBOOK.read_text()
+    assert "198.51.100.30" not in TASKS.read_text()
