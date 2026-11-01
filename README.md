@@ -21,7 +21,7 @@
 
 **Новые объекты и исправление паролей:** №05 позволяет повторно ввести только ошибочный credential, оставляя остальные сохранённые значения неизменными. После №05 (сохранение всех credentials) и успешной №06 (проверка) отдельная №07 создаёт приватный GitHub repo через штатный API; её повторное выполнение безопасно проверяет/adopt существующий репозиторий. Репозиторий объекта хранит конфигурацию и inventory, а секреты — только Semaphore. Это целевой контракт [ADR-0021](docs/decisions/0021-semaphore-native-credentials.md), пока **не внедрён**.
 
-**Принятое решение 2026-11-01:** [ADR-0021 — Semaphore-native site credentials](docs/decisions/0021-semaphore-native-credentials.md) заменяет прежний контракт `site_vault_v1`. В draft PR #101 №05/06 переведены на native Variable Group Secrets и стандартный Ansible URI; **живой E2E новой реализации и №07 ещё не приняты**. До публикации PR стандартный каталог `main` по-прежнему старый. Глобальный preflight для всех рабочих задач — следующий этап; не считать его уже включённым.
+**Выпущено 02.11.2026:** [ADR-0021 — Semaphore-native credentials](docs/decisions/0021-semaphore-native-credentials.md), [PR #101](https://github.com/DigitalHouses/dh_ansible/pull/101) объединён с `main` (`b883ff85`). №05/06 используют native Semaphore Variable Group Secrets и Ansible URI. Профильный CI — 75/75 PASS, syntax PASS, изолированный API E2E PASS; **живой UI/PVE E2E ещё не завершён**, №07 и глобальный preflight не реализованы. Общий CI остаётся красным (59 исторических ошибок других подсистем), проверки не отключали.
 
 **Credentials новых домов:** целевой стандарт — [native Semaphore](docs/runbooks/credential-setup.md), без обязательного параллельного site Vault. [Исторический site Vault onboarding](docs/runbooks/site-credentials-onboarding.md) нужен только при сопровождении прежнего профиля, а не для чистой №05/06 на Beta.
 
@@ -52,7 +52,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/d7e
 
 Bootstrap **не** устанавливает Ansible на PVE, не требует GitHub OAuth и Fleet master password, не трогает private Fleet credentials, не создаёт Media workers или PVE tokens.
 
-**Общий доступ для установки ПО:** №05/06 дают доступ к Fleet Vault, но не включают административные права Linux. Установка программ на runner и иных managed nodes требует отдельного commissioning инфраструктурной учётной записи / `ansible_become`. Задача №40 теперь использует обычную Ansible роль и общий preflight, а не особый watcher; при отсутствии прав она возвращает `INFRASTRUCTURE_ACCESS_NOT_COMMISSIONED`. Подробнее: [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md) и [runbook №40](docs/runbooks/remote-commander-commissioning.md). Bootstrap не запускает №00; после установки оператор отдельно запускает №00 для получения полного каталога.
+**Общий доступ для установки ПО:** №05/06 теперь сохраняют и проверяют нативные credentials Semaphore, но не включают административные права Linux. Установка программ на runner и иных managed nodes требует отдельного commissioning инфраструктурной учётной записи / `ansible_become`. Задача №40 теперь использует обычную Ansible роль и общий preflight, а не особый watcher; при отсутствии прав она возвращает `INFRASTRUCTURE_ACCESS_NOT_COMMISSIONED`. Подробнее: [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md) и [runbook №40](docs/runbooks/remote-commander-commissioning.md). Bootstrap не запускает №00; после установки оператор отдельно запускает №00 для получения полного каталога.
 
 **Fresh only:** существующие CT/VM с ID 1231 не принимаются и не удаляются автоматически. Режимов `--resume` нет. 31.10.2026 владелец дал **новое явное разрешение** удалить только подтверждённый тестовый CT1231 для следующего Fresh E2E. Это не общая политика удаления других LXC/VM. Любой будущий отдельный destructive тест — только по [runbook](docs/runbooks/ai-agent-execution.md) с защитой HAOS VM2253. Успешный код возврата, единственная №00 и отдельный успешный запуск №00 — обязательная приёмка.
 
@@ -60,7 +60,7 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 ## Первое получение credentials — задачи №05 и №06 (Semaphore Beta)
 
-**После свежего Bootstrap** в Semaphore есть только №00. Она синхронизирует каталог **из main**; запускать её для новой схемы следует **после принятия соответствующего PR**. Не проводить ручную замену root-owned seeder и не возвращаться к старому GitHub Device Flow/Fleet master password.
+**После свежего Bootstrap** в Semaphore есть только №00. Она синхронизирует каталог **из main**; PR #101 уже объединён, поэтому №00 можно запускать для получения №05/06. Не проводить ручную замену root-owned seeder и не возвращаться к старому GitHub Device Flow/Fleet master password.
 
 - **№05 · Ввести credentials объекта:** штатная Survey-форма с пятью необязательными полями. Для первого подключения чистого Proxmox нужен **только пароль PVE root**. Пустые поля оставляют сохранённые credentials без изменений. Ansible сохраняет новые значения через native Semaphore API в Variable Group Secrets, без собственного Python-клиента. Пароль не выводится в задачах.
 - **№06 · Проверить credentials объекта:** не требует повторного пароля, берёт PVE secret из Semaphore, проверяет сертификат и идентичность PVE, аутентифицируется `root@pam` через HTTPS ticket и читает список PVE nodes. Без удостоверенного TLS доверия выводит `PVE_TRUST_NOT_COMMISSIONED`, **не передавая пароль**. GitHub/MQTT/Cloudflare пока `NOT_APPLICABLE` до своих этапов.
@@ -112,7 +112,7 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 **Ранее:** в октябре 2026 прежний Python Bootstrap проходил собственные E2E и диагностику `pct exec`/Postfix, включал восстановление Fleet/PVE identities и режимы `--resume*`. Эти механизмы **не относятся к принятому Tiny Bootstrap**, не должны возвращаться в его путь и остаются только историей Git. Отдельная проверка PVE/Fleet/Media/Remote Commander на новом runner ещё не проведена.
 
-**CI:** общий workflow по-прежнему останавливается на проверке безопасности некоторых ранее существовавших публичных файлов, ещё до тестов. Этот вопрос решается отдельно, без обхода security gate; успешный live E2E не означает зелёный CI.
+**CI (02.11.2026):** проверка публичных данных PASS. Профильная проверка №05/06: 75/75 PASS и обе Ansible syntax PASS. Общий pytest всё ещё содержит 59 ошибок исторических контрактов других подсистем; общий CI красный, проверки не отключены.
 
 ## Имя локального runner
 
