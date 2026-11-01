@@ -15,7 +15,7 @@ Key Store / Variable Groups → Secrets проекта Semaphore OSS.** №05 �
 [ADR-0021](decisions/0021-semaphore-native-credentials.md).
 **До E2E это целевой контракт, не описание текущей реализации.**
 
-**Повторяемый onboarding:** №05 должна принимать частичные исправления: пустое секретное поле означает KEEP, старые значения скрыты, изменения одного credential не затрагивают остальные. При первом подключении нового site создаётся отдельный **private** GitHub repository через штатный GitHub API с привилегиями, необходимыми только для provisioning; при повторе — безопасное усыновление существующего repo без перезаписи. Код универсальных Ansible roles остаётся общим, site repo хранит только конфигурационные данные, а credentials — в Semaphore. Bootstrap не требует GitHub организационного токена и всегда создаёт только №00. [ADR-0021](decisions/0021-semaphore-native-credentials.md).
+**Повторяемый onboarding:** №05 должна принимать частичные исправления: пустое секретное поле означает KEEP, старые значения скрыты, изменения одного credential не затрагивают остальные. Только после №05 (сохранение всех credentials объекта) и успешной №06 (проверка) отдельная №07 создаёт **private** GitHub repository через штатный GitHub API с временными полномочиями provisioning; при повторе №07 — безопасный adopt существующего repo без перезаписи. Код универсальных Ansible roles остаётся общим, site repo хранит только конфигурационные данные, а credentials — в Semaphore. Bootstrap не требует GitHub организационного токена и всегда создаёт только №00. [ADR-0021](decisions/0021-semaphore-native-credentials.md).
 
 ## P00. Industry standards and supported practices first
 
