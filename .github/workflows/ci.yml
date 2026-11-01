@@ -40,6 +40,15 @@ jobs:
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/check-site-credentials.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
+      - name: Refuse silent Task 00 success when Semaphore file inventory is missing
+        run: |
+          set -eu
+          if ansible-playbook -i /dev/null playbooks/request-semaphore-catalog-sync.yml > /tmp/dh-empty-inventory.log 2>&1; then
+            echo TASK_00_EMPTY_INVENTORY_FALSE_SUCCESS
+            exit 1
+          fi
+          grep -Fq SEMAPHORE_SITE_INVENTORY_NOT_LOADED /tmp/dh-empty-inventory.log
 
   policy:
     runs-on: ubuntu-latest
