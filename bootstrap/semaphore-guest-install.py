@@ -68,12 +68,29 @@ def standardize_locale():
 
 
 def persist_guest_locale():
-    """Use the Debian/PAM default so future login shells get UTF-8 too."""
-    path = Path("/etc/default/locale")
-    if path.is_symlink() or (path.exists() and not path.is_file()):
+    """Debian 13 stores system locale in /etc/locale.conf.
+
+    /etc/default/locale is normally a compatibility symlink to ../locale.conf
+    (possibly dangling on a minimal fresh LXC). Never follow an unrecognized
+    symlink or write to an unexpected filesystem object.
+    """
+    canonical = Path("/etc/locale.conf")
+    legacy = Path("/etc/default/locale")
+    if canonical.is_symlink() or (canonical.exists() and not canonical.is_file()):
+        raise Blocked("Unexpected /etc/locale.conf file type")
+    if legacy.is_symlink():
+        if os.readlink(legacy) not in ("../locale.conf", "/etc/locale.conf"):
+            raise Blocked("Unexpected /etc/default/locale symlink target")
+    elif legacy.exists() and not legacy.is_file():
         raise Blocked("Unexpected /etc/default/locale file type")
-    path.write_text("LANG=C.UTF-8\n", encoding="ascii")
-    os.chmod(path, 0o644)
+
+    canonical.write_text("LANG=C.UTF-8\n", encoding="ascii")
+    os.chmod(canonical, 0o644)
+    # An older regular file must not retain a conflicting LANG; a Debian 13
+    # compatibility link already reads the canonical value.
+    if legacy.exists() and not legacy.is_symlink():
+        legacy.write_text("LANG=C.UTF-8\n", encoding="ascii")
+        os.chmod(legacy, 0o644)
     print("GUEST_LOCALE_PERSISTENT=PASS C.UTF-8", flush=True)
 
 
