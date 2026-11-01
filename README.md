@@ -37,10 +37,14 @@
 
 ## Единая точка входа · Tiny Bootstrap
 
+**Версия на 02.11.2026:** установщик зафиксирован на commit `95ace5c`: исправлены путь Semaphore Inventory для задачи №00 и runtime-проверка введённых значений №05 (Jinja). Это версия для **новых чистых объектов**, не команда обновления работающего CT1231. На CT1231 №00 уже выполнилась успешно (12 создано, 1 без изменений), а №05 после исправления требует повторного запуска с паролем через Semaphore Survey. Повторная установка CT1231 запрещена без нового явного разрешения.
+
+
+
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/d318bfb56661000774e766ba9ce9168e38d6de41/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/e7b6fdf115a8bb2fe5bab94ee7cf01370285df9a/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
