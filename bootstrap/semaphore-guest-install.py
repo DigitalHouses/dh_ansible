@@ -67,6 +67,16 @@ def standardize_locale():
     print("GUEST_LOCALE=PASS C.UTF-8", flush=True)
 
 
+def persist_guest_locale():
+    """Use the Debian/PAM default so future login shells get UTF-8 too."""
+    path = Path("/etc/default/locale")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise Blocked("Unexpected /etc/default/locale file type")
+    path.write_text("LANG=C.UTF-8\n", encoding="ascii")
+    os.chmod(path, 0o644)
+    print("GUEST_LOCALE_PERSISTENT=PASS C.UTF-8", flush=True)
+
+
 def prepare_ansible_runtime_access():
     """Root-owned venv code must be readable by the non-root Semaphore service."""
     for directory in (VENV.parent, VENV):
@@ -347,6 +357,7 @@ def main(argv=None):
     if not args.apply:
         print("MODE=READ_ONLY; no packages/services changed")
         return 0
+    persist_guest_locale()
     provision(args.site, args.runner_ip, args.requirements,
               resume_ansible=args.resume_ansible)
     return 0
