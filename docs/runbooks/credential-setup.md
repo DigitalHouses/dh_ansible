@@ -1,90 +1,45 @@
-# Первичная настройка Fleet credentials — Semaphore задачи №05 и №06
+# Semaphore 2.20 Beta — получение и проверка credentials объекта (№05/06)
 
-> **Новые объекты (после принятия `site_vault_v1`):** пользоваться
-> [общим site credentials onboarding](site-credentials-onboarding.md).
-> №05 по-прежнему выполняет первичную авторизацию private Git,
-> а №06 проверяет и сохраняет **пароль отдельного Vault данного объекта**.
-> Название скрытого поля `fleet_master_password` в UI пока сохранено для
-> совместимости исторического шаблона и не означает общий пароль для новых
-> домов. Приведённые ниже логи, пути и результаты `fleet-vault-password`
-> относятся к старому профилю `fleet_legacy_v1`; не переносить его на
-> Fresh `serzhan-lab` или другие новые runner.
+## Назначение и статус
 
+**Новая реализация в PR #101; live E2E №05/06 ещё не выполнен.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
 
-**Статус:** **Fresh E2E ACCEPTED 2026-10-31** — №00, №05 и №06 успешно выполнены оператором в Semaphore на чистом CT1231. [Отчёт и границы приёмки](../acceptance/fleet-credentials-2026-10-31.md).  
-**Вне области:** изменения Tiny Bootstrap, права PVE, развёртывание Media VM, настройка Cloudflare.
+**Основной принцип:** Bootstrap создаёт только №00. Она загружает каталог из ветки **main**. Если PR ещё не принят в main, №00 регистрирует **прежнюю** №05 GitHub/№06 Fleet Vault, а не новые задачи. Ручных подмен Python-кода и файлов на runner не делать.
 
-## Ожидаемый операторский путь
+## Что делает новая №05
 
-1. `00-Обновить список задач` — получить каталог GitHub (без автостарта).
-2. `05-Получить credentials GitHub` — посмотреть одноразовый код в журнале Semaphore, открыть `https://github.com/login/device`, подтвердить доступ. Задача ждёт входа, проверяет доступ к приватному `DigitalHouses/dh_ansible_fleet_detail` и клонирует его.
-3. `06-Ввести master password Fleet Vault` — в диалоге запуска заполнить одно скрытое поле `Master password Fleet Vault` (тип `secret`). Пароль проверяется расшифровкой `secrets/fleet.vault.yml`, сохраняется однократно в файле `0600`.
-4. Дальнейшие задачи вызывают общую роль `fleet_credentials` (только если им нужны secrets). Пароль сохраняется в локальном файле. **Реальный reboot-test CT1231 завершился PASS 2026-10-31**: GitHub и Vault credentials повторно использованы без ввода.
+Штатная форма Semaphore из пяти необязательных полей: GitHub provisioning token, MQTT login/password, PVE root password, Cloudflare API token. В начальном сценарии чистого PVE оператор вводит **только пароль PVE root**; имя пользователя фиксировано `root`, а HTTPS API identity — `root@pam`. Токены PVE не требуются.
 
-Результаты без чувствительных значений: `GITHUB_PRIVATE_FLEET_PASS`, `FLEET_VAULT_UNLOCKED`.
+- Каждое пустое поле = **KEEP**; повтор №05 изменяет только заполненные значения.
+- №05 не подключается к PVE, не создаёт репозиторий и не проверяет корректность введённого пароля.
+- Сохранение происходит штатными `ansible.builtin.uri` запросами к **локальному** HTTPS API Semaphore, с существующим site-local admin token и `no_log`, без собственного Python-клиента или новых secret stores.
+- Используется существующая native Variable Group `Empty`: именно она уже прикреплена к шаблонам принятого четырёхэтапного Bootstrap. Имена групп не переименовываются «по пути»; родной root-owned seeder №00 закреплён в ранней ревизии. Секреты в ней хранятся как **тип `var`**, а MQTT login как обычная не-секретная переменная environment.
+- При выполнении №06 Semaphore 2.20 передаёт Variable Group secrets типа `var` штатным зашифрованным Vault-файлом в Ansible.
+- Существующий seeder №00 принимает Survey 05 только с `target=env`. Это вынужденная совместимость уже установленного бинарно закреплённого seeder, **не использование нового `target=var` для формы №05**. Нет секретов в shell argv, но значение формы временно присутствует в окружении Ansible controller; доступ к нему определяется доверенной границей site runner. Новый формат Survey `target=var` потребует отдельно принятого обновления seeder, а не ручного hotfix.
 
-**Минимальный локальный формат:**
+## Что делает новая №06
 
-```text
-/var/lib/semaphore/.dh-credentials/           semaphore:semaphore 0700
-  gh/                                        GitHub CLI credential store
-  fleet/                                     приватный Git checkout
-  fleet-vault-password                       semaphore:semaphore 0600
-```
+№06 не имеет Survey и не просит пароль повторно. Получает `DH_PVE_ROOT_PASSWORD` из Semaphore Variable Group Secrets и проверяет только обязательный для первой стадии PVE root@pam:
 
-Ни мастер-пароль, ни OAuth token не должны попадать в stdout/записи Ansible. Это компромиссная модель хранения для пилота: Secrets сохраняются на runner в локальных файлах; дополнительные сервисы и split-secret architecture не вводятся.
+1. Если пароль не сохранён — `MISSING`.
+2. Если нет заверенной с PVE идентичности / root CA — `PVE_TRUST_NOT_COMMISSIONED`. **Пароль не передаётся по сети.**
+3. Сверяет TLS SHA256 fingerprint текущего сервера с зафиксированным PVE root commissioning. При отсутствии связи — `UNREACHABLE`; при изменении сертификата — `PVE_TLS_IDENTITY_MISMATCH`.
+4. Выполняет запрос `POST /api2/json/access/ticket` стандартным `ansible.builtin.uri` с проверкой сертификата (`validate_certs: true`), login `root@pam`, введённым паролем. `401/403` — `AUTH_FAILED`; HTTP 200 с ticket — `READY`; прочее — `PVE_TLS_OR_API_UNAVAILABLE`.
+5. GitHub, MQTT и Cloudflare пока отображаются как `NOT_APPLICABLE` до commissioning соответствующих компонентов. Это **первая стадия** глобального readiness gate, а не завершённая проверка всех будущих сервисов.
 
-## Только чистое развёртывание
+Ticket, пароль, API token и request body не выводятся в Task output. №06 ничего не развёртывает и не меняет на PVE.
 
-Установка и проверка новой ревизии №05/06 **всегда** выполняются через Fresh E2E:
+## Предварительная доверительная привязка к PVE
 
-1. Проверить, что выполняемся на утверждённом Jonsbo, а CT1231 имеет точно ожидаемые hostname, IP, unprivileged rootfs и не содержит сторонних mount points.
-2. По **явному адресному разрешению** владельца удалить только идентифицированный тестовый CT1231 с его rootfs; не затрагивать HAOS VM2253 и остальные гости.
-3. Запустить **одну** pinned команду `bootstrap/install.sh` из [README](../../README.md). Она создаёт новый Debian 13 LXC, ставит Ansible/Semaphore и регистрирует только №00.
-4. В Semaphore вручную запустить №00. Она загрузит №05, №06 и другие шаблоны из публичного GitHub.
-5. Запустить №05, подтвердить код в браузере, затем №06 со скрытым вводом master password. Проверить `GITHUB_PRIVATE_FLEET_PASS` и `FLEET_VAULT_UNLOCKED`.
+Это **не дополнительное поле/секрет от владельца**. На чистом runner standard Bootstrap оставляет наблюдение `pve-runtime.yml` с `source: bootstrap_vmbr0`; этого недостаточно для передачи root-пароля по TLS.
 
-**Никаких ручных обновлений seeder, пересылки файлов в LXC, `git pull` на действующем runner, `--resume` или локальных hotfix** в тестовом цикле. Изменения сначала в GitHub, новый immutable pin, затем полная установка одной командой. Не удалять CT1231 повторно без нового разрешения.
+Уже принятый **общий** PVE native commissioning `bootstrap/commission-pve-runner.py`, запускаемый из root Shell фактического PVE по проверенной pinned ревизии, устанавливает доверие к SSH/TLS на один объект и теперь копирует публичный `/etc/pve/pve-root-ca.pem` в `/var/lib/ansible/site-data/<site>/pve-root-ca.pem` (без приватных ключей). Подробности: [PVE native commissioning](pve-native-commissioning.md). В случае TLS/hostname mismatch проверки должны завершаться `BLOCKED`, а не отключать `validate_certs`.
 
-## Использование в playbooks
+**Порядок приёмки после публикации каталога:** один раз выполнить generic PVE commissioning с проверкой `PVE_COMMISSIONING=PASS` → в Semaphore запустить №00 → №05 (PVE root password) → №06. При неверном пароле повтор №05 с одним полем, затем №06. Переустановка CT1231 для исправления пароля **не требуется**.
 
-После №05 и №06 обычная задача Ansible, которой нужны credentials, включает:
+## Граница этой реализации
 
-```yaml
-- name: Read this site's managed credentials
-  ansible.builtin.include_role:
-    name: fleet_credentials
-```
-
-Роль выбирает `fleet_secrets.sites[site.id]` и формирует `fleet_site_credentials`. В журнале сам секрет не печатается. Это **не заменяет** разрешение на инфраструктурный apply, установку PVE workers или проверку доступа на целевом сервере.
-
-После принятой №06 подготовлены доступ к Fleet и master password, **но задачи №10–90 не становятся автоматически рабочими**: соответствующие playbooks ещё должны подключить `fleet_credentials`, а отсутствующие PVE/Cloudflare workers требуют отдельной установки и проверки. Повтор №05/06 остаётся непроверенным. **Повторное использование после перезагрузки прошло живую приёмку**, см. [Reboot E2E](../acceptance/fleet-credentials-reuse-2026-10-31.md).
-
-## Принятый read-only тест повторного использования (2026-10-31)
-
-Повторная №00 после №05/06 завершилась `created=0 updated=0 unchanged=13 failed=0`: исправление нормализации отсутствующего `values` у поля `secret` в Semaphore 2.19 принято живым тестом.
-
-Независимый запуск `playbooks/verify-fleet-credentials.yml` с сохранёнными GitHub и Vault credentials **успешен**: `CREDENTIALS_REUSE_PASS`, `ok=15 changed=0 failed=0`, повторный ввод не требовался. [Отчёт и проверенная команда](../acceptance/fleet-credentials-reuse-2026-10-31.md).
-
-Для прямого инженерного запуска от `semaphore`:
-
-- Задавать `LANG=C.UTF-8 LC_ALL=C.UTF-8` во избежание наследования неподдерживаемой Proxmox locale.
-- Использовать проверенный доступный пользователю `semaphore` checkout с точным Git SHA и `ANSIBLE_ROLES_PATH=<checkout>/roles`; путь `/opt/digitalhouses/src` недоступен `semaphore` через root-owned родительский каталог `/opt/digitalhouses` с mode `0700`.
-- Не копировать playbook вручную в LXC и не изменять права Bootstrap ради прямого запуска.
-- Это разовая инженерная проверка, а не зарегистрированная задача №07 в Semaphore. Изменение каталога №07 ранее было отклонено; не считать её установленной.
-- **Реальный reboot-test PASS 2026-10-31:** после `pct reboot 1231` получен `CREDENTIALS_REUSE_PASS`, `ok=15 changed=0 failed=0`, без повторного ввода. [Приёмка](../acceptance/fleet-credentials-reuse-2026-10-31.md).
-
-## Проверка после установки
-
-Не считывая чувствительные значения:
-
-```bash
-pct exec 1231 -- bash -c '
-  test -d /var/lib/semaphore/.dh-credentials/fleet/.git
-  test "$(stat -c %a /var/lib/semaphore/.dh-credentials/fleet-vault-password)" = 600
-  test "$(stat -c %U /var/lib/semaphore/.dh-credentials/fleet-vault-password)" = semaphore
-  echo FLEET_CREDENTIAL_FILES=PASS
-'
-```
-
-Никаких новых фоновых служб, провайдеров, root-worker или переключения версии Bootstrap для этого сценария не создаётся.
+- Новый путь №05 и №06 — нативные Ansible playbooks, но live UI E2E ещё **PENDING**.
+- №07 GitHub private site repository и общий `pre_tasks` gate для всех действующих задач — отдельные утверждённые work items и пока **не реализованы**.
+- Принятая 31.10.2026 историческая Fleet Vault авторизация относится к **старому** набору задач и не распространяется на новый сценарий.
+- Сохранять доступ к базе Semaphore и отдельно её `access_key_encryption` для будущих бэкапов. Ни один секрет не должен существовать только как успешная строка Task 05.
