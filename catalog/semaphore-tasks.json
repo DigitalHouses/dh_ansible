@@ -12,18 +12,54 @@
       "view": "01 · Подготовка",
       "survey_vars": [
         {
-          "name": "DH_TEST_KEYSTORE_PASSWORD",
-          "title": "Тестовый пароль Key Store",
-          "description": "Пилот: только вымышленное значение! Пустое поле не меняет сохранённый пароль.",
+          "name": "DH_INPUT_GITHUB_PROVISION_TOKEN",
+          "title": "GitHub · создание репозитория объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. site repository has not been provisioned.",
           "type": "secret",
           "target": "env",
           "required": false,
           "values": []
         },
         {
-          "name": "DH_TEST_VARIABLE_SECRET",
-          "title": "Тестовый MQTT-secret Variable Groups",
-          "description": "Пилот: только вымышленное значение! Пустое поле не меняет сохранённый секрет.",
+          "name": "DH_INPUT_MQTT_USERNAME",
+          "title": "MQTT · логин объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. site uses PVE Agent or Plex Agent with remote MQTT broker.",
+          "type": "text",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_MQTT_PASSWORD",
+          "title": "MQTT · пароль объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. same as mqtt_username; one reusable credential pair for all enabled DH agents.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_PVE_API_AUDIT_TOKEN",
+          "title": "Proxmox · API audit token",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if site uses legacy PVE API audit workflow.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_PVE_API_WRITE_TOKEN",
+          "title": "Proxmox · API write token",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if site uses legacy PVE API write workflow.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_CLOUDFLARE_API_TOKEN",
+          "title": "Cloudflare · API token",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if target site actually commissions Cloudflare changes with a permitted site-specific credential; do not duplicate org-wide unrestricted token into each site.",
           "type": "secret",
           "target": "env",
           "required": false,
