@@ -129,4 +129,6 @@ git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \
 '
 ```
 
-**Ожидаемый финальный маркер:** `SEMAPHORE_BETA_ISOLATED_NATIVE_E2E=PASS`. Пока не получен реальный вывод, статус PENDING. На production Semaphore после этого шага ничего не меняется.
+**Первый живой запуск E2E — FAILED до операций с секретами.** Semaphore поднялся и ответил на `GET /api/ping`, но тестовый Python API-клиент ошибочно разбирал `pong` (plain text) как JSON. Лог владельца: `json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. В upstream Semaphore 2.20 Beta ping endpoint действительно использует `plainTextMiddleware` и возвращает `pong`. Исправлено в `tests/e2e_semaphore_native_2_20.py` commit `c8582211b320576cf035199828188eb2234d3086`; теперь ping декодируется как текст и строго проверяется на `pong`. Повторный E2E **PENDING**.
+
+**Ожидаемый финальный маркер:** `SEMAPHORE_BETA_ISOLATED_NATIVE_E2E=PASS`. Пока не получен успешный реальный вывод, статус PENDING. На production Semaphore после этого шага ничего не меняется.
