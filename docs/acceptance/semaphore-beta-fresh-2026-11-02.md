@@ -67,6 +67,10 @@ qm config 1231
 **Live acceptance:** четырехэтапная установка PASS по операторскому журналу; №00 после установки и новые credentials workflows PENDING.
 
 
+## Unit-тест №05/06: первый запуск, корректировка ожидания
+
+Проверка владельца на CT1231 (Ansible Core 2.21.4 / Python 3.13.5), 02.11.2026: 7 тестов, **6 PASS, 1 FAIL**. Ошибка только в `test_partial_keep_and_safe_write_contract`: тест требовал Python-текст `if item in dh_supplied`, тогда как playbook корректно применяет Ansible `when: item in dh_supplied`. Исправление в ветке PR #101, commit `1d216c4bbd645584236211c149f10b999a86b36b`: условие проверяется структурно через `yaml.safe_load` и поиск шага `Prepare only submitted secret upserts`. Повторный живой unit test после изменения **PENDING**, ни один секрет и Semaphore API не изменялись.
+
 ## Изолированная проверка синтаксиса на CT1231 — PASS
 
 Владелец выполнил штатный `ansible-playbook --syntax-check` для обоих новых playbooks после исправления локали PVE и runner. Лог подтверждает:
