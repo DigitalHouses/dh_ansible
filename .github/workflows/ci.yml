@@ -49,7 +49,7 @@ jobs:
           bash -n bootstrap/semaphore-catalog-sync-request.sh
           bash -n bootstrap/semaphore-launch.sh
           bash -n bootstrap/netalertx-deploy-request.sh bootstrap/commission-netalertx-worker.sh
-      - name: One-shot real Semaphore 2.19.16 API acceptance
+      - name: One-shot real Semaphore 2.20.16-beta9 API acceptance
         if: contains(github.event.head_commit.message, '[live-semaphore]')
         shell: bash
         run: |
@@ -57,8 +57,8 @@ jobs:
           WORK=$(mktemp -d)
           PID=""
           trap 'rc=$?; if [[ $rc != 0 ]]; then cat "$WORK/server.log" 2>/dev/null || true; fi; if [[ -n "$PID" ]]; then kill "$PID" 2>/dev/null || true; fi; rm -rf "$WORK"; exit "$rc"' EXIT
-          curl -fsSL --max-time 90 -o "$WORK/semaphore.deb" https://github.com/semaphoreui/semaphore/releases/download/v2.19.16/semaphore_2.19.16_linux_amd64.deb
-          printf '%s  %s\n' 56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8 "$WORK/semaphore.deb" | sha256sum -c -
+          curl -fsSL --max-time 90 -o "$WORK/semaphore.deb" https://github.com/semaphoreui/semaphore/releases/download/v2.20.16-beta9/semaphore_2.20.16-beta9_linux_amd64.deb
+          printf '%s  %s\n' 7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a "$WORK/semaphore.deb" | sha256sum -c -
           sudo dpkg -i "$WORK/semaphore.deb"
           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -subj "/CN=semaphore-ci" -addext "subjectAltName=IP:127.0.0.1"
           python3 - "$WORK" <<'PY'
@@ -90,6 +90,8 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/commission-runner-local-admin.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-github-credentials.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-fleet-master-password.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/check-site-credentials.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/media-acceptance.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-pve-media-backup-nfs.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit-cloudflare-haos-mtls.yml
