@@ -65,3 +65,30 @@ qm config 1231
 После проверки — запустить стандартную команду из [README](../../README.md#единая-точка-входа--tiny-bootstrap), ввести `serzhan-home` и подтвердить `y`. При `BOOTSTRAP_FRESH_DONE=PASS` проверить Semaphore version, HTTPS и единственную №00. №00 запускать вручную, №05–07 ещё не приняты.
 
 **Live acceptance:** четырехэтапная установка PASS по операторскому журналу; №00 после установки и новые credentials workflows PENDING.
+
+
+## Изолированная проверка синтаксиса без установки (ещё не запускалась)
+
+При отсутствии Remote Desktop Commander новая ветка может быть проверена на уже работающем CT1231 из **PVE root Shell**, не меняя git checkout Semaphore, базу, credentials или systemd. Временный checkout удаляется по завершении. Это тест **не** применяет №05/06 и не создаёт Secret Survey.
+
+```bash
+pct exec 1231 -- bash -c '
+  set -euo pipefail
+  d=$(mktemp -d /tmp/dh-native-credentials.XXXXXXXX)
+  trap "rm -rf \"$d\"" EXIT
+  git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \
+    https://github.com/DigitalHouses/dh_ansible.git "$d/repo"
+  /opt/ansible/venv/bin/ansible-playbook --syntax-check \
+    -i "$d/repo/tests/fixtures/syntax_inventory.yml" \
+    "$d/repo/playbooks/obtain-site-credentials.yml"
+  /opt/ansible/venv/bin/ansible-playbook --syntax-check \
+    -i "$d/repo/tests/fixtures/syntax_inventory.yml" \
+    "$d/repo/playbooks/check-site-credentials.yml"
+  /opt/ansible/venv/bin/python -m unittest discover -s "$d/repo/tests" \
+    -p test_semaphore_native_obtain_pilot.py -v
+  echo NATIVE_CREDENTIAL_SYNTAX_TEST=PASS
+'
+```
+
+**Ожидаемый результат — не факт приёмки**, пока не получен настоящий вывод команды. На время теста секреты владельца не требуются. Пароль PVE в shell / git передавать нельзя.
+
