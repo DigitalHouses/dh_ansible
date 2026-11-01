@@ -14,6 +14,19 @@
 
 **Важный блокер перед №00:** `bootstrap/semaphore-project.py` в pinned checkout читает `https://api.github.com/repos/DigitalHouses/dh_ansible/commits/main` и каталог из `main`, **не из ветки PR #101**. На момент проверки в `main` — старые playbooks №05 GitHub Device Flow и №06 Fleet Vault; новая №05 из PR #101 не будет зарегистрирована обычной синхронизацией. Не путать успешную установку Beta с принятием нового credentials workflow. Прежде чем использовать №05/06, завершить и опубликовать согласованный каталог/реализацию; без ручных hotfix в LXC.
 
+
+## Пилот новой №05/06 в draft PR #101
+
+**Код реализован, live проверка НЕТ.** Каталог PR содержит `05-Ввести credentials объекта` и `06-Проверить credentials объекта`. №05 использует только native Ansible `uri` и `slurp` для работы с Semaphore API; собственный `scripts/semaphore-obtain-credentials.py` и связанный с ним старый E2E harness удалены. Пять необязательных полей формы сохраняют `target=env` для совместимости с уже установленным root-owned seeder №00. Секреты сохраняются как `var` в существующей Variable Group `Empty`, которую Seeder привязал ко всем задачам. №06 получает из неё PVE password через штатный механизм Semaphore 2.20 Ansible Vault transport.
+
+№06 проверяет root@pam через HTTPS ticket, затем authenticated read-only PVE `/nodes`. До отправки пароля требуется host-root commissioned TLS fingerprint и публичный `pve-root-ca.pem`; generic `commission-pve-runner.py` в PR расширен копированием CA. Ни PVE API токены, ни отдельные Python-клиенты, ни новые хранилища секретов не введены.
+
+**Статические проверки исходников:** 15/15 контрактных инвариантов проверены чтением GitHub файлов (точные названия, число полей, сохранение пустых, тип `var`, наличие HTTPS/TLS, ticket+nodes, отсутствие custom helper, CI syntax-check paths). Это **не** означает, что Ansible syntax, новая форма UI, Semaphore API PUT с type=var и реальная авторизация PVE прошли E2E: новая ветка не исполнялась на runner.
+
+**CI:** GitHub Actions завершается на `Block unsafe public source tree before installing dependencies`, до pytest и ansible syntax. Не отключать эту проверку для публикации; отдельно провести source review и исправить public-boundary блокеры. PR остаётся Draft, `main` остаётся прежним, №00 в чистом runner до публикации нового каталога не запускать.
+
+**Следующая приёмка:** после устранения CI-блокера и ревью — проверка native 05/06 на отдельном изолированном Semaphore 2.20.16-beta9 с `type=var` + live UI Survey + CA/hostname trust + read-only root@pam API. Публикация в main только после выполнения release gates; никакого ручного hotfix в CT1231.
+
 ## Предыстория подготовки
 
 ## Решение
