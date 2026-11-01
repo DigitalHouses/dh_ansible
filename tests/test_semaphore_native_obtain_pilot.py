@@ -1,4 +1,4 @@
-"""Unit regression for Task 05 native Semaphore Variable Group credentials.
+"""Unit regression for Task 05 native Semaphore Key Store and Variable Groups.
 
 Fake stores dummy secret values internally but never returns them from API reads.
 """
@@ -17,6 +17,8 @@ seeder = runpy.run_path(str(ROOT / "bootstrap/semaphore-project.py"),
 class FakeSemaphore:
     def __init__(self):
         self.groups = {}
+        self.keys = {}
+        self.key_passwords = {}
         self.values = {}
         self.calls = []
         self.next_id = 20
@@ -29,6 +31,26 @@ class FakeSemaphore:
         self.calls.append((method, url, body))
         if (method, url) == ("GET", "/projects"):
             return [{"name": "serzhan-lab", "id": 7}]
+        keypath = "/project/7/keys"
+        if (method, url) == ("GET", keypath + "?sort=name&order=asc"):
+            return list(self.keys.values())
+        if url.startswith(keypath + "/") and method == "GET":
+            return self.keys[int(url.rsplit("/", 1)[-1])]
+        if (method, url) == ("POST", keypath):
+            assert body["type"] == "login_password"
+            assert body["login_password"]["login"] == "root"
+            key_id = self._id()
+            row = {"id": key_id, "name": body["name"],
+                   "type": body["type"], "project_id": 7}
+            self.keys[key_id] = row
+            self.key_passwords[key_id] = body["login_password"]["password"]
+            return row
+        if url.startswith(keypath + "/") and method == "PUT":
+            key_id = int(url.rsplit("/", 1)[-1])
+            assert body["override_secret"] is True
+            assert body["login_password"]["login"] == "root"
+            self.key_passwords[key_id] = body["login_password"]["password"]
+            return None
         pre = "/project/7/environment"
         if (method, url) == ("GET", pre + "?sort=name&order=asc"):
             return list(self.groups.values())
@@ -96,14 +118,18 @@ class NativeCredentialTest(unittest.TestCase):
             "mqtt_password": "DUMMY-MQTT-1",
             "cloudflare_api_token": "DUMMY-CF",
             "github_provision_token": "DUMMY-GH",
+            "pve_root_password": "DUMMY-ROOT-1",
         })
         before_values = dict(self.api.values)
+        before_root = dict(self.api.key_passwords)
         outcome = app["enroll"](self.api, "serzhan-lab", {
             "mqtt_password": "DUMMY-MQTT-2"
         })
         self.assertEqual(outcome["mqtt_password"], "UPDATED")
         self.assertEqual(outcome["cloudflare_api_token"], "KEEP")
         self.assertEqual(outcome["github_provision_token"], "KEEP")
+        self.assertEqual(outcome["pve_root_password"], "KEEP")
+        self.assertEqual(self.api.key_passwords, before_root)
         self.assertEqual(self.api.values["DH_CLOUDFLARE_API_TOKEN"],
                          before_values["DH_CLOUDFLARE_API_TOKEN"])
         self.assertEqual(self.api.values["DH_GITHUB_PROVISION_TOKEN"],
@@ -112,6 +138,33 @@ class NativeCredentialTest(unittest.TestCase):
         group = next(iter(self.api.groups.values()))
         self.assertEqual(json.loads(group["env"])["DH_MQTT_USERNAME"], "testuser")
         self.assertEqual(len(group["secrets"]), 3)
+
+    def test_pve_root_key_is_created_without_variable_group(self):
+        result = app["enroll"](self.api, "serzhan-lab", {
+            "pve_root_password": "DUMMY-ROOT-1",
+        })
+        self.assertEqual(result["pve_root_password"], "CREATED")
+        self.assertEqual(len(self.api.keys), 1)
+        self.assertFalse(self.api.groups)
+        key_id = next(iter(self.api.keys))
+        self.assertEqual(self.api.keys[key_id]["type"], "login_password")
+        self.assertEqual(self.api.key_passwords[key_id], "DUMMY-ROOT-1")
+        self.assertNotIn("DUMMY-ROOT-1", json.dumps(self.api.keys))
+
+    def test_pve_root_key_updates_only_itself(self):
+        app["enroll"](self.api, "serzhan-lab", {
+            "mqtt_password": "DUMMY-MQTT",
+            "pve_root_password": "DUMMY-ROOT-1",
+        })
+        before_vars = dict(self.api.values)
+        result = app["enroll"](self.api, "serzhan-lab", {
+            "pve_root_password": "DUMMY-ROOT-2",
+        })
+        self.assertEqual(result["pve_root_password"], "UPDATED")
+        self.assertEqual(self.api.values, before_vars)
+        self.assertEqual(len(self.api.keys), 1)
+        self.assertEqual(next(iter(self.api.key_passwords.values())), "DUMMY-ROOT-2")
+        self.assertEqual(len(self.api.groups), 1)
 
     def test_change_nonsecret_username_preserves_secret_values(self):
         app["enroll"](self.api, "serzhan-lab", {
@@ -133,12 +186,12 @@ class NativeCredentialTest(unittest.TestCase):
             app["enroll"](self.api, "serzhan-lab", {"unknown_field": "DUMMY"})
         self.assertFalse(self.api.groups)
 
-    def test_survey_matches_six_registry_fields(self):
+    def test_survey_matches_five_registry_fields(self):
         catalogue = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
         survey = next(t["survey_vars"] for t in catalogue["tasks"]
                       if t["title"] == "05-Ввести credentials объекта")
         approved = app["registry_fields"]()
-        self.assertEqual(len(survey), 6)
+        self.assertEqual(len(survey), 5)
         self.assertEqual([x["name"] for x in survey],
                          [x["survey_env"] for x in approved])
         self.assertTrue(all(x["target"] == "env" and not x["required"]
