@@ -66,11 +66,16 @@ def test_06_checks_root_pve_over_trusted_https():
     txt = (ROOT / "playbooks/check-site-credentials.yml").read_text()
     assert "DH_PVE_ROOT_PASSWORD" in txt
     assert "root@pam" in txt
-    assert "/api2/json/access/ticket" in txt
-    assert "/api2/json/nodes" in txt
+    assert "scripts/pve-https-credential-check.py" in txt
     assert "PVE_TRUST_NOT_COMMISSIONED" in txt
-    assert "validate_certs: true" in txt
+    assert "stdin_add_newline: false" in txt
     assert "no_log: true" in txt
+    verifier = (ROOT / "scripts/pve-https-credential-check.py").read_text()
+    assert "/api2/json/access/ticket" in verifier
+    assert "/api2/json/nodes" in verifier
+    assert "ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT" in verifier
+    assert "ctx.verify_mode != ssl.CERT_REQUIRED" in verifier
+    assert "not ctx.check_hostname" in verifier
     assert "fleet_master_password" not in txt
 
 
