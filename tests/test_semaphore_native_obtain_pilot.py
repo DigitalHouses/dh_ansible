@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import re
 import unittest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 OBTAIN = (ROOT / "playbooks/obtain-site-credentials.yml").read_text(encoding="utf-8")
@@ -13,6 +14,16 @@ SEEDER = (ROOT / "bootstrap/semaphore-project.py").read_text(encoding="utf-8")
 
 
 class NativeCredentialContract(unittest.TestCase):
+    def test_both_playbooks_parse_as_yaml(self):
+        for name in ("obtain-site-credentials", "check-site-credentials"):
+            document = yaml.safe_load(
+                (ROOT / "playbooks" / (name + ".yml")).read_text(encoding="utf-8")
+            )
+            self.assertIsInstance(document, list)
+            self.assertEqual(len(document), 1)
+            self.assertEqual(document[0]["hosts"], "site_runner")
+            self.assertEqual(document[0]["gather_facts"], False)
+
     def test_no_custom_task05_python(self):
         self.assertFalse((ROOT / "scripts/semaphore-obtain-credentials.py").exists())
         self.assertNotIn("semaphore-obtain-credentials.py", OBTAIN)
