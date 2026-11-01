@@ -19,6 +19,8 @@
 
 ## AI-агентам: как самостоятельно запускать и проверять задачи
 
+**Принятое решение 2026-11-01:** [ADR-0021 — Semaphore-native site credentials](docs/decisions/0021-semaphore-native-credentials.md) заменяет прежний целевой контракт обязательного `site_vault_v1`. №05 — единый ввод credentials дома в штатный Key Store/Variable Groups Secrets; №06 — проверка всего обязательного набора; все обычные задачи запускают свежий preflight. **Код ещё не мигрирован, E2E не принят; старые №05/06 остаются действующей реализацией до безопасного перехода.** Никаких платных компонентов.
+
 **Credentials новых домов:** штатный [однократный site Vault onboarding](docs/runbooks/site-credentials-onboarding.md) — отдельный Ansible Vault на объект, зашифрованный Git, пароль владельца вне runner, проверенное локальное сохранение `0600` и повторное использование через общую роль `fleet_credentials`. Глобальный master Vault прежних домов — только переходная совместимость. Платных сервисов не требуется.
 
 **После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общие административные права для установки ПО и управления сервисами задаются по каждому managed target согласно [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md), а не отдельными root-workers для каждого номера задачи.
