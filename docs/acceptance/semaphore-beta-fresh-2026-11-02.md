@@ -1,5 +1,7 @@
 # Semaphore 2.20 Beta — чистый Bootstrap, 02.11.2026
 
+> **Последующий release status (02.11.2026):** PR #101 объединён с `main` (`b883ff85`). Профильный CI native credentials: **75/75 PASS** + оба Ansible syntax PASS. Изолированный Semaphore 2.20 API E2E: create/partial KEEP/SQLite encryption PASS. Проверка публичных исходников PASS. Полный legacy CI ещё красный (**59 ошибок**; tracked в [issue #102](https://github.com/DigitalHouses/dh_ansible/issues/102)); проверки не отключены. Установленный CT1231/продуктивная DB не менялись при merge. Теперь оператор может запускать №00 для нового каталога и №05/06 для live UI acceptance. Ниже сохранён хронологический отчёт прежних этапов, включая уже устранённые блокеры.
+
 ## Живая приёмка Bootstrap по журналу владельца
 
 **PASS — только свежая установка.** Представлен вывод запуска стандартного `bootstrap/install.sh` на PVE 01.11.2026 (в журнале файл `tiny-20261101T204020Z...`). Подтверждено:
