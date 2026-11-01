@@ -42,3 +42,10 @@ def test_only_task_zero_is_seeded():
     assert "dh-semaphore-catalog-sync.path" in TASK_00
     assert "autorun" in TASK_00
     assert "NO_INFRASTRUCTURE_TASKS_LAUNCHED" not in INSTALLER
+
+
+def test_bootstrap_normalizes_host_locale_before_guest_commands():
+    assert "export LANG=C.UTF-8 LC_ALL=C.UTF-8" in INSTALLER
+    assert "unset LANGUAGE" in INSTALLER
+    assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index("pct create")
+    assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index("pct exec")
