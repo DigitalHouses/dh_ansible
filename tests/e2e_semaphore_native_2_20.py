@@ -59,6 +59,10 @@ def make_api(port, cert):
             headers={"Content-Type": "application/json", "Accept": "application/json"})
         with opener.open(req, timeout=10) as response:
             payload = response.read(1_000_000)
+            # Semaphore 2.20 /api/ping is a plain-text "pong" endpoint,
+            # unlike the JSON API paths used below.
+            if path == "/ping":
+                return payload.decode("utf-8")
             return json.loads(payload) if payload else None
 
     return request
@@ -168,7 +172,8 @@ def main():
                 for _ in range(80):
                     must(server.poll() is None, "TEST_SERVER_EXITED")
                     try:
-                        api("GET", "/ping")
+                        must(api("GET", "/ping") == "pong",
+                             "TEST_SERVER_INVALID_PING")
                         break
                     except (urllib.error.URLError, TimeoutError):
                         time.sleep(0.25)
