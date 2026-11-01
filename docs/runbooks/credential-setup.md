@@ -2,7 +2,7 @@
 
 ## Назначение и статус
 
-**PR #101 объединён с `main` 02.11.2026 (`b883ff85`); live UI/PVE E2E №05/06 ещё не выполнен.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
+**Текущая приёмка 02.11.2026:** №00 реально выполнилась (создано 12 шаблонов, failed=0), №05 успешно сохранила только PVE root password в native Semaphore Variable Group. Host-root PVE commissioning прошёл SSH/TLS/hardware PASS. Первое исполнение №06 обнаружило несовместимость Python 3.13 `VERIFY_X509_STRICT` с legacy Proxmox 8.4 CA без `keyUsage`; исправление №06 в [PR #107](https://github.com/DigitalHouses/dh_ansible/pull/107) прошло изолированные TLS-тесты, но реальный PVE login через обновлённую №06 ожидает проверки.** Не путать принятую чистую установку CT1231 / Semaphore 2.20.16-beta9 с проверкой нового credential workflow. Для новых объектов источником истины служит [ADR-0021](../decisions/0021-semaphore-native-credentials.md), а не исторический site Vault.
 
 **Основной принцип:** Bootstrap создаёт только №00, которая читает ветку **main**. Новая №05/06 уже опубликована: запускайте №00 вручную в Semaphore, чтобы зарегистрировать обе задачи. Никаких ручных подмен файлов внутри CT1231 и переустановки runner.
 
@@ -24,10 +24,11 @@
 1. Если пароль не сохранён — `MISSING`.
 2. Если нет заверенной с PVE идентичности / root CA — `PVE_TRUST_NOT_COMMISSIONED`. **Пароль не передаётся по сети.**
 3. Сверяет TLS SHA256 fingerprint текущего сервера с зафиксированным PVE root commissioning. При отсутствии связи — `UNREACHABLE`; при изменении сертификата — `PVE_TLS_IDENTITY_MISMATCH`.
-4. Выполняет запрос `POST /api2/json/access/ticket` стандартным `ansible.builtin.uri` с проверкой сертификата (`validate_certs: true`), login `root@pam`, введённым паролем. `401/403` — `AUTH_FAILED`; HTTP 200 с ticket — `READY`; прочее — `PVE_TLS_OR_API_UNAVAILABLE`.
-5. GitHub, MQTT и Cloudflare пока отображаются как `NOT_APPLICABLE` до commissioning соответствующих компонентов. Это **первая стадия** глобального readiness gate, а не завершённая проверка всех будущих сервисов.
+4. С помощью штатного Ansible `command` запускает небольшой TLS-клиент из того же публичного Git checkout `scripts/pve-https-credential-check.py`: доверенная PVE CA, имя узла и сохранённый SHA256-отпечаток сертификата проверяются **до передачи пароля**. Только для старой CA PVE 8 снимается флаг `VERIFY_X509_STRICT`; `CERT_REQUIRED`, `check_hostname` и SHA256-pin остаются включены. Пароль передаётся процессу по `stdin` (`no_log`), без argv или файлов, после чего выполняется `POST /api2/json/access/ticket`.
+5. После HTTP 200 и ticket по **новому проверенному HTTPS-соединению** с повторной проверкой SHA256 выполняет `GET /api2/json/nodes`. Только HTTP 200 и наличие ожидаемого узла означает `READY`; `401/403` на первом запросе — `AUTH_FAILED`, на втором — `INSUFFICIENT_PRIVILEGES`. Ошибка CA/имени — `PVE_TLS_CERT_UNTRUSTED`, другая идентичность — `PVE_TLS_IDENTITY_MISMATCH`.
+6. GitHub, MQTT и Cloudflare пока отображаются как `NOT_APPLICABLE` до commissioning соответствующих компонентов. Это **первая стадия** глобального readiness gate, а не завершённая проверка всех будущих сервисов.
 
-Ticket, пароль, API token и request body не выводятся в Task output. №06 ничего не развёртывает и не меняет на PVE.
+Ticket, пароль, API token и request body не выводятся в Task output. Параметры с паролем не передаются в CLI argv и не сохраняются в отдельный файл. №06 ничего не развёртывает и не меняет на PVE.
 
 ## Исправление inventory в Semaphore 2.20 (№00 завершилась с skipped: no hosts matched)
 

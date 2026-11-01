@@ -58,7 +58,11 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertIn("'type': 'var'", OBTAIN)
         self.assertIn("DH_PVE_ROOT_PASSWORD", CHECK)
         self.assertIn("root@pam", CHECK)
-        self.assertIn("/api2/json/access/ticket", CHECK)
+        verifier = (ROOT / "scripts/pve-https-credential-check.py").read_text()
+        self.assertIn("/api2/json/access/ticket", verifier)
+        self.assertIn("/api2/json/nodes", verifier)
+        self.assertIn("ssl.create_default_context", verifier)
+        self.assertIn("ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT", verifier)
         self.assertNotIn("api_token", CHECK.lower())
 
     def test_partial_keep_and_safe_write_contract(self):
@@ -85,7 +89,7 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertIn("AUTH_FAILED", CHECK)
         self.assertIn("UNREACHABLE", CHECK)
         self.assertIn("CREDENTIAL_READINESS_BLOCKED", CHECK)
-        self.assertIn("validate_certs: true", CHECK)
+        self.assertIn("stdin_add_newline: false", CHECK)
         self.assertNotIn("validate_certs: false", CHECK)
         self.assertIn("no_log: true", CHECK)
         self.assertNotIn("fleet_master_password", CHECK)
