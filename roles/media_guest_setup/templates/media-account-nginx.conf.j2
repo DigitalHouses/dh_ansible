@@ -14,7 +14,7 @@ server {
     add_header Referrer-Policy no-referrer always;
 
     location ^~ /account/api/ {
-        allow 192.168.11.0/24;
+        allow {{ media_vm.network.ipv4 }};
         deny all;
         access_log off;
         client_max_body_size 512;
@@ -28,7 +28,7 @@ server {
     }
 
     location ^~ /account/ {
-        allow 192.168.11.0/24;
+        allow {{ media_vm.network.ipv4 }};
         deny all;
         add_header Cache-Control "no-store" always;
         try_files $uri $uri/ =404;

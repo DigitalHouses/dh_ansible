@@ -21,20 +21,26 @@
 
 **Новые объекты и исправление паролей:** №05 позволяет повторно ввести только ошибочный credential, оставляя остальные сохранённые значения неизменными. После №05 (сохранение всех credentials) и успешной №06 (проверка) отдельная №07 создаёт приватный GitHub repo через штатный API; её повторное выполнение безопасно проверяет/adopt существующий репозиторий. Репозиторий объекта хранит конфигурацию и inventory, а секреты — только Semaphore. Это целевой контракт [ADR-0021](docs/decisions/0021-semaphore-native-credentials.md), пока **не внедрён**.
 
-**Принятое решение 2026-11-01:** [ADR-0021 — Semaphore-native site credentials](docs/decisions/0021-semaphore-native-credentials.md) заменяет прежний целевой контракт обязательного `site_vault_v1`. №05 — единый ввод credentials дома в штатный Key Store/Variable Groups Secrets; №06 — проверка всего обязательного набора; все обычные задачи запускают свежий preflight. **Код ещё не мигрирован, E2E не принят; старые №05/06 остаются действующей реализацией до безопасного перехода.** Никаких платных компонентов.
+**Принятое решение 2026-11-01:** [ADR-0021 — Semaphore-native site credentials](docs/decisions/0021-semaphore-native-credentials.md) заменяет прежний контракт `site_vault_v1`. В draft PR #101 №05/06 переведены на native Variable Group Secrets и стандартный Ansible URI; **живой E2E новой реализации и №07 ещё не приняты**. До публикации PR стандартный каталог `main` по-прежнему старый. Глобальный preflight для всех рабочих задач — следующий этап; не считать его уже включённым.
 
-**Credentials новых домов:** штатный [однократный site Vault onboarding](docs/runbooks/site-credentials-onboarding.md) — отдельный Ansible Vault на объект, зашифрованный Git, пароль владельца вне runner, проверенное локальное сохранение `0600` и повторное использование через общую роль `fleet_credentials`. Глобальный master Vault прежних домов — только переходная совместимость. Платных сервисов не требуется.
+**Credentials новых домов:** целевой стандарт — [native Semaphore](docs/runbooks/credential-setup.md), без обязательного параллельного site Vault. [Исторический site Vault onboarding](docs/runbooks/site-credentials-onboarding.md) нужен только при сопровождении прежнего профиля, а не для чистой №05/06 на Beta.
 
 **После первого запуска №00 через Semaphore** остальные задачи создаются из GitHub-каталога. Все изменения infrastructure — только через утверждённые Semaphore tasks/Ansible и их согласованные approval. Для операций AI-агентов обязательно читать [операционный runbook](docs/runbooks/ai-agent-execution.md) и [AGENTS.md](AGENTS.md). Общие административные права для установки ПО и управления сервисами задаются по каждому managed target согласно [ADR-0020](docs/decisions/0020-infrastructure-privilege-and-software-installation.md), а не отдельными root-workers для каждого номера задачи.
 
 **Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
 
+## Локаль PVE и Ansible runner
+
+**Единое значение для headless Debian/Proxmox: `LANG=C.UTF-8`.** Не задавать `LC_ALL` глобально: он переопределяет все `LC_*`. Устанавливать его только для конкретной команды, если нужно подавить унаследованную с PVE несовместимую локаль. Новый Bootstrap нормализует окружение перед `pct`, гостевой installer записывает `/etc/default/locale`, а systemd Semaphore уже получает `LANG=C.UTF-8` и `LC_ALL=C.UTF-8` локально в unit.
+
+**На уже установленном CT1231 код будущего Bootstrap сам собой не применяется.** Оператор один раз задаёт локаль PVE через `localectl set-locale LANG=C.UTF-8`, заново открывает Shell и проверяет `locale` / `locale -a`; для существующего runner аналогично правит `/etc/default/locale` под root, **не пересоздавая CT**. При ручном `pct exec` можно изолировать запуск: `pct exec 1231 -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 /opt/ansible/venv/bin/ansible-playbook --version`. Не ставить локаль `en_US.UTF-8`, если её нет в `locale -a`.
+
 ## Единая точка входа · Tiny Bootstrap
 
-Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE.
+Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/6fef78d3cbd347552267c1bfd14bb0db5a683771/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/d7e1cf825eb9019a6f8e05cfe4c97d8c2fd7e051/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
@@ -52,18 +58,15 @@ Bootstrap **не** устанавливает Ansible на PVE, не требу�
 
 Начальный адрес Semaphore: `https://<runner-ip>:3000/`. Логин: `admin`. Пароль хранится только внутри LXC: `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`; не публиковать пароль в чат. Логи установщика на PVE: `/var/log/digitalhouses/ansible/tiny-*.log` (`root:root 0600`).
 
-## Первое получение credentials — задачи №05 и №06
+## Первое получение credentials — задачи №05 и №06 (Semaphore Beta)
 
-После `00-Обновить список задач` в UI появляются две дополнительные административные операции:
+**После свежего Bootstrap** в Semaphore есть только №00. Она синхронизирует каталог **из main**; запускать её для новой схемы следует **после принятия соответствующего PR**. Не проводить ручную замену root-owned seeder и не возвращаться к старому GitHub Device Flow/Fleet master password.
 
-- **`05-Получить credentials GitHub`** — GitHub CLI показывает в журнале одноразовый код. Оператор подтверждает его на `https://github.com/login/device`; задача ждёт разрешения, проверяет доступ к `DigitalHouses/dh_ansible_fleet_detail` и клонирует private Fleet на runner. Пока GitHub-токен работает, повторный ввод кода не требуется.
-- **`06-Ввести master password Fleet Vault`** — одно скрытое поле Semaphore типа **secret**. Пароль проверяется через `ansible-vault view`, сохраняется локально `0600` и остаётся доступным после перезагрузки. Не передавать его в чат или терминальный журнал.
+- **№05 · Ввести credentials объекта:** штатная Survey-форма с пятью необязательными полями. Для первого подключения чистого Proxmox нужен **только пароль PVE root**. Пустые поля оставляют сохранённые credentials без изменений. Ansible сохраняет новые значения через native Semaphore API в Variable Group Secrets, без собственного Python-клиента. Пароль не выводится в задачах.
+- **№06 · Проверить credentials объекта:** не требует повторного пароля, берёт PVE secret из Semaphore, проверяет сертификат и идентичность PVE, аутентифицируется `root@pam` через HTTPS ticket и читает список PVE nodes. Без удостоверенного TLS доверия выводит `PVE_TRUST_NOT_COMMISSIONED`, **не передавая пароль**. GitHub/MQTT/Cloudflare пока `NOT_APPLICABLE` до своих этапов.
 
-**Хранение — минимально:** `/var/lib/semaphore/.dh-credentials/` (пользователь `semaphore`, каталог `0700`; GitHub CLI config, private Fleet checkout и `fleet-vault-password` с `0600`). Master password хранится локально в открытом виде **по решению оператора**, но не в публичном Git. Никаких новых служб или центрального Credentials Provider.
+До №06 выполняется принятый общий [PVE native commissioning](docs/runbooks/pve-native-commissioning.md) с PVE root Shell (публичный CA, SSH/TLS trust, без дополнительных паролей). Подробный [операторский runbook №05/06](docs/runbooks/credential-setup.md). **Live E2E новой схемы и №07 пока не приняты.**
 
-**Для Ansible:** role `fleet_credentials` читает Vault через сохранённый пароль и предоставляет `fleet_site_credentials` только для текущего `site.id`. Другие задачи должны явно включать эту роль, когда им нужны secrets; старые protected workers/PVE Access не появляются автоматически от успешной №05/06.
-
-**Следующий тест:** по новому явному разрешению владельца удаляем **только идентифицированный тестовый CT1231** и запускаем эту же единую команду **с нуля**. Новая закреплённая ревизия сразу содержит поддержку поля `secret` и задачи №05/06 — без ручного обновления файлов, `--resume` или правки старого LXC. Живой E2E этой ревизии ещё не проведён; №05/06 будут проверены отдельно после №00.
 
 ## PVE Access · отдельная приёмка, не часть Bootstrap
 

@@ -170,7 +170,7 @@ def test_cli_manifest_requires_explicit_service_activation_flags():
         base = Path(d)
         path = base / "manifest.json"
         data = {"schema": 1, "owner": "serzhan", "pool": "serzhan-pool",
-                "guest_ipv4": "192.168.11.238",
+                "guest_ipv4": "198.51.100.238",
                 "apps": {x: True for x in mod.KNOWN}}
         path.write_text(json.dumps(data))
         path.chmod(0o600)

@@ -24,8 +24,8 @@ import urllib.error
 import ssl
 import time
 
-SEMAPHORE_VERSION = "2.19.16"
-SEMAPHORE_DEB_SHA256 = "56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8"
+SEMAPHORE_VERSION = "2.20.16-beta9"
+SEMAPHORE_DEB_SHA256 = "7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a"
 SEMAPHORE_URL = ("https://github.com/semaphoreui/semaphore/releases/download/v"
                  + SEMAPHORE_VERSION + "/semaphore_" + SEMAPHORE_VERSION
                  + "_linux_amd64.deb")
@@ -65,6 +65,16 @@ def standardize_locale():
     os.environ["LC_ALL"] = "C.UTF-8"
     os.environ.pop("LANGUAGE", None)
     print("GUEST_LOCALE=PASS C.UTF-8", flush=True)
+
+
+def persist_guest_locale():
+    """Use the Debian/PAM default so future login shells get UTF-8 too."""
+    path = Path("/etc/default/locale")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise Blocked("Unexpected /etc/default/locale file type")
+    path.write_text("LANG=C.UTF-8\n", encoding="ascii")
+    os.chmod(path, 0o644)
+    print("GUEST_LOCALE_PERSISTENT=PASS C.UTF-8", flush=True)
 
 
 def prepare_ansible_runtime_access():
@@ -221,7 +231,7 @@ def provision(site, runner_ip, requirements, *, resume_ansible=False):
     prepare_ansible_runtime_access()
     print("ANSIBLE_RUNTIME=PASS", flush=True)
 
-    release = Path("/root/dh-semaphore-2.19.16.deb")
+    release = Path(f"/root/dh-semaphore-{SEMAPHORE_VERSION}.deb")
     if release.exists() or release.is_symlink():
         raise Blocked("Stale Semaphore release file")
     # HTTPS verifies the upstream server; pinned SHA verifies exact release bytes.
@@ -347,6 +357,7 @@ def main(argv=None):
     if not args.apply:
         print("MODE=READ_ONLY; no packages/services changed")
         return 0
+    persist_guest_locale()
     provision(args.site, args.runner_ip, args.requirements,
               resume_ansible=args.resume_ansible)
     return 0

@@ -7,24 +7,61 @@
       "view": "01 · Подготовка"
     },
     {
-      "title": "05-Получить credentials GitHub",
-      "playbook": "playbooks/request-github-credentials.yml",
-      "view": "01 · Подготовка"
-    },
-    {
-      "title": "06-Ввести master password Fleet Vault",
-      "playbook": "playbooks/request-fleet-master-password.yml",
+      "title": "05-Ввести credentials объекта",
+      "playbook": "playbooks/obtain-site-credentials.yml",
       "view": "01 · Подготовка",
       "survey_vars": [
         {
-          "name": "fleet_master_password",
-          "title": "Master password Fleet Vault",
-          "description": "Введите один раз. Пароль сохранится в runner и будет использоваться после перезагрузки.",
+          "name": "DH_INPUT_GITHUB_PROVISION_TOKEN",
+          "title": "GitHub · создание репозитория объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. site repository has not been provisioned.",
           "type": "secret",
-          "required": true,
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_MQTT_USERNAME",
+          "title": "MQTT · логин объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. site uses PVE Agent or Plex Agent with remote MQTT broker.",
+          "type": "text",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_MQTT_PASSWORD",
+          "title": "MQTT · пароль объекта",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. same as mqtt_username; one reusable credential pair for all enabled DH agents.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_PVE_ROOT_PASSWORD",
+          "title": "Proxmox VE · пароль root",
+          "description": "Пароль root чистого PVE; для API используется root@pam. Пустое поле сохраняет прежний пароль.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_INPUT_CLOUDFLARE_API_TOKEN",
+          "title": "Cloudflare · API token",
+          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if target site actually commissions Cloudflare changes with a permitted site-specific credential; do not duplicate org-wide unrestricted token into each site.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
           "values": []
         }
       ]
+    },
+    {
+      "title": "06-Проверить credentials объекта",
+      "playbook": "playbooks/check-site-credentials.yml",
+      "view": "01 · Подготовка"
     },
     {
       "title": "10-Создание туннеля CF до PVE",

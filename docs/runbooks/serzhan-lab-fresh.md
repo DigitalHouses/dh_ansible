@@ -1,68 +1,23 @@
-# Fresh Ansible runner: serzhan-lab (Jonsbo)
+# Fresh Ansible runner — serzhan-lab (Jonsbo)
 
-**Статус на 2026-10-31:** подготовлен код, но destructive переустановка
-CT1231 на новом PVE **ещё не выполнялась**. В private Fleet создан
-`inventories/serzhan-lab` с локальным runner, PVE-метаданными и
-неразрушаемым предварительным описанием VM2232.
+Этот документ описывает **отдельный** site `serzhan-lab`. Для сохранения site `serzhan-home` при повторной установке в Bootstrap следует указать именно `serzhan-home`.
 
-## Границы
+## Правило: удаление и установка — разные операции
 
-- Новый site ID: `serzhan-lab`, owner `serzhan`, type `lab`.
-- Новый Ansible: CT1231, `ansible-serzhan-lab`, адрес последнего
-  октета `.231` от реальной сети PVE `vmbr0`.
-- Будущий Media Server: VM2232, `192.168.11.232/24`.
-- PVE сохраняет **фактический** адрес, не вычисляемый по site/VMID.
-- HAOS VM2253, другие гости и физические диски не изменяются.
-- Старый runner CT1231, `ansible-serzhan-home`, и **только он**
-  может быть удалён после точной проверки hostname, IP, rootfs,
-  unprivileged и отсутствия внешних mount points.
-- Не переносить старые сертификаты, GitHub OAuth, Fleet Vault password,
-  SSH private keys или PVE root-worker из `serzhan-home`.
-  Новому site нужны собственные credentials и первая авторизация.
+**Стандартный** `bootstrap/install.sh` не удаляет и не перезаписывает LXC/VM. При существующем CT/VM 1231 он возвращает `BLOCKED`. Никаких автоматических `pct stop`, `pct destroy`, очистки диска или миграции credentials в нём нет.
 
-## Одноразовое создание
+Если владелец **отдельно** разрешил уничтожение именно CT1231, оператор предварительно проверяет на PVE его hostname, IP, rootfs, mounts и чужие зависимости, после чего вручную удаляет его из PVE UI либо отдельными командами Proxmox. **Никакого сценария совмещённого удаления и установки нет.** Не удалять VM2253 и другие гости.
 
-В Shell фактического PVE под root скачать
-`bootstrap/replace-site-runner.sh` по **закреплённому SHA** и вызвать:
+После того как `pct config 1231` больше не находит LXC, а `qm config 1231` не находит VM, выполняется **только стандартный Bootstrap**, закреплённый по проверенному commit. Актуальный источник команды — [README](../../README.md#единая-точка-входа--tiny-bootstrap); старые replacement-скрипты запрещены.
+
+При установке `serzhan-lab` получают новый CT1231 `ansible-serzhan-lab`, IP `<runner-IP>/24` для PVE с `vmbr0` в сети <PVE-LAN>/24. Новая установка: Debian 13 → pinned Git → Ansible + Semaphore → только задача №00. Старые сертификаты, токены, база Semaphore, Vault, SSH-ключи **не переносятся**.
+
+## Приёмка
+
+После `BOOTSTRAP_FRESH_DONE=PASS` проверить `pct exec 1231 -- semaphore version`, `pct exec 1231 -- systemctl is-active digitalhouses-semaphore.service`, HTTP(S) доступность интерфейса, единственную №00. Начальный пароль читается локально на PVE:
 
 ```bash
-bash replace-site-runner.sh serzhan-home serzhan-lab <verified-40-char-sha> <actual-PVE-IP>
+pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password
 ```
 
-Скрипт:
-1. Подтверждает реальный PVE IP, доступность Debian 13 template и
-   идентичность исключительно CT1231.
-2. Удаляет только проверенный CT1231 с его rootfs.
-3. Вызывает штатный fresh `bootstrap/install.sh` с site `serzhan-lab`.
-4. Проверяет hostname, IP нового LXC и локальную запись фактического PVE.
-5. Выводит `FRESH_RUNNER=PASS` и адрес Semaphore.
-
-Никакого удаления VM2253, VM2232 или raw disks в этом сценарии нет.
-При несоответствии old CT проверкам — `BLOCKED`, **не пытаться**
-подгонять значения командой наугад.
-
-## Первичный запуск
-
-1. Открыть новый Semaphore `https://192.168.11.231:3000/`;
-   начальный пароль читать **только локально** с PVE с помощью
-   `pct exec 1231 -- cat /root/dh-semaphore-initial-admin-password`.
-2. Запустить №00 для получения каталога.
-3. До №06 в private Fleet должен быть **отдельный зашифрованный**
-   `secrets/sites/serzhan-lab.vault.yml` (см.
-   [site Vault onboarding](site-credentials-onboarding.md)).
-   Затем запустить №05, подтвердить GitHub Device Flow и в №06
-   один раз ввести пароль **этого Vault**, не прежнего общего Fleet.
-   Копия пароля хранится на runner `0600`; внешний recovery password
-   остаётся у владельца. Без encrypted site Vault №06 завершается
-   `SITE_VAULT_MISSING`, никаких секретов старого дома не подставляет.
-4. Запустить №40 и привязать новое устройство Remote Desktop Commander.
-   Старое подключение `ansible-serzhan-home` перестанет работать.
-5. Выполнить [общее подключение PVE](pve-native-commissioning.md);
-   после этого №50 выполняет read-only аудит без legacy worker.
-6. По живому read-only аудиту устройств дополнить `serzhan-lab/media_vm.yml`
-   реальными дисками/WWN и PCI. До этого `approvals.provision: false`,
-   запуск №80 запрещён. №80/81 в текущем каталоге всё ещё зависят
-   от прежнего PVE worker и нуждаются в отдельной миграции.
-
-`serzhan-home` остаётся отдельным объектом Fleet (VM2238/.238);
-старые диски и UUID из него не использовать на Jonsbo.
+№00 запускается вручную в Semaphore. Новые credentials объекта создаются по утверждённому ADR-0021 отдельно после установки. Это не разрешает автоматическое развёртывание Media Server/VM2232; HAOS VM2253 и остальные гости остаются вне изменений.
