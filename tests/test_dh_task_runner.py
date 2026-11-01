@@ -117,8 +117,14 @@ def test_live_catalog_all_tasks_have_safe_unique_playbooks():
     for entry in cat["tasks"]:
         selected = module.resolve_task(cat, entry["title"][:2])
         assert (ROOT / selected["playbook"]).is_file()
-        for variable in selected.get("survey_vars", []):
-            assert variable["type"] == "enum"
+        survey = selected.get("survey_vars", [])
+        for variable in survey:
+            assert variable["type"] in {"enum", "secret", "string"}
+        if any(variable["type"] != "enum" for variable in survey):
+            # This legacy CLI intentionally cannot transmit native Semaphore
+            # secret/text Survey data: only the Semaphore UI/API can do so.
+            with pytest.raises(module.Blocked, match="SURVEY_SCHEMA_INVALID"):
+                module.parse_survey(survey, [])
 
 
 def test_security_denials_are_not_retried_via_any_alternate_executor():
