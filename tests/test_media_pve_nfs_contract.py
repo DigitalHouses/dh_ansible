@@ -18,20 +18,20 @@ def desired():
     data = {
         "name": "mediaserver-serzhan",
         "vmid": 2238,
-        "network": {"ipv4": "192.168.11.238/24"},
+        "network": {"ipv4": "198.51.100.238/24"},
         "storage": {"pool_name": "serzhan-home-pool"},
         "backup_export": {"storage_id": "dh_media_backups",
                           "path": "/serzhan-home-pool/backups/pve",
-                          "pve_host": "192.168.11.30"},
+                          "pve_host": "198.51.100.30"},
     }
-    return data, {"host": "192.168.11.30"}
+    return data, {"host": "198.51.100.30"}
 
 
 def existing_config():
     return ("dir: local\n\tpath /var/lib/vz\n\tcontent backup\n"
             "nfs: dh_media_backups\n"
             "\tpath /mnt/pve/dh_media_backups\n"
-            "\tserver 192.168.11.238\n"
+            "\tserver 198.51.100.238\n"
             "\texport /serzhan-home-pool/backups/pve\n"
             "\tcontent backup\n")
 
@@ -81,7 +81,7 @@ def test_mismatched_existing_storage_refuses_changes():
     d, pve = desired()
     with TemporaryDirectory() as tmp:
         cfg = Path(tmp) / "storage.cfg"
-        cfg.write_text(existing_config().replace("192.168.11.238", "198.51.100.2"))
+        cfg.write_text(existing_config().replace("198.51.100.238", "198.51.100.2"))
         with patch.object(m, "Path", lambda _: cfg), \
              patch.object(m, "qm", lambda *a: "status: running"), \
              patch.object(m, "config", lambda _: {"name": d["name"]}), \
