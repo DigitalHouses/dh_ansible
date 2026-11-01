@@ -67,7 +67,19 @@ qm config 1231
 **Live acceptance:** четырехэтапная установка PASS по операторскому журналу; №00 после установки и новые credentials workflows PENDING.
 
 
-## Изолированная проверка синтаксиса без установки (ещё не запускалась)
+## Изолированная проверка синтаксиса на CT1231 — PASS
+
+Владелец выполнил штатный `ansible-playbook --syntax-check` для обоих новых playbooks после исправления локали PVE и runner. Лог подтверждает:
+
+```text
+playbook: /tmp/tmp.oJNX3HHN0o/repo/playbooks/obtain-site-credentials.yml
+playbook: /tmp/tmp.oJNX3HHN0o/repo/playbooks/check-site-credentials.yml
+ANSIBLE_05_06_SYNTAX=PASS
+```
+
+Исполнялся Ansible Core 2.21.4 на уже установленном CT1231. Применения credentials/API writes не было. Модульные тесты, выполнение Survey и HTTPS Proxmox E2E **ещё не приняты**. Следующий шаг — выполнить unit-тесты из **того же PR**, затем изолированный API E2E на dummy secrets и уже после этого отдельный live test UI.
+
+## Изолированный сценарий повторной проверки (справочно)
 
 При отсутствии Remote Desktop Commander новая ветка может быть проверена на уже работающем CT1231 из **PVE root Shell**, не меняя git checkout Semaphore, базу, credentials или systemd. Временный checkout удаляется по завершении. Это тест **не** применяет №05/06 и не создаёт Secret Survey.
 
