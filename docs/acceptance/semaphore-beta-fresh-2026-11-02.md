@@ -108,3 +108,24 @@ pct exec 1231 -- bash -c '
 
 **Ожидаемый результат — не факт приёмки**, пока не получен настоящий вывод команды. На время теста секреты владельца не требуются. Пароль PVE в shell / git передавать нельзя.
 
+
+## Изолированный E2E native Semaphore Variable Group (подготовлен, PENDING)
+
+В PR добавлен `tests/e2e_semaphore_native_2_20.py`. Тест создаёт **только временный** Semaphore 2.20 Beta на случайном loopback-порту с отдельной SQLite, сертификатом и тестовой admin identity. Он запускается от непривилегированного пользователя `semaphore`, не читает действующую БД, ключи, API-токен и не использует production порт 3000. Значения строго фиктивные.
+
+Проверки: `type=var` create двух секретов, сохранение несекретного MQTT username, частичное изменение только PVE root secret, сохранение другого secret/ID, отсутствие plaintext в API-ответах и во временной SQLite. Это **API/storage E2E**, а не реальный запуск Ansible №05/№06 или ввод через Semaphore UI.
+
+Команда для PVE root Shell:
+
+```bash
+pct exec 1231 -- runuser -u semaphore -- bash -c '
+set -euo pipefail
+d=$(mktemp -d)
+trap "rm -rf \\"$d\\"" EXIT
+git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \\
+  https://github.com/DigitalHouses/dh_ansible.git "$d/repo"
+/opt/ansible/venv/bin/python "$d/repo/tests/e2e_semaphore_native_2_20.py"
+'
+```
+
+**Ожидаемый финальный маркер:** `SEMAPHORE_BETA_ISOLATED_NATIVE_E2E=PASS`. Пока не получен реальный вывод, статус PENDING. На production Semaphore после этого шага ничего не меняется.
