@@ -9,14 +9,13 @@ Draft PR #101. Production catalog and secrets unchanged.
 Verified inventory: [site-credentials-inventory](../standards/site-credentials-inventory.md),
 machine-readable [catalog/site-credentials.json](../../catalog/site-credentials.json).
 
-One site form with exactly six optional fields:
+One site form with exactly five optional fields:
 
 1. GitHub repository provisioning token (used at initial site creation).
 2. MQTT username.
 3. MQTT password, reused by DH PVE Agent and DH Plex Agent.
-4. PVE API audit token, only if the legacy API workflow is used.
-5. PVE API write token, only if the legacy API workflow is used.
-6. Cloudflare API token, only with an authorized site-scoped
+4. **PVE root password**, stored as native Key Store `login_password` with fixed login=`root` (`root@pam` for PVE API). **No PVE API tokens in the form.**
+5. Cloudflare API token, only with an authorized site-scoped
    Cloudflare integration; the current Cloudflare workers still need
    separate consumer migration.
 
@@ -32,12 +31,10 @@ passed acceptance.
 
 ## Native storage
 
-- Semaphore Variable Groups → Secrets for five sensitive API/MQTT values.
-- The shared MQTT username is stored as a non-secret Variable Group env
-  value in the same group.
-- The separate Key Store remains the native home for generated/commissioned
-  SSH identities (PVE, Git read-only deploy key); do not ask owners to
-  paste private keys into task Survey fields.
+- Semaphore Variable Groups → Secrets for GitHub, MQTT password and Cloudflare (three secret values).
+- The shared MQTT username is stored as a non-secret Variable Group env value.
+- **Native Key Store → Login with Password** contains the entered **PVE root password**. Login is fixed at `root`, and replacing only this password uses `override_secret`.
+- Native Key Store also holds generated/commissioned SSH identities (PVE, Git read-only deploy key); private keys do not need to be pasted into a Survey.
 - Secret Survey inputs use `target: env` on Semaphore 2.19.16,
   not Ansible `--extra-vars` CLI arguments.
 - Task 05 uses the official localhost API, accepted runner-local
@@ -50,7 +47,7 @@ passed acceptance.
 
 - Runner name `ansible-serzhan-home`, Semaphore 2.19.16.
   Read-only live API probe passed; **no live API writes**.
-- 35 pytest tests: semaphore catalog seeder, native credential enrollment,
+- Regression tests: semaphore catalog seeder, native credential enrollment,
   inventory consistency, task design standard — PASS.
 - Python compile and Ansible playbook syntax check — PASS.
   The syntax-only command used a deliberately minimal CLI inventory and
@@ -62,9 +59,11 @@ passed acceptance.
 
   ```text
   ISOLATED_API_LOGIN=PASS
-  SIX_FIELDS_CREATED=PASS
+  FIVE_FIELDS_CREATED=PASS
   ONLY_MQTT_PASSWORD_UPDATED=PASS
   ONLY_MQTT_USERNAME_UPDATED=PASS
+  ONLY_PVE_ROOT_PASSWORD_UPDATED=PASS
+  NATIVE_PVE_ROOT_KEY_STORE_VERIFIED=PASS
   NATIVE_METADATA_VERIFIED=PASS
   SQLITE_SECRETS_ENCRYPTED=PASS
   ISOLATED_TEST_RESOURCES_REMOVED=PASS
@@ -75,17 +74,14 @@ passed acceptance.
 
 ## Gates before merging
 
-1. Confirm actual Semaphore UI Survey displays all 6 fields, accepts
+1. Confirm actual Semaphore UI Survey displays all 5 fields, accepts
    partial submission, and propagates Secret `target: env` without exposing
    values in Ansible stdout, task output, argv or re-run history.
 2. Validate the site-specific catalog migration from legacy №05 without
    losing task ID/history or previously stored credentials. The current
    root-owned Seeder on the installed runner is pinned to an older code
    revision; **changing the public catalog alone does not deploy this Seeder**.
-3. Validate consumer bindings: future №06 and №07 templates must attach the
-   native site credential group correctly. Existing PVE API and Cloudflare
-   workers currently use their prior secret paths and **do not** automatically
-   consume native Semaphore values.
+3. Validate consumer bindings: №06 must check PVE `root@pam` via password-based ticket authentication and distinguish this from SSH-key access. Legacy PVE API-token consumers must be migrated or explicitly blocked; №07 and Cloudflare tasks also need their native Semaphore bindings.
 4. Implement №06 shared readiness check and lifecycle gates, as well as
    №07 private repository provisioning in the approved order.
 5. Verify backup/restore of Semaphore SQLite plus
