@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Task 05: write supplied site credentials to native Semaphore 2.19.16 Variable Groups.
+"""Task 05: save site credentials in native Semaphore 2.19.16 storage.
 
-No secondary secret store. Six optional environment-backed Survey values
-are declared in catalog/site-credentials.json and remain absent/KEEP when blank.
-Git/PVE SSH identities are separately generated/commissioned into native Key Store.
+All five Survey fields are optional: four app/API fields use Variable Groups,
+and the initial PVE root password uses Key Store login_password with fixed
+login root. Existing values are preserved when an input is blank.
+No secondary store, PVE API tokens or password values in task logs.
 """
 import argparse
 import json
@@ -22,6 +23,7 @@ valid_catalog_token = api_module["valid_catalog_token"]
 CATALOG_TOKEN_PATH = Path("/root/dh-semaphore-catalog-api-token")
 REGISTRY_PATH = ROOT / "catalog/site-credentials.json"
 SITE_VARIABLE_GROUP = "DigitalHouses Site Credentials"
+PVE_ROOT_KEY_NAME = "DigitalHouses PVE root (bootstrap)"
 
 
 def exact_named(items, name):
@@ -49,7 +51,7 @@ def registry_fields():
     if manifest.get("schema") != 1 or not isinstance(manifest.get("manual"), list):
         raise Blocked("CREDENTIAL_REGISTRY_SCHEMA_INVALID")
     fields = manifest["manual"]
-    if len(fields) != 6 or len({f.get("id") for f in fields}) != 6:
+    if len(fields) != 5 or len({f.get("id") for f in fields}) != 5:
         raise Blocked("CREDENTIAL_REGISTRY_UNEXPECTED_FIELDS")
     if len({f.get("survey_env") for f in fields}) != len(fields):
         raise Blocked("CREDENTIAL_REGISTRY_DUPLICATE_SURVEY_ENV")
@@ -58,7 +60,8 @@ def registry_fields():
     for field in fields:
         if (field.get("input") not in ("secret", "text")
                 or field.get("store") not in ("variable_group_secret",
-                                              "variable_group_nonsecret")
+                                              "variable_group_nonsecret",
+                                              "key_store_login_password")
                 or not re.fullmatch(r"DH_INPUT_[A-Z0-9_]{4,70}",
                                     str(field.get("survey_env")))
                 or not re.fullmatch(r"DH_[A-Z0-9_]{4,70}",
@@ -106,80 +109,130 @@ def nonsecret_env_json(value):
     return env
 
 
+def save_pve_root_password(api, prefix, project_id, password):
+    """Create/update one native Key Store login_password entry.
+
+    Do not create a PVE API token. The fixed login is root for SSH;
+    Proxmox's API login uses root@pam (verified later in task 06).
+    """
+    if not password:
+        return "KEEP"
+    existing = exact_named(
+        api.request("GET", prefix + "/keys?sort=name&order=asc"),
+        PVE_ROOT_KEY_NAME)
+    body = {
+        "name": PVE_ROOT_KEY_NAME,
+        "project_id": project_id,
+        "type": "login_password",
+        "login_password": {"login": "root", "password": password},
+    }
+    if existing is None:
+        created = api.request("POST", prefix + "/keys", body)
+        key_id = positive_id(created)
+        outcome = "CREATED"
+    else:
+        if (existing.get("type") != "login_password"
+                or existing.get("project_id") not in (None, project_id)):
+            raise Blocked("PVE_ROOT_KEY_IDENTITY_MISMATCH")
+        key_id = positive_id(existing)
+        body.update({"id": key_id, "override_secret": True})
+        api.request("PUT", prefix + "/keys/" + str(key_id), body)
+        outcome = "UPDATED"
+    after = api.request("GET", prefix + "/keys/" + str(key_id))
+    if (not isinstance(after, dict) or after.get("id") != key_id
+            or after.get("name") != PVE_ROOT_KEY_NAME
+            or after.get("type") != "login_password"):
+        raise Blocked("PVE_ROOT_KEY_METADATA_NOT_SAVED")
+    # Do not fetch or return the password. Task 06 validates root@pam login.
+    return outcome
+
+
 def save_fields(api, site, supplied, fields):
+    actions = {field["id"]: "KEEP" for field in fields}
     if not supplied:
-        return {f["id"]: "KEEP" for f in fields}
+        return actions
     project_id = project_id_for_site(api, site)
     prefix = "/project/" + str(project_id)
-    group_path = prefix + "/environment"
-    groups = api.request("GET", group_path + "?sort=name&order=asc")
-    existing = exact_named(groups, SITE_VARIABLE_GROUP)
-    if existing is None:
-        current = None
-        nonsecret = {}
-        secrets_existing = []
-        group_id = None
-    else:
-        group_id = positive_id(existing)
-        current = api.request("GET", group_path + "/" + str(group_id))
-        validate_existing_group(current, project_id)
-        nonsecret = nonsecret_env_json(current.get("env"))
-        secrets_existing = current.get("secrets") or []
-        if not isinstance(secrets_existing, list):
-            raise Blocked("SITE_CREDENTIAL_GROUP_SECRETS_INVALID")
-    specs = []
-    actions = {}
-    for field in fields:
-        credential_id = field["id"]
-        if credential_id not in supplied:
-            actions[credential_id] = "KEEP"
-            continue
-        value = supplied[credential_id]
-        name = field["runtime_name"]
-        if field["store"] == "variable_group_nonsecret":
-            nonsecret[name] = value
-            actions[credential_id] = "UPDATED" if current is not None else "CREATED"
-            continue
-        previous = exact_named(secrets_existing, name)
-        if previous is None:
-            op = "create"
+    variable_fields = [field for field in fields
+                       if field["store"] != "key_store_login_password"]
+    variable_supplied = {field["id"]: supplied[field["id"]]
+                         for field in variable_fields if field["id"] in supplied}
+    if variable_supplied:
+        group_path = prefix + "/environment"
+        groups = api.request("GET", group_path + "?sort=name&order=asc")
+        existing = exact_named(groups, SITE_VARIABLE_GROUP)
+        if existing is None:
+            current = None
+            nonsecret = {}
+            secrets_existing = []
+            group_id = None
         else:
-            if previous.get("type") != "env":
-                raise Blocked("SITE_CREDENTIAL_SECRET_TYPE_MISMATCH: " + credential_id)
-            op = "update"
-        record = {"name": name, "type": "env",
-                  "operation": op, "secret": value}
-        if op == "update":
-            record["id"] = positive_id(previous)
-        specs.append(record)
-        actions[credential_id] = "CREATED" if op == "create" else "UPDATED"
-    if current is None:
-        body = {"project_id": project_id, "name": SITE_VARIABLE_GROUP,
-                "json": "{}", "env": json.dumps(nonsecret),
-                "secrets": specs}
-        created = api.request("POST", group_path, body)
-        group_id = positive_id(created)
-    else:
-        body = {"id": group_id, "project_id": project_id,
-                "name": SITE_VARIABLE_GROUP,
-                "json": current["json"], "env": json.dumps(nonsecret),
-                "secrets": specs}
-        api.request("PUT", group_path + "/" + str(group_id), body)
-    after = api.request("GET", group_path + "/" + str(group_id))
-    validate_existing_group(after, project_id)
-    actual = nonsecret_env_json(after.get("env"))
-    for field in fields:
-        credential_id = field["id"]
-        if credential_id not in supplied:
-            continue
-        name = field["runtime_name"]
-        if field["store"] == "variable_group_nonsecret":
-            if actual.get(name) != supplied[credential_id]:
-                raise Blocked("SITE_CREDENTIAL_METADATA_NOT_SAVED: " + credential_id)
+            group_id = positive_id(existing)
+            current = api.request("GET", group_path + "/" + str(group_id))
+            validate_existing_group(current, project_id)
+            nonsecret = nonsecret_env_json(current.get("env"))
+            secrets_existing = current.get("secrets") or []
+            if not isinstance(secrets_existing, list):
+                raise Blocked("SITE_CREDENTIAL_GROUP_SECRETS_INVALID")
+        specs = []
+        for field in variable_fields:
+            credential_id = field["id"]
+            if credential_id not in variable_supplied:
+                continue
+            value = variable_supplied[credential_id]
+            name = field["runtime_name"]
+            if field["store"] == "variable_group_nonsecret":
+                nonsecret[name] = value
+                actions[credential_id] = (
+                    "UPDATED" if current is not None else "CREATED")
+                continue
+            previous = exact_named(secrets_existing, name)
+            if previous is None:
+                op = "create"
+            else:
+                if previous.get("type") != "env":
+                    raise Blocked("SITE_CREDENTIAL_SECRET_TYPE_MISMATCH: "
+                                  + credential_id)
+                op = "update"
+            record = {"name": name, "type": "env",
+                      "operation": op, "secret": value}
+            if op == "update":
+                record["id"] = positive_id(previous)
+            specs.append(record)
+            actions[credential_id] = (
+                "CREATED" if op == "create" else "UPDATED")
+        if current is None:
+            body = {"project_id": project_id, "name": SITE_VARIABLE_GROUP,
+                    "json": "{}", "env": json.dumps(nonsecret),
+                    "secrets": specs}
+            created = api.request("POST", group_path, body)
+            group_id = positive_id(created)
         else:
-            item = exact_named(after.get("secrets") or [], name)
-            if item is None or item.get("type") != "env":
-                raise Blocked("SITE_CREDENTIAL_METADATA_NOT_SAVED: " + credential_id)
+            body = {"id": group_id, "project_id": project_id,
+                    "name": SITE_VARIABLE_GROUP,
+                    "json": current["json"], "env": json.dumps(nonsecret),
+                    "secrets": specs}
+            api.request("PUT", group_path + "/" + str(group_id), body)
+        after = api.request("GET", group_path + "/" + str(group_id))
+        validate_existing_group(after, project_id)
+        actual = nonsecret_env_json(after.get("env"))
+        for field in variable_fields:
+            credential_id = field["id"]
+            if credential_id not in variable_supplied:
+                continue
+            name = field["runtime_name"]
+            if field["store"] == "variable_group_nonsecret":
+                if actual.get(name) != variable_supplied[credential_id]:
+                    raise Blocked(
+                        "SITE_CREDENTIAL_METADATA_NOT_SAVED: " + credential_id)
+            else:
+                item = exact_named(after.get("secrets") or [], name)
+                if item is None or item.get("type") != "env":
+                    raise Blocked(
+                        "SITE_CREDENTIAL_METADATA_NOT_SAVED: " + credential_id)
+    if "pve_root_password" in supplied:
+        actions["pve_root_password"] = save_pve_root_password(
+            api, prefix, project_id, supplied["pve_root_password"])
     return actions
 
 
