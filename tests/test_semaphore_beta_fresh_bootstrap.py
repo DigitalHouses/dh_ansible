@@ -1,11 +1,12 @@
-"""Offline contract: fresh Debian 13 site runner uses pinned Semaphore 2.20 Beta."""
+"""Offline contract: ordinary fresh Bootstrap, not a guest replacement workflow."""
 from pathlib import Path
+import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 GUEST = (ROOT / "bootstrap/semaphore-guest-install.py").read_text(encoding="utf-8")
-REPLACE = (ROOT / "bootstrap/replace-site-runner.sh").read_text(encoding="utf-8")
 INSTALL = (ROOT / "bootstrap/install.sh").read_text(encoding="utf-8")
+TASK_00 = (ROOT / "bootstrap/task-00-setup.sh").read_text(encoding="utf-8")
 
 
 class FreshBetaBootstrap(unittest.TestCase):
@@ -16,23 +17,23 @@ class FreshBetaBootstrap(unittest.TestCase):
         self.assertIn("sha != SEMAPHORE_DEB_SHA256", GUEST)
         self.assertIn('command("semaphore", "version")', GUEST)
 
-    def test_same_site_fresh_rebuild_supported(self):
-        self.assertIn('OLD_SITE="$1"', REPLACE)
-        self.assertIn('NEW_SITE="$2"', REPLACE)
-        self.assertNotIn('NEW_SITE != "$OLD_SITE"', REPLACE)
-        self.assertIn('pct destroy "$CTID"', REPLACE)
-        self.assertIn('grep -Fxq "hostname: ansible-$OLD_SITE"', REPLACE)
-        self.assertIn("grep -Fxq 'unprivileged: 1'", REPLACE)
-        self.assertIn('rootfs: local-lvm:', REPLACE)
-        self.assertIn("CTID=1231", REPLACE)
-        self.assertIn('EXPECTED_PVE_IP="$4"', REPLACE)
+    def test_standard_bootstrap_never_deletes_or_reuses_guests(self):
+        self.assertFalse((ROOT / "bootstrap/replace-site-runner.sh").exists())
+        self.assertIn('CTID=1231', INSTALL)
+        self.assertIn('if pct config "$CTID" >/dev/null 2>&1 || qm config "$CTID" >/dev/null 2>&1;', INSTALL)
+        self.assertIn('BLOCKED: guest ID $CTID already exists; fresh Bootstrap only', INSTALL)
+        for command in ("pct destroy", "pct stop", "qm destroy", "qm stop", "--resume"):
+            self.assertNotIn(command, INSTALL)
+        self.assertIn("--protection 1", INSTALL)
+        self.assertIn("--unprivileged 1", INSTALL)
 
-    def test_normal_bootstrap_remains_fresh_only_and_seeds_task_zero(self):
-        self.assertIn("CTID=1231", INSTALL)
-        self.assertIn("CODE_RELEASE=", INSTALL)
-        self.assertNotIn("pct destroy", INSTALL)
-        self.assertIn("bootstrap/task-00-setup.sh", INSTALL)
+    def test_pinned_four_stage_install_seeds_only_task_zero(self):
+        self.assertRegex(INSTALL, r'CODE_RELEASE="[0-9a-f]{40}"')
+        self.assertIn('bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh', INSTALL)
         self.assertIn("BOOTSTRAP_FRESH_DONE=PASS", INSTALL)
+        self.assertEqual(re.findall(r'=== ([1-4])/4', INSTALL), ["1", "2", "3", "4"])
+        self.assertIn('templates[0].get("name") == "00-Обновить список задач"', TASK_00)
+        self.assertIn("TASK_00_ONLY=PASS", TASK_00)
 
 
 if __name__ == "__main__":
