@@ -41,6 +41,8 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/check-site-credentials.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
+      - name: Validate in-place inventory upgrade shell syntax
+        run: bash -n bootstrap/upgrade-semaphore-site-inventory.sh
       - name: Refuse silent Task 00 success when Semaphore file inventory is missing
         run: |
           set -eu
