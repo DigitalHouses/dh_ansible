@@ -1,70 +1,97 @@
-# Native Semaphore credentials — pilot 05 (2026-11-01)
+# Native Semaphore credentials — №05, current-scope form candidate
 
-**Status: CODE + ISOLATED API E2E PASS; LIVE TASK 05 IN SEMAPHORE NOT YET ACCEPTED.**
+**Status: CODE + ISOLATED ACTUAL SEMAPHORE 2.19.16 API E2E PASS.
+USER-FACING TASK 05 UI E2E NOT YET ACCEPTED.**
+Draft PR #101. Production catalog and secrets unchanged.
 
-## Scope
+## Source-based scope of Task 05
 
-A staging branch implements `05-Ввести credentials объекта` with **two
-explicitly dummy-only optional Secret Survey fields**:
+Verified inventory: [site-credentials-inventory](../standards/site-credentials-inventory.md),
+machine-readable [catalog/site-credentials.json](../../catalog/site-credentials.json).
 
-- `DH_TEST_KEYSTORE_PASSWORD` → Key Store login_password,
-  `DH TEST ONLY - Login Password`;
-- `DH_TEST_VARIABLE_SECRET` → Variable Groups Secrets (`env`),
-  `DH TEST ONLY - Secret Variables`.
+One site form with exactly six optional fields:
 
-Both fields have `target: env` in Semaphore 2.19.16 to keep submitted
-passwords out of Ansible `--extra-vars` argv. Blank field = KEEP;
-updates go through official `override_secret` / environment
-`secrets[].operation: update`. The Python helper uses only the
-existing localhost Semaphore API, already-pinned TLS CA and the
-root-owned API token from the accepted Bootstrap. It runs under
-ordinary Ansible `become` within the same site runner LXC.
-It neither creates a new credential store nor touches PVE.
+1. GitHub repository provisioning token (used at initial site creation).
+2. MQTT username.
+3. MQTT password, reused by DH PVE Agent and DH Plex Agent.
+4. PVE API audit token, only if the legacy API workflow is used.
+5. PVE API write token, only if the legacy API workflow is used.
+6. Cloudflare API token, only with an authorized site-scoped
+   Cloudflare integration; the current Cloudflare workers still need
+   separate consumer migration.
 
-## Verified on authorized runner (read-only for the live Semaphore)
+No manual Plex agent API token, media application passwords, Radarr/Sonarr/
+Prowlarr API keys, PVE SSH private key, NUT PRIMARY password or Home Assistant
+API token is required by the confirmed current published task catalog.
+These values are either generated/commissioned by their own system,
+auto-provided by HAOS, or genuinely deferred until a task needs them.
 
-- Runner: `ansible-serzhan-home`, Semaphore binary `2.19.16`.
-- Live API read-only probe: site project validated; Key Store and Variable
-  Groups list operations PASS; **zero live writes**.
-- `python3 -m unittest ... test_semaphore_native_obtain_pilot.py`: 7 PASS.
-- `pytest ... test_semaphore_project.py test_semaphore_native_obtain_pilot.py`:
-  **29 PASS** in temporary test-only virtual environment.
-- Python compilation: PASS.
-- `ansible-playbook --syntax-check`: PASS (initial host-pattern warning from
-  intentionally minimal CLI inventory, not a playbook validation error).
+**Important:** The form contract is candidate v1; no actual production
+credentials should be submitted until the protected UI secret path has
+passed acceptance.
 
-## Actual Semaphore 2.19.16 integration
+## Native storage
 
-Ran `python3 tests/e2e_semaphore_native_pilot.py` on runner. The test
-created an ephemeral **loopback-only** Semaphore service with its own
-temporary TLS certificate, admin account, API session, and SQLite DB.
-It exercised the same public Python API helper, with real Semaphore
-API endpoints:
+- Semaphore Variable Groups → Secrets for five sensitive API/MQTT values.
+- The shared MQTT username is stored as a non-secret Variable Group env
+  value in the same group.
+- The separate Key Store remains the native home for generated/commissioned
+  SSH identities (PVE, Git read-only deploy key); do not ask owners to
+  paste private keys into task Survey fields.
+- Secret Survey inputs use `target: env` on Semaphore 2.19.16,
+  not Ansible `--extra-vars` CLI arguments.
+- Task 05 uses the official localhost API, accepted runner-local
+  revocable API token, TLS CA, and ordinary `become` inside its own LXC.
+  No parallel credential store.
+- Empty field = KEEP. Only provided credentials are created/updated.
+  The updated secret value is never returned or logged.
 
-- `ISOLATED_API_LOGIN=PASS`
-- `BOTH_NATIVE_SECRETS_CREATED=PASS`
-- `PARTIAL_UPDATE_KEEP_KEY_STORE=PASS`
-- `PARTIAL_UPDATE_KEEP_VARIABLE_GROUP=PASS`
-- `NATIVE_METADATA_VERIFIED=PASS`
-- `SQLITE_SECRETS_ENCRYPTED=PASS` (no literal dummy values in SQLite)
-- `ISOLATED_TEST_RESOURCES_REMOVED=PASS`
-- `PRODUCTION_SEMAPHORE_WRITES=NONE`
+## Tested on the authorized runner
 
-## Release gate (still open)
+- Runner name `ansible-serzhan-home`, Semaphore 2.19.16.
+  Read-only live API probe passed; **no live API writes**.
+- 35 pytest tests: semaphore catalog seeder, native credential enrollment,
+  inventory consistency, task design standard — PASS.
+- Python compile and Ansible playbook syntax check — PASS.
+  The syntax-only command used a deliberately minimal CLI inventory and
+  emitted a nonfatal host-pattern warning.
+- `python3 tests/e2e_semaphore_native_pilot.py` started a **temporary
+  loopback-only Semaphore** with independent TLS certificate, admin account
+  and SQLite database, and exercised the production candidate helper against
+  the real upstream API:
 
-- Validate actual Semaphore 2.19.16 Secret Survey form and
-  `target: env` delivery **from the task UI** without logging secrets.
-- Verify `00` catalog migration preserves existing Task 05 ID/history,
-  and that old accepted installations do not lose their working credentials.
-- Expand the schema beyond two **dummy-only** values to the approved
-  real site credentials, without custom storage.
-- Build `06-Check Credentials` using native bindings; verify ALL required
-  credentials and show an actionable aggregate failure report.
-- Confirm encrypted backup/restore of the native Semaphore DB and its
-  `access_key_encryption` key.
-- Perform end-to-end acceptance on the intended new site `serzhan-lab`.
-  The old site runner is **not** that site; do not use its credentials or
-  migrate its project by attempting these tests.
+  ```text
+  ISOLATED_API_LOGIN=PASS
+  SIX_FIELDS_CREATED=PASS
+  ONLY_MQTT_PASSWORD_UPDATED=PASS
+  ONLY_MQTT_USERNAME_UPDATED=PASS
+  NATIVE_METADATA_VERIFIED=PASS
+  SQLITE_SECRETS_ENCRYPTED=PASS
+  ISOLATED_TEST_RESOURCES_REMOVED=PASS
+  PRODUCTION_SEMAPHORE_WRITES=NONE
+  ```
 
-**Never merge the pilot catalog into production `main` or trigger
-existing Task 00 against it without the documented gate.**
+- All test values were synthetic. No real credentials were read or created.
+
+## Gates before merging
+
+1. Confirm actual Semaphore UI Survey displays all 6 fields, accepts
+   partial submission, and propagates Secret `target: env` without exposing
+   values in Ansible stdout, task output, argv or re-run history.
+2. Validate the site-specific catalog migration from legacy №05 without
+   losing task ID/history or previously stored credentials. The current
+   root-owned Seeder on the installed runner is pinned to an older code
+   revision; **changing the public catalog alone does not deploy this Seeder**.
+3. Validate consumer bindings: future №06 and №07 templates must attach the
+   native site credential group correctly. Existing PVE API and Cloudflare
+   workers currently use their prior secret paths and **do not** automatically
+   consume native Semaphore values.
+4. Implement №06 shared readiness check and lifecycle gates, as well as
+   №07 private repository provisioning in the approved order.
+5. Verify backup/restore of Semaphore SQLite plus
+   `access_key_encryption`; smoke test after reboot.
+6. Accept fresh e2e on `serzhan-lab`. Do **not** migrate or erase the
+   working `ansible-serzhan-home` runner or change its real secrets.
+
+**Never merge the Draft Task 05 catalog into production main or run №00
+against it until these release gates are satisfied.**
