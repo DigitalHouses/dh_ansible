@@ -7,9 +7,29 @@
       "view": "01 · Подготовка"
     },
     {
-      "title": "05-Получить credentials GitHub",
-      "playbook": "playbooks/request-github-credentials.yml",
-      "view": "01 · Подготовка"
+      "title": "05-Ввести credentials объекта",
+      "playbook": "playbooks/obtain-site-credentials.yml",
+      "view": "01 · Подготовка",
+      "survey_vars": [
+        {
+          "name": "DH_TEST_KEYSTORE_PASSWORD",
+          "title": "Тестовый пароль Key Store",
+          "description": "Пилот: только вымышленное значение! Пустое поле не меняет сохранённый пароль.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
+          "name": "DH_TEST_VARIABLE_SECRET",
+          "title": "Тестовый MQTT-secret Variable Groups",
+          "description": "Пилот: только вымышленное значение! Пустое поле не меняет сохранённый секрет.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        }
+      ]
     },
     {
       "title": "06-Ввести master password Fleet Vault",
