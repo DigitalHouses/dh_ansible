@@ -2,6 +2,7 @@
 
 Fake stores dummy secret values internally but never returns them from API reads.
 """
+import io
 import json
 from pathlib import Path
 import runpy
@@ -106,6 +107,41 @@ class NativeCredentialTest(unittest.TestCase):
         self.assertEqual(len(group["secrets"]), 2)
         self.assertNotIn("DUMMY-MQTT", json.dumps(group))
         self.assertNotIn("DUMMY-GITHUB", json.dumps(group))
+
+    def test_stdin_partial_input_uses_declared_fields_only(self):
+        fields = app["registry_fields"]()
+        payload = json.dumps({
+            "pve_root_password": "DUMMY-TEST-ONLY",
+            "mqtt_password": "",
+            "cloudflare_api_token": ""
+        }).encode()
+        actual = app["supplied_stdin"](fields, io.BytesIO(payload))
+        self.assertEqual(actual, {"pve_root_password": "DUMMY-TEST-ONLY"})
+
+    def test_stdin_rejects_unknown_and_invalid_secret_values(self):
+        fields = app["registry_fields"]()
+        for value in (
+            {"arbitrary_secret": "value"},
+            {"pve_root_password": None},
+            {"pve_root_password": "DUMMY" + "\x00"},
+            {"pve_root_password": "x" * 8193},
+        ):
+            with self.subTest(value=tuple(value.keys())):
+                with self.assertRaises(app["Blocked"]):
+                    app["supplied_stdin"](
+                        fields, io.BytesIO(json.dumps(value).encode()))
+        for bad in (b"", b"not-json", b'["list"]', b" " * 262145):
+            with self.subTest(size=len(bad)):
+                with self.assertRaises(app["Blocked"]):
+                    app["supplied_stdin"](fields, io.BytesIO(bad))
+
+    def test_playbook_passes_credentials_only_via_module_stdin(self):
+        src = (ROOT / "playbooks/obtain-site-credentials.yml").read_text()
+        self.assertIn("stdin: >-", src)
+        self.assertIn("stdin_add_newline: false", src)
+        self.assertIn("no_log: true", src)
+        self.assertNotIn("      environment:", src)
+        self.assertNotIn("--extra-vars", src)
 
     def test_zero_inputs_never_call_api(self):
         result = app["enroll"](self.api, "serzhan-lab", {})
