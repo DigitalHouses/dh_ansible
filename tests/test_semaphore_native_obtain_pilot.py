@@ -64,7 +64,12 @@ class NativeCredentialContract(unittest.TestCase):
     def test_partial_keep_and_safe_write_contract(self):
         self.assertIn("rejectattr('value', 'equalto', '')", OBTAIN)
         self.assertIn("items2dict", OBTAIN)
-        self.assertIn("if item in dh_supplied", OBTAIN)
+        play = yaml.safe_load(OBTAIN)[0]
+        store = next(t for t in play["tasks"]
+                     if t["name"] == "Save provided values in the existing Semaphore Variable Group")
+        upsert = next(t for t in store["block"]
+                      if t["name"] == "Prepare only submitted secret upserts")
+        self.assertEqual(upsert["when"], "item in dh_supplied")
         self.assertIn("else 'create'", OBTAIN)
         self.assertIn("SEMAPHORE_SECRET_METADATA_DRIFT", OBTAIN)
         self.assertIn("OBTAIN_CREDENTIALS_BLOCKED", OBTAIN)
