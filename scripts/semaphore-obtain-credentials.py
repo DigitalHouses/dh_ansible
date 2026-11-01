@@ -4,7 +4,8 @@
 All five Survey fields are optional: four app/API fields use Variable Groups,
 and the initial PVE root password uses Key Store login_password with fixed
 login root. Existing values are preserved when an input is blank.
-No secondary store, PVE API tokens or password values in task logs.
+No secondary store, PVE API tokens, subprocess environment forwarding,
+or password values in task logs.
 """
 import argparse
 import json
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import runpy
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 api_module = runpy.run_path(str(ROOT / "bootstrap/semaphore-project.py"),
@@ -70,12 +72,38 @@ def registry_fields():
     return fields
 
 
-def supplied_environment(name):
-    value = os.environ.get(name, "")
-    if not isinstance(value, str) or len(value) > 8192 or "\x00" in value:
-        raise Blocked("CREDENTIAL_INVALID_INPUT: " + name)
-    # Empty means KEEP, including at first use. Task 06 reports missing values.
-    return value
+def supplied_stdin(fields, stream=None):
+    """Accept one bounded JSON payload over process stdin, never argv/env.
+
+    The trusted Semaphore task's Survey target=env is read by the Ansible
+    controller. Ansible command.stdin forwards the input to this helper
+    without converting it to a child process shell command argument.
+    """
+    if stream is None:
+        stream = sys.stdin.buffer
+    try:
+        raw = stream.read(262145)
+    except OSError as exc:
+        raise Blocked("CREDENTIAL_STDIN_UNREADABLE") from exc
+    if not raw or len(raw) > 262144:
+        raise Blocked("CREDENTIAL_STDIN_INVALID_SIZE")
+    try:
+        data = json.loads(raw)
+    except (ValueError, UnicodeError, TypeError) as exc:
+        raise Blocked("CREDENTIAL_STDIN_INVALID_JSON") from exc
+    expected = {field["id"] for field in fields}
+    if not isinstance(data, dict) or set(data) - expected:
+        raise Blocked("CREDENTIAL_STDIN_UNEXPECTED_FIELDS")
+    supplied = {}
+    for field in fields:
+        name = field["id"]
+        value = data.get(name, "")
+        if not isinstance(value, str) or len(value) > 8192 or "\x00" in value:
+            raise Blocked("CREDENTIAL_STDIN_INVALID_INPUT: " + name)
+        if value:
+            supplied[name] = value
+    # Empty means KEEP, including at first use. Task 06 reports missing.
+    return supplied
 
 
 def project_id_for_site(api, site):
@@ -263,11 +291,7 @@ def main():
     if os.uname().nodename != "ansible-" + site:
         raise Blocked("SITE_RUNNER_HOSTNAME_MISMATCH")
     fields = registry_fields()
-    values = {}
-    for field in fields:
-        value = supplied_environment(field["survey_env"])
-        if value:
-            values[field["id"]] = value
+    values = supplied_stdin(fields)
     if not values:
         print("OBTAIN_CREDENTIALS=NO_CHANGES")
         return
