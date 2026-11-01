@@ -127,6 +127,8 @@ Workflow — граф крупных операторских этапов, а �
 | Номер | Функциональный механизм | Нынешняя оценка |
 | --- | --- | --- |
 | **00** | Управление каталогом → root-worker + localhost Semaphore API | Действует; **не** обновляет Fleet Detail |
+| **05** | Site credentials → Secret Survey `target: env` → официальный localhost Semaphore API → Key Store / Variable Groups | Новая целевая форма в Draft PR, пока не принята E2E в UI; legacy №05 остаётся рабочей |
+| **06** | Глобальная проверка всего обязательного набора site credentials с причинами и действиями | Целевое решение ADR-0021; текущая legacy №06 вводит Fleet Vault password; новая проверка ещё не реализована |
 | **10** | Cloudflare connector → fixed-purpose root-worker | Действует по защищённому запросу |
 | **20** | Простой Ansible smoke | Действует |
 | **30** | Ansible read-only runner audit | Действует |
