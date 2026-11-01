@@ -59,19 +59,9 @@
       ]
     },
     {
-      "title": "06-Ввести master password Fleet Vault",
-      "playbook": "playbooks/request-fleet-master-password.yml",
-      "view": "01 · Подготовка",
-      "survey_vars": [
-        {
-          "name": "fleet_master_password",
-          "title": "Master password Fleet Vault",
-          "description": "Введите один раз. Пароль сохранится в runner и будет использоваться после перезагрузки.",
-          "type": "secret",
-          "required": true,
-          "values": []
-        }
-      ]
+      "title": "06-Проверить credentials объекта",
+      "playbook": "playbooks/check-site-credentials.yml",
+      "view": "01 · Подготовка"
     },
     {
       "title": "10-Создание туннеля CF до PVE",
