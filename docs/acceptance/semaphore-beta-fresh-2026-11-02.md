@@ -109,7 +109,7 @@ pct exec 1231 -- bash -c '
 **Ожидаемый результат — не факт приёмки**, пока не получен настоящий вывод команды. На время теста секреты владельца не требуются. Пароль PVE в shell / git передавать нельзя.
 
 
-## Изолированный E2E native Semaphore Variable Group (подготовлен, PENDING)
+## Изолированный E2E native Semaphore Variable Group — PASS
 
 В PR добавлен `tests/e2e_semaphore_native_2_20.py`. Тест создаёт **только временный** Semaphore 2.20 Beta на случайном loopback-порту с отдельной SQLite, сертификатом и тестовой admin identity. Он запускается от непривилегированного пользователя `semaphore`, не читает действующую БД, ключи, API-токен и не использует production порт 3000. Значения строго фиктивные.
 
@@ -132,3 +132,13 @@ git clone -q --depth 1 --branch feat/native-semaphore-credentials-05 \
 **Первый живой запуск E2E — FAILED до операций с секретами.** Semaphore поднялся и ответил на `GET /api/ping`, но тестовый Python API-клиент ошибочно разбирал `pong` (plain text) как JSON. Лог владельца: `json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)`. В upstream Semaphore 2.20 Beta ping endpoint действительно использует `plainTextMiddleware` и возвращает `pong`. Исправлено в `tests/e2e_semaphore_native_2_20.py` commit `c8582211b320576cf035199828188eb2234d3086`; теперь ping декодируется как текст и строго проверяется на `pong`. Повторный E2E **PASS** по выводу владельца: `NATIVE_VAR_CREATE=PASS`, `NATIVE_VAR_PARTIAL_KEEP=PASS`, `NATIVE_VAR_SQLITE_ENCRYPTION=PASS`, `SEMAPHORE_BETA_ISOLATED_NATIVE_E2E=PASS`. Запуск на CT1231 с отдельной SQLite, dummy credentials и временным HTTPS подтвердил нативное хранилище. Это не подтверждает запуск №05/06 через UI; следующий шаг — практическое включение задач после публикации каталога.
 
 **Ожидаемый финальный маркер:** `SEMAPHORE_BETA_ISOLATED_NATIVE_E2E=PASS`. Результат изолированного API E2E подтверждён. Не запускать дополнительные изолированные тесты без конкретного нового блокера. На production Semaphore после этого шага ничего не меняется.
+
+## CI после устранения публичных адресов — 02.11.2026
+
+В PR #101 восемь файлов с site-specific IPv4 очищены: рабочие шаблоны используют объявленный адрес объекта, тесты — документационные IPv4 диапазона RFC5737, документ с требованиями больше не раскрывает IP конкретного дома. Удалён CI вызов давно удалённого destructive `bootstrap/replace-site-runner.sh`.
+
+**Source boundary stage: PASS** — CI дошёл до установки зависимостей и `Validate repository policies`.
+
+**Full legacy pytest: FAIL**, run `41356509888` commit `fb9cb69c037ac389021cc9c00fbd5ad618a45bf9`, `82 failed, 629 passed, 2 deselected`. Отказавшие контрактные тесты включают устаревшие ожидания Fleet Vault (вместо новой №05/06), прежнего `replace-site-runner.sh`, Remote Commander worker и старые Media defaults. Полный набор нельзя считать принятым. **Не отключать safety gate и не объявлять full CI зелёным.** PR остаётся Draft; `main` не обновлён. Отдельные native №05/06: синтаксис PASS, 7/7 unit PASS, API/storage E2E dummy PASS.
+
+**Release stop:** до публикации в `main` нужно отдельно урегулировать несоответствие legacy tests/реализации и проверить исполнение реальной №05/06 через Semaphore. Это не решается повторным запуском №00; последний по-прежнему получает только `main`.
