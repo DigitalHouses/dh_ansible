@@ -11,7 +11,7 @@ label{display:block;margin:18px 0 8px;font-weight:650}input{width:100%;padding:1
 button{background:#80badf;color:#051828;border:0;border-radius:8px;font-size:1rem;padding:13px 20px;margin-top:23px;font-weight:750;cursor:pointer}
 button:disabled{opacity:.5;cursor:wait}.small{font-size:.88rem}#status{margin-top:18px;min-height:24px}#status.success{color:#8de0aa}#status.error{color:#ffc0b8}
 </style></head><body>
-<a href="http://192.168.11.238/">← Главная страница медиасервера</a>
+<a id="media-home" href="/">← Главная страница медиасервера</a>
 <div class="card"><h1>Сменить общий пароль</h1>
 <p>Учётная запись владельца <strong>serzhan</strong>. Пароль обновляется для Radarr, Sonarr, Prowlarr, qBittorrent, Samba, Jellyfin, Sambee и Filestash.</p>
 <p class="small">Не меняет отдельный аккаунт SMB-администратора <code>serzhan_admin</code>, учётную запись Plex или внутренние API-ключи.</p>
@@ -24,6 +24,8 @@ button:disabled{opacity:.5;cursor:wait}.small{font-size:.88rem}#status{margin-to
 </form></div>
 <script>
 "use strict";
+// Use the same VM address as the account portal: never bake a site IP into public HTML.
+document.getElementById("media-home").href="http://"+location.host.split(":")[0]+"/";
 const form=document.getElementById("change"),status=document.getElementById("status"),button=document.getElementById("submit");
 let csrf=null;
 function message(text,kind){status.textContent=text;status.className=kind||""}
