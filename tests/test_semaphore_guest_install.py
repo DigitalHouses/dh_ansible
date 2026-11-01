@@ -17,8 +17,8 @@ def module():
 
 def test_package_is_version_and_sha_pinned():
     m=module()
-    assert m.SEMAPHORE_VERSION=="2.19.16"
-    assert m.SEMAPHORE_DEB_SHA256=="56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8"
+    assert m.SEMAPHORE_VERSION=="2.20.16-beta9"
+    assert m.SEMAPHORE_DEB_SHA256=="7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a"
     assert m.SEMAPHORE_URL.startswith("https://github.com/semaphoreui/semaphore/releases/download/")
 
 
@@ -72,6 +72,18 @@ def test_locale_standardization_is_explicit_and_inherited(monkeypatch):
     finally:
         m.os.environ.clear()
         m.os.environ.update(old_env)
+
+
+def test_guest_default_locale_is_persistent_and_idempotent(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    target = tmp_path / "etc/default/locale"
+    target.parent.mkdir(parents=True)
+    target.write_text("LANG=en_US.UTF-8\\n")
+    m.persist_guest_locale()
+    m.persist_guest_locale()
+    assert target.read_text() == "LANG=C.UTF-8\\n"
+    assert target.stat().st_mode & 0o777 == 0o644
 
 
 def test_existing_ansible_must_be_explicitly_adopted_and_never_reinstalled():
