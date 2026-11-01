@@ -29,6 +29,12 @@
 
 **Предыдущая ревизия Fresh E2E принята 31.10.2026** на Jonsbo: чистый CT1231, `RESULT_RC=0`, стартовая **только №00**, затем успешный ручной запуск №00 через Semaphore: **10 создано, 1 без изменений, failed=0**. Подробная доказательная запись: [Tiny Bootstrap — Fresh E2E ACCEPTED](docs/acceptance/tiny-bootstrap-2026-10-31.md). Приёмка не распространяется на задачи 10–90, private Fleet и PVE Access.
 
+## Локаль PVE и Ansible runner
+
+**Единое значение для headless Debian/Proxmox: `LANG=C.UTF-8`.** Не задавать `LC_ALL` глобально: он переопределяет все `LC_*`. Устанавливать его только для конкретной команды, если нужно подавить унаследованную с PVE несовместимую локаль. Новый Bootstrap нормализует окружение перед `pct`, гостевой installer записывает `/etc/default/locale`, а systemd Semaphore уже получает `LANG=C.UTF-8` и `LC_ALL=C.UTF-8` локально в unit.
+
+**На уже установленном CT1231 код будущего Bootstrap сам собой не применяется.** Оператор один раз задаёт локаль PVE через `localectl set-locale LANG=C.UTF-8`, заново открывает Shell и проверяет `locale` / `locale -a`; для существующего runner аналогично правит `/etc/default/locale` под root, **не пересоздавая CT**. При ручном `pct exec` можно изолировать запуск: `pct exec 1231 -- env LANG=C.UTF-8 LC_ALL=C.UTF-8 /opt/ansible/venv/bin/ansible-playbook --version`. Не ставить локаль `en_US.UTF-8`, если её нет в `locale -a`.
+
 ## Единая точка входа · Tiny Bootstrap
 
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
