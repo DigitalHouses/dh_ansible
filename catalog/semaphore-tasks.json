@@ -39,18 +39,9 @@
           "values": []
         },
         {
-          "name": "DH_INPUT_PVE_API_AUDIT_TOKEN",
-          "title": "Proxmox · API audit token",
-          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if site uses legacy PVE API audit workflow.",
-          "type": "secret",
-          "target": "env",
-          "required": false,
-          "values": []
-        },
-        {
-          "name": "DH_INPUT_PVE_API_WRITE_TOKEN",
-          "title": "Proxmox · API write token",
-          "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if site uses legacy PVE API write workflow.",
+          "name": "DH_INPUT_PVE_ROOT_PASSWORD",
+          "title": "Proxmox VE · пароль root",
+          "description": "Пароль root чистого PVE; для API используется root@pam. Пустое поле сохраняет прежний пароль.",
           "type": "secret",
           "target": "env",
           "required": false,
