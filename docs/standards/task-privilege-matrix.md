@@ -47,7 +47,7 @@
 | 20 | Безопасный smoke; отдельной привилегии не требует. |
 | 30 | Теперь автоматически берёт `runner.yml` из локального Fleet через общую роль. Требуется локальный sudo и live acceptance. |
 | 40 | Нативный install через `become`. Требуется retrofit CT1231, запуск и Online/pairing acceptance. |
-| 10 | Новая реализация в PR: native PVE SSH + Cloudflare API; legacy `dh-cloudflare-switch.path` не требуется. Access и конфликты блокируют до write. Cloudflare write scope и real E2E ещё не проверены. |
+| 10 | Новая реализация в main (PR #124): native PVE SSH + Cloudflare API; legacy `dh-cloudflare-switch.path` не требуется. Access и конфликты блокируют до write. Cloudflare write scope и real E2E ещё не проверены. |
 | 50 | Требует legacy `dh-pve-access-audit.path`; после Fresh Bootstrap worker отсутствует. |
 | 60 | `netalertx.yml` теперь загружается из Fleet, но установка всё ещё требует legacy `dh-netalertx-deploy.path` и PVE capabilities. |
 | 70 | `haos.yml` теперь загружается из Fleet, но apply требует legacy `dh-haos-mtls.path` и Cloudflare privileges. |
