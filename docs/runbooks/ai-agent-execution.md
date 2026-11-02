@@ -1,4 +1,4 @@
-> **Состояние 02.11.2026:** №07 (Task #24) — LIVE SUCCESS, private site repo и Semaphore native SSH clone подтверждены. №10 требует **native Ansible migration**, старый `dh-cloudflare-switch.path` не входит в Tiny Bootstrap. Реализация предложена в PR; до E2E её не считать успешной. [Новый операторский runbook №10](../cloudflare-cutover-semaphore.md). Remote Desktop Commander в этом сеансе не подключён, самостоятельный live запуск не подтверждён. Никакого повторного ввода credentials или повторного №07.
+> **Состояние 02.11.2026:** №07 (Task #24) — LIVE SUCCESS, private site repo и Semaphore native SSH clone подтверждены. №10 требует **native Ansible migration**, старый `dh-cloudflare-switch.path` не входит в Tiny Bootstrap. Реализация объединена в main (PR #124); до E2E её не считать успешной. [Новый операторский runbook №10](../cloudflare-cutover-semaphore.md). Remote Desktop Commander в этом сеансе не подключён, самостоятельный live запуск не подтверждён. Никакого повторного ввода credentials или повторного №07.
 
 # AI Agent Operations — единый порядок запуска DigitalHouses Ansible / Semaphore
 
