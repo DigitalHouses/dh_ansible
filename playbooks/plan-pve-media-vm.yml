@@ -348,14 +348,27 @@
           in media_ssh_keyscan.stdout_lines
         )
 
+    # ssh-keyscan may include a "# host:port SSH-x.x" banner on stdout,
+    # followed by the actual known_hosts record; it may repeat that record.
+    # Filter for the precise address and ED25519 algorithm, then reject any
+    # *distinct* unexpected keys. A banner or duplicate is not a mismatch.
+    - name: Extract exact guest ED25519 records ignoring scanner banners and duplicates
+      ansible.builtin.set_fact:
+        media_ssh_scanned_host_keys: >-
+          {{
+            media_ssh_keyscan.stdout_lines
+            | select('match', '^' ~ (media_vm.network.ipv4.split('/')[0] | regex_escape) ~ ' ssh-ed25519 ')
+            | unique
+            | list
+          }}
+
     - name: Verify SSH network identity equals the key read from authenticated QGA
       ansible.builtin.assert:
         that:
           - >-
-            (media_vm.network.ipv4.split('/')[0] ~ ' ' ~
-            hostvars['media_pve'].media_verified_ed25519_key)
-            in media_ssh_keyscan.stdout_lines
-          - "media_ssh_keyscan.stdout_lines | length == 1"
+            media_ssh_scanned_host_keys ==
+            [(media_vm.network.ipv4.split('/')[0] ~ ' ' ~
+              hostvars['media_pve'].media_verified_ed25519_key)]
         fail_msg: MEDIA_SSH_HOSTKEY_NETWORK_QGA_MISMATCH
 
     - name: Inspect dedicated Media guest SSH trust file without following symlinks
