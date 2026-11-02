@@ -6,6 +6,10 @@ No Cloudflare API request and no site-specific broker request in CI.
 import importlib.util
 import io
 import json
+import os
+import shutil
+import subprocess
+import tempfile
 from pathlib import Path
 import sys
 from contextlib import redirect_stdout
@@ -116,6 +120,72 @@ def test_task06_is_read_only_for_mqtt_and_cloudflare_and_no_cli_secret():
     assert "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}" in uri["headers"]["Authorization"]
     assert cf["changed_when"] is False
     assert "DH_CLOUDFLARE_API_TOKEN" not in str(uri["url"])
+
+
+def test_nonsecret_mqtt_settings_resolved_from_semaphore_environment():
+    # Task 05's native Variable Group `env` is a process environment, NOT
+    # an Ansible `vars` mapping. Only secret type=var comes as an Ansible var.
+    play = PLAYS[0]
+    resolve = next(t for t in play["tasks"]
+                   if t["name"] == "Resolve MQTT nonsecret settings from Semaphore environment")
+    values = resolve["ansible.builtin.set_fact"]
+    assert "lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST')" in values["dh_mqtt_broker_host"]
+    assert "lookup('ansible.builtin.env', 'DH_MQTT_USERNAME')" in values["dh_mqtt_login"]
+    assert resolve["no_log"] is True
+    presence = next(t for t in play["tasks"]
+                    if t["name"] == "Establish which MQTT site credentials were provided")
+    assert "dh_mqtt_broker_host | length > 0" in presence["ansible.builtin.set_fact"]["dh_mqtt_host_present"]
+    assert "dh_mqtt_login | length > 0" in presence["ansible.builtin.set_fact"]["dh_mqtt_username_present"]
+    mqtt = next(t for t in play["tasks"]
+                if t["name"].startswith("Authenticate to the configured MQTT broker"))
+    payload = mqtt["ansible.builtin.command"]["stdin"]
+    assert "'host': dh_mqtt_broker_host" in payload
+    assert "'username': dh_mqtt_login" in payload
+    assert "'password': DH_MQTT_PASSWORD" in payload
+    assert mqtt["no_log"] is True
+
+
+def test_real_ansible_loads_native_mqtt_env_while_password_is_a_var():
+    binary = shutil.which("ansible-playbook")
+    assert binary, "ansible-core required to validate the actual Semaphore env contract"
+    play = PLAYS[0]
+    resolve = next(t for t in play["tasks"]
+                   if t["name"] == "Resolve MQTT nonsecret settings from Semaphore environment")
+    presence = next(t for t in play["tasks"]
+                    if t["name"] == "Establish which MQTT site credentials were provided")
+    with tempfile.TemporaryDirectory(prefix="dh-mqtt-env-") as folder:
+        playfile = Path(folder) / "test.yml"
+        playfile.write_text(yaml.safe_dump([{
+            "name": "Test native Semaphore MQTT env and secret var separation",
+            "hosts": "localhost", "gather_facts": False,
+            "vars": {"DH_MQTT_PASSWORD": "fake-test-secret"},
+            "tasks": [
+                resolve,
+                presence,
+                {
+                    "name": "Assert all MQTT inputs are detected and source is correct",
+                    "ansible.builtin.assert": {"that": [
+                        "dh_mqtt_broker_host == 'broker.example.test'",
+                        "dh_mqtt_login == 'dummy-mqtt-user'",
+                        "dh_mqtt_host_present",
+                        "dh_mqtt_username_present",
+                        "dh_mqtt_password_present",
+                    ]},
+                },
+            ],
+        }], sort_keys=False))
+        env = {
+            **os.environ,
+            "DH_MQTT_BROKER_HOST": "broker.example.test",
+            "DH_MQTT_USERNAME": "dummy-mqtt-user",
+        }
+        result = subprocess.run(
+            [binary, "-i", "localhost,", "-c", "local", str(playfile)],
+            env=env, capture_output=True, text=True, timeout=60, check=False,
+        )
+        assert result.returncode == 0, (
+            result.stdout[-1300:] + "\n" + result.stderr[-500:]
+        )
 
 
 def test_missing_optional_credentials_are_not_false_ready():
