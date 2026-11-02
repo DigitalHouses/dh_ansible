@@ -150,7 +150,7 @@
         original_debian_kernel: "{{ ansible_facts['kernel'] }}"
     - name: Validate currently imported ZFS pool GUID and health
       ansible.builtin.command:
-        argv: [zpool, list, -H, -o, name,guid,health, serzhan-pool]
+        argv: [zpool, list, -H, -o, 'name,guid,health', serzhan-pool]
       register: pool_state
       changed_when: false
     - name: Require exactly the newly recreated healthy pool
@@ -173,7 +173,7 @@
           - "'errors: No known data errors' in zpool_status.stdout"
     - name: Verify physical system root is not the SATA Hitachi disk
       ansible.builtin.command:
-        argv: [lsblk, -dn, -o, NAME,SERIAL,WWN,SIZE]
+        argv: [lsblk, -dn, -o, 'NAME,SERIAL,WWN,SIZE']
       register: current_disks
       changed_when: false
     - name: Require physical Hitachi still identified and present
