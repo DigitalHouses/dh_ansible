@@ -47,20 +47,58 @@
   changed_when: false
   no_log: true
 
-- name: Select only this site's named read-only Git SSH key
+- name: Select this site's Ed25519 Git SSH identity, not the legacy RSA-2048 key
   ansible.builtin.set_fact:
     dh_site_named_keys: "{{ dh_site_keys_before.json | selectattr('name', 'equalto', dh_site_key_name) | list }}"
   no_log: true
 
-- name: Reject duplicate or mismatched existing SSH identities
+- name: Refuse duplicate or mismatched existing SSH identities
   ansible.builtin.assert:
     that:
       - dh_site_named_keys | length <= 1
       - (dh_site_named_keys | length == 0) or (dh_site_named_keys[0].type == 'ssh')
       - (dh_site_named_keys | length == 0) or (dh_site_named_keys[0].project_id | int == dh_site_matching_projects[0].id | int)
-    fail_msg: SEMAPHORE_SITE_DEPLOY_KEY_DRIFT
+    fail_msg: SEMAPHORE_SITE_ED25519_KEY_DRIFT
 
-- name: Ask native Semaphore Key Store to generate one site-scoped SSH key
+# Public SSH keys are not secrets. Store the public half as declarative
+# site data in the verified private GitHub repository; Semaphore 2.20's
+# Key Store API never returns the public half for an imported private key.
+- name: Inspect committed public deploy key for this site
+  ansible.builtin.uri:
+    url: "{{ dh_git_api }}/contents/{{ dh_site_public_file }}"
+    method: GET
+    status_code: [200, 404]
+  register: dh_site_pub_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse an incomplete Ed25519 Key Store/public-key pairing
+  ansible.builtin.assert:
+    that:
+      - (dh_site_named_keys | length == 0) == (dh_site_pub_before.status == 404)
+    fail_msg: GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION
+  no_log: true
+
+- name: Generate a fresh Ed25519 private key in Ansible process memory only
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/../scripts/generate-site-git-ed25519.py"
+  register: dh_site_key_material
+  changed_when: true
+  when: dh_site_named_keys | length == 0
+  no_log: true
+
+- name: Confirm generated key material is Ed25519 before storing it
+  ansible.builtin.assert:
+    that:
+      - (dh_site_key_material.stdout | from_json).private_key is search('BEGIN OPENSSH PRIVATE KEY')
+      - (dh_site_key_material.stdout | from_json).public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+$')
+    fail_msg: GITHUB_SITE_ED25519_KEYGEN_INVALID
+  when: dh_site_named_keys | length == 0
+  no_log: true
+
+- name: Store Ed25519 SSH private key inside native Semaphore Key Store
   ansible.builtin.uri:
     url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/keys"
     method: POST
@@ -71,16 +109,30 @@
       name: "{{ dh_site_key_name }}"
       type: ssh
       project_id: "{{ dh_site_matching_projects[0].id }}"
-      generate_ssh_key: true
       ssh:
         login: git
+        passphrase: ""
+        private_key: "{{ (dh_site_key_material.stdout | from_json).private_key }}"
     ca_path: /etc/semaphore/tls.crt
     status_code: 201
   register: dh_site_key_created
   when: dh_site_named_keys | length == 0
   no_log: true
 
-- name: Select immutable native Semaphore SSH key identity
+- name: Commit only the nonsecret public key as site configuration
+  ansible.builtin.uri:
+    url: "{{ dh_git_api }}/contents/{{ dh_site_public_file }}"
+    method: PUT
+    body_format: json
+    body:
+      message: "Record site-scoped read-only deploy public key"
+      branch: "{{ dh_git_repo.json.default_branch }}"
+      content: "{{ ((dh_site_key_material.stdout | from_json).public_key ~ '\n') | b64encode }}"
+    status_code: 201
+  when: dh_site_pub_before.status == 404
+  no_log: true
+
+- name: Select immutable native Semaphore Ed25519 Key Store identity
   ansible.builtin.set_fact:
     dh_site_ssh_key_id: >-
       {{
@@ -89,7 +141,7 @@
       }}
   no_log: true
 
-- name: Read saved SSH key metadata without retrieving its private part
+- name: Read saved SSH key metadata without exposing its private part
   ansible.builtin.uri:
     url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/keys/{{ dh_site_ssh_key_id }}"
     method: GET
@@ -101,19 +153,29 @@
   changed_when: false
   no_log: true
 
-- name: Extract only native Semaphore generated public key
-  ansible.builtin.set_fact:
-    dh_site_public_key: "{{ (dh_site_key_readback.json.plain | default('{}') | from_json).public_key | default('') | trim }}"
+- name: Read back site-owned public key from the exact private GitHub repository
+  ansible.builtin.uri:
+    url: "{{ dh_git_api }}/contents/{{ dh_site_public_file }}"
+    method: GET
+    status_code: 200
+  register: dh_site_pub_after
+  changed_when: false
   no_log: true
 
-- name: Verify project-scoped SSH key is safely stored and has a public part
+- name: Resolve nonsecret public SSH key and validate persisted identity
+  ansible.builtin.set_fact:
+    dh_site_public_key: "{{ dh_site_pub_after.json.content | b64decode | trim }}"
+  no_log: true
+
+- name: Verify native Semaphore SSH identity and valid Ed25519 public key
   ansible.builtin.assert:
     that:
       - dh_site_key_readback.json.name == dh_site_key_name
       - dh_site_key_readback.json.type == 'ssh'
       - dh_site_key_readback.json.project_id | int == dh_site_matching_projects[0].id | int
-      - dh_site_public_key is match('^ssh-(ed25519|rsa) [A-Za-z0-9+/=]+( .*)?$')
-    fail_msg: SEMAPHORE_GENERATED_SSH_PUBLIC_KEY_NOT_VERIFIED
+      - dh_site_public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+$')
+      - (dh_site_named_keys | length > 0) or dh_site_public_key == (dh_site_key_material.stdout | from_json).public_key
+    fail_msg: GITHUB_SITE_ED25519_PUBLIC_KEY_NOT_VERIFIED
   no_log: true
 
 - name: Read current deploy keys of the exact private GitHub repository
