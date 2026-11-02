@@ -55,7 +55,8 @@ def verify_actual_data_disk(data):
          and spec["wwn"] == approval["wwn"]
          and spec["size_bytes"] == approval["size_bytes"]
          and approval["partition_filesystem"] == "ntfs"
-         and approval["partition_label"] == "HITACHI_4TB"
+         and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", approval["partition_label"])
+         and approval.get("reserved_size_bytes", 0) > 0
          and approval["partition_partuuid"] == spec["observed_partuuid"]
          and approval["reserved_partuuid"] == spec["observed_reserved_partuuid"],
          "DISK_APPROVAL_NOT_EXACT")
@@ -85,14 +86,14 @@ def verify_actual_data_disk(data):
          and first.get("type") == "part"
          and first.get("partuuid", "").lower() == approval["reserved_partuuid"]
          and not first.get("fstype")
-         and int(first.get("size") or 0) == 134217728
+         and int(first.get("size") or 0) == approval["reserved_size_bytes"]
          and not any(first.get("mountpoints") or []),
          "NTFS_RESERVED_PARTITION_DRIFT")
     need(second.get("path") == str(disk) + "2"
          and second.get("type") == "part"
          and second.get("partuuid", "").lower() == approval["partition_partuuid"]
          and second.get("fstype") == "ntfs"
-         and second.get("label") == "HITACHI_4TB"
+         and second.get("label") == approval["partition_label"]
          and not any(second.get("mountpoints") or [])
          and not second.get("children"),
          "NTFS_DATA_PARTITION_DRIFT")
@@ -100,10 +101,9 @@ def verify_actual_data_disk(data):
     path = Path("/sys/class/block/" + disk.name + "/device").resolve()
     need("/" + controller + "/" in str(path),
          "DISK_NOT_ON_APPROVED_SATA_CONTROLLER")
-    root = json.loads(command("/usr/bin/lsblk", "-J", "-o", "PATH,TYPE,MOUNTPOINTS",
-                              "/dev/nvme0n1"))
-    need(root.get("blockdevices", [{}])[0].get("path") != str(disk),
-         "DISK_APPEARS_SYSTEM_DEVICE")
+    root = command("/usr/bin/findmnt", "-n", "-o", "SOURCE", "/")
+    root_devices = command("/usr/bin/lsblk", "-s", "-n", "-o", "KNAME", root).split()
+    need(disk.name not in root_devices, "DISK_APPEARS_SYSTEM_DEVICE")
     return disk.name
 
 
