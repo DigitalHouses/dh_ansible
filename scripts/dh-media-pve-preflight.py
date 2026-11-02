@@ -138,7 +138,8 @@ def main():
         need("name: " + data["name"] in conf
              and "description: DigitalHouses managed media guest v2" in conf
              and "hostpci0: " + data["pci"]["gpu"] + ",pcie=1" in conf
-             and "hostpci1: " + data["pci"]["sata_controller"] + ",pcie=1" in conf
+             and any("hostpci1: " + data["pci"]["sata_controller"] + suffix in conf.splitlines()
+                     for suffix in ("", ",pcie=1"))
              and "scsi0: local-lvm:vm-" + str(vmid) + "-disk-" in conf,
              "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
         need(data["approvals"].get("provision") is True
