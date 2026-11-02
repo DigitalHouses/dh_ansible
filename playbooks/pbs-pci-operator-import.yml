@@ -1,0 +1,246 @@
+---
+# DigitalHouses PBS PCI pilot: operator-initiated, strictly guarded pool import.
+# IMPORTANT: owner must start this task explicitly from Semaphore.
+# Do not launch this playbook by AI/automation after a connected tool has denied
+# the same ZFS import operation. Git commit is preparation, not execution.
+# No mkfs, wipe, zpool create/destroy, ZFS dataset mounting or backup deletion.
+- name: PBS PCI | Owner-triggered audit and host registration
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Read private site PBS declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Read PVE observed identity
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require exact bounded PCI test configuration
+      ansible.builtin.assert:
+        that:
+          - site.id == 'serzhan-home'
+          - pbs.name == 'pbs-serzhan'
+          - pbs.vmid | int == 2233
+          - pbs.network.ipv4.split('/')[0] == '192.168.11.233'
+          - pbs.safety.never_touch_media_disk | bool
+          - pbs.safety.never_touch_other_guests | bool
+          - pbs.pilot.pci.pool == 'serzhan-pool'
+          - pbs.pilot.pci.guid | string == '16024059374292373886'
+          - pbs.pilot.pci.wwn == 'wwn-0x5000cca22bc6ef0d'
+          - pbs.pilot.pci.controller == '0000:2b:00.0'
+          - pbs.pilot.pci.media_vmid | int == 2232
+          - pbs_pci_action | default('audit') in ['audit','import']
+        fail_msg: PBS_PCI_UNEXPECTED_SITE_OR_DISK; nothing changed
+    - name: Require separate owner approval before real import
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.pci.operator_import_approved | default(false) | bool
+        fail_msg: PBS_PCI_OPERATOR_APPROVAL_ABSENT
+      when: pbs_pci_action | default('audit') == 'import'
+    - name: Register commissioned PVE management endpoint
+      ansible.builtin.add_host:
+        name: pbs_pci_pve
+        groups: dh_pbs_pci_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_connection: ssh
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+      changed_when: false
+    - name: Register commissioned PBS guest endpoint
+      ansible.builtin.add_host:
+        name: pbs_pci_guest
+        groups: dh_pbs_pci_guest
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+        pbs_pci_action: "{{ pbs_pci_action | default('audit') }}"
+      changed_when: false
+
+- name: PBS PCI | Validate exclusive PCI ownership from PVE host
+  hosts: dh_pbs_pci_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Verify commissioned host administrative identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Check media VM is stopped
+      ansible.builtin.command:
+        argv: [qm, status, "{{ pbs.pilot.pci.media_vmid }}"]
+      register: media_state
+      changed_when: false
+    - name: Check PBS VM is running
+      ansible.builtin.command:
+        argv: [qm, status, "{{ pbs.vmid }}"]
+      register: pbs_state
+      changed_when: false
+    - name: Inspect media VM PCI devices
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.pilot.pci.media_vmid }}"]
+      register: media_config
+      changed_when: false
+    - name: Inspect PBS PCI devices and guest identity
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_config
+      changed_when: false
+    - name: Enumerate all PVE guests referencing the physical controller
+      ansible.builtin.command:
+        argv: [grep, -RlF, "{{ pbs.pilot.pci.controller }}", /etc/pve/qemu-server]
+      register: controller_owners
+      changed_when: false
+    - name: Require exclusive PCI controller ownership and media shutdown
+      ansible.builtin.assert:
+        that:
+          - media_state.stdout == 'status: stopped'
+          - pbs_state.stdout == 'status: running'
+          - "('name: ' ~ pbs.name) in pbs_config.stdout"
+          - "'hostpci0: ' ~ pbs.pilot.pci.controller in pbs_config.stdout_lines"
+          - "('hostpci0: 0000:2f:00.0,pcie=1') in media_config.stdout_lines"
+          - pbs.pilot.pci.controller not in media_config.stdout
+          - controller_owners.stdout_lines == ['/etc/pve/qemu-server/' ~ (pbs.vmid | string) ~ '.conf']
+        fail_msg: PBS_PCI_NOT_EXCLUSIVELY_OWNED_OR_MEDIA_RUNNING
+
+- name: PBS PCI | Read-only ZFS preflight and optional operator import
+  hosts: dh_pbs_pci_guest
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Check commissioned guest filesystem administration access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Confirm running ZFS module
+      ansible.builtin.command:
+        argv: [zpool, version]
+      register: zfs_module
+      changed_when: false
+    - name: Require installed Proxmox ZFS kernel
+      ansible.builtin.assert:
+        that:
+          - "'zfs-kmod-' in zfs_module.stdout"
+        fail_msg: PBS_ZFS_KERNEL_MISSING
+    - name: Identify exact Hitachi disk by permanent WWN
+      ansible.builtin.command:
+        argv: [readlink, -f, "/dev/disk/by-id/{{ pbs.pilot.pci.wwn }}"]
+      register: hitachi_disk
+      changed_when: false
+    - name: Read Hitachi model and physical size
+      ansible.builtin.command:
+        argv: [lsblk, -dn, -b, -o, SIZE,MODEL, "{{ hitachi_disk.stdout }}"]
+      register: hitachi_details
+      changed_when: false
+    - name: Require the expected physical disk and not the OS disk
+      ansible.builtin.assert:
+        that:
+          - hitachi_disk.stdout == '/dev/sdb'
+          - "'Hitachi' in hitachi_details.stdout"
+          - hitachi_details.stdout.split()[0] | int > 3500000000000
+          - hitachi_details.stdout.split()[0] | int < 4500000000000
+        fail_msg: PBS_PCI_PHYSICAL_DISK_IDENTITY_CHANGED
+    - name: Determine if expected ZFS pool is already imported
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, name]
+      register: live_pools
+      changed_when: false
+    - name: Never adopt a foreign ZFS pool already imported in the PBS guest
+      ansible.builtin.assert:
+        that:
+          - "live_pools.stdout_lines | difference([pbs.pilot.pci.pool]) | length == 0"
+        fail_msg: PBS_PCI_FOREIGN_IMPORTED_POOL
+    - name: Discover only importable ZFS pools from permanent disk IDs
+      ansible.builtin.command:
+        argv: [zpool, import, -d, /dev/disk/by-id]
+      register: imported_candidates
+      changed_when: false
+      failed_when: false
+      when: pbs.pilot.pci.pool not in live_pools.stdout_lines
+    - name: Validate pool name, GUID, health and disk before operator import
+      ansible.builtin.assert:
+        that:
+          - imported_candidates.rc == 0
+          - "('pool: ' ~ pbs.pilot.pci.pool) in imported_candidates.stdout"
+          - "('id: ' ~ (pbs.pilot.pci.guid | string)) in imported_candidates.stdout"
+          - "'state: ONLINE' in imported_candidates.stdout"
+          - pbs.pilot.pci.wwn in imported_candidates.stdout
+        fail_msg: PBS_PCI_IMPORTABLE_POOL_MISMATCH
+      when: pbs.pilot.pci.pool not in live_pools.stdout_lines
+    - name: Report audit-only operation with no changes
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PCI_AUDIT_PASS
+          pool: "{{ pbs.pilot.pci.pool }}"
+          hardware_exclusive: true
+          imported: "{{ pbs.pilot.pci.pool in live_pools.stdout_lines }}"
+          action: audit_no_write
+      when: pbs_pci_action == 'audit'
+    - name: Import the exact existing pool without mounting datasets
+      ansible.builtin.command:
+        argv:
+          - zpool
+          - import
+          - -N
+          - -f
+          - -d
+          - /dev/disk/by-id
+          - "{{ pbs.pilot.pci.guid }}"
+      when:
+        - pbs_pci_action == 'import'
+        - pbs.pilot.pci.pool not in live_pools.stdout_lines
+      register: pci_pool_import
+    - name: Verify existing pool health
+      ansible.builtin.command:
+        argv: [zpool, status, -P, "{{ pbs.pilot.pci.pool }}"]
+      register: pci_pool_status
+      changed_when: false
+      when: pbs_pci_action == 'import'
+    - name: Verify original NFS baseline dataset remains present
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name, "{{ pbs.pilot.zfs_dataset }}"]
+      register: original_nfs_dataset
+      changed_when: false
+      when: pbs_pci_action == 'import'
+    - name: Verify media dataset remains present
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name, "{{ pbs.pilot.pci.pool }}/media"]
+      register: original_media_dataset
+      changed_when: false
+      when: pbs_pci_action == 'import'
+    - name: Require healthy pool and preserved datasets
+      ansible.builtin.assert:
+        that:
+          - "'state: ONLINE' in pci_pool_status.stdout"
+          - "'errors: No known data errors' in pci_pool_status.stdout"
+          - original_nfs_dataset.stdout == pbs.pilot.zfs_dataset
+          - original_media_dataset.stdout == pbs.pilot.pci.pool ~ '/media'
+        fail_msg: PBS_PCI_POST_IMPORT_INTEGRITY_FAILED
+      when: pbs_pci_action == 'import'
+    - name: Report imported pool without dataset mounting or format
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PCI_IMPORT_PASS
+          pool: "{{ pbs.pilot.pci.pool }}"
+          original_nfs_dataset: "{{ original_nfs_dataset.stdout }}"
+          media_dataset: "{{ original_media_dataset.stdout }}"
+          mounted_original_datasets: false
+          new_datastore_created: false
+          hitachi_formatted: false
+      when: pbs_pci_action == 'import'
