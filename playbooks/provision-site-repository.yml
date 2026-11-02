@@ -11,8 +11,9 @@
     dh_git_name: "site-{{ site.id }}"
     dh_git_api: "https://api.github.com/repos/{{ dh_git_owner }}/{{ dh_git_name }}"
     dh_site_semaphore_api: https://127.0.0.1:3000/api
-    dh_site_key_name: "GitHub site-{{ site.id }} · read-only"
-    dh_site_deploy_title: "digitalhouses-{{ site.id }}-semaphore-ro"
+    dh_site_key_name: "GitHub site-{{ site.id }} · read-only Ed25519"
+    dh_site_deploy_title: "digitalhouses-{{ site.id }}-semaphore-ed25519-ro"
+    dh_site_public_file: .digitalhouses/semaphore-deploy-ed25519.pub
     dh_site_semaphore_repo_name: "DigitalHouses site data (private)"
     dh_site_git_ssh_url: "git@github.com:{{ dh_git_owner }}/{{ dh_git_name }}.git"
     dh_git_marker:
