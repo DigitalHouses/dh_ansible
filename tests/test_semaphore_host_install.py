@@ -737,11 +737,15 @@ def test_inventory_resume_refuses_staging_hash_drift(monkeypatch, tmp_path):
         m.install_site_inventory("demo-home", ["inventories/demo-home/hosts.yml"], code_dir)
 
 
-def test_public_launcher_accepts_controlled_pve_credential_restore_mode():
+def test_public_tiny_bootstrap_refuses_legacy_resumption_and_restoration():
     launcher = (SRC.parent / "install.sh").read_text()
-    assert '"$1" == "--resume-semaphore" && "$2" == "--restore-pve-access"' in launcher
-    assert 'RESUME_ARGS=("$1" "$2")' in launcher
-    assert "--restore-pve-access requires --resume-semaphore" in launcher
+    assert '[[ $# -eq 0 && $EUID -eq 0' in launcher
+    assert "fresh Bootstrap only" in launcher
+    assert "pct destroy" not in launcher
+    assert "qm destroy" not in launcher
+    assert "--resume-semaphore" not in launcher
+    assert "--restore-pve-access" not in launcher
+    assert "BOOTSTRAP_FRESH_DONE=PASS" in launcher
 
 
 def test_semaphore_resume_restores_seeder_mode_and_pve_restore_can_be_requested():
@@ -779,16 +783,18 @@ def test_diagnostics_trace_every_subprocess_without_exposing_vault(monkeypatch, 
     assert "OUTPUT=[REDACTED_OR_NOT_APPLICABLE]" in content
 
 
-def test_command_trace_path_and_per_run_launcher_security():
+def test_tiny_bootstrap_keeps_root_only_log_and_legacy_trace_redaction():
     host = SRC.read_text()
     launcher = (SRC.parent / "install.sh").read_text()
-    assert 'DH_BOOTSTRAP_COMMAND_LOG="$COMMAND_LOG_FILE"' in launcher
-    assert 'mktemp "$LOG_DIR/commands-' in launcher
-    assert 'chmod 0600 "$COMMAND_LOG_FILE"' in launcher
-    assert 'COMMAND_LOG_FILE=$COMMAND_LOG_FILE' in launcher
+    assert "umask 077" in launcher
+    assert "LOG_DIR=/var/log/digitalhouses/ansible" in launcher
+    assert 'chmod 0600 "$LOG"' in launcher
+    assert 'trap on_exit EXIT' in launcher
+    assert 'exec > >(tee -a "$LOG") 2>&1' in launcher
+    assert "GH_TOKEN" not in launcher
+    assert "fleet.vault" not in launcher
     assert 'trace_command("START", sequence, argv, stage=stage)' in host
     assert 'trace_command("END", sequence, argv, stage=stage' in host
-    assert 'if not _COMMAND_LOG:' in host
     assert '"OUTPUT=[REDACTED_OR_NOT_APPLICABLE]' in host
 
 
