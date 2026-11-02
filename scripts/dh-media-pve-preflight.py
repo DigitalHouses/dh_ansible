@@ -141,9 +141,13 @@ def main():
              and "hostpci0: " + data["pci"]["gpu"] + ",pcie=1" in conf
              and "hostpci1: " + data["pci"]["sata_controller"] + ",pcie=1" in conf,
              "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
-        need(args.disk_action == "import"
-             and isinstance(data["storage"].get("import_pool_guid"), str),
-             "REUSE_REQUIRES_PINNED_POOL_GUID")
+        need(
+            (args.disk_action == "import"
+             and isinstance(data["storage"].get("import_pool_guid"), str))
+            or (args.disk_action == "erase"
+                and data["storage"].get("one_time_ntfs_erase", {}).get("approved") is True
+                and data["storage"]["one_time_ntfs_erase"]["scope"] == "first_create_only"),
+            "REUSE_REQUIRES_PINNED_POOL_OR_ONE_TIME_ERASE")
         print("MEDIA_PVE_PREFLIGHT=PASS EXISTING_MANAGED_VM")
 
 
