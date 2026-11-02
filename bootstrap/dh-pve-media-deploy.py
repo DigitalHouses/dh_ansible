@@ -308,7 +308,8 @@ def old_guest_matches(vmid, site, data, *, managed=False):
         "local-lvm:vm-" + str(vmid) + "-disk-"), "FOREIGN_BOOT_VOLUME")
     need(state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1",
          "GPU_CONFIG_DRIFT")
-    need(state.get("hostpci1") == data["pci"]["sata_controller"] + ",pcie=1",
+    need(state.get("hostpci1") in (data["pci"]["sata_controller"],
+                                   data["pci"]["sata_controller"] + ",pcie=1"),
          "SATA_CONFIG_DRIFT")
     need(state.get("lock") is None, "VM_LOCKED")
     for slot in ("scsi1", "scsi2", "sata0", "sata1", "virtio0",
