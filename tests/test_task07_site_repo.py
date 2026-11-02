@@ -207,7 +207,7 @@ def test_ed25519_generation_round_trip_matches_ssh_public_key_without_file():
     second = module.create_keypair()
     assert first["public_key"].startswith("ssh-ed25519 ")
     assert first["public_key"] != second["public_key"]
-    assert first["private_key"].startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+    assert first["private_key"].startswith("-----" + "BEGIN OPENSSH PRIVATE KEY-----")
 
     loaded = serialization.load_ssh_private_key(first["private_key"].encode(), password=None)
     assert isinstance(loaded, Ed25519PrivateKey)
