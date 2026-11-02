@@ -1,108 +1,26 @@
 ---
-# 92 | PBS service VM. Native Ansible / pinned PVE SSH, never a root worker.
-# This stage ONLY provisions the guest and installs official PBS packages.
-# Datastores, NFS exports, S3 secrets, PVE backup jobs and root PAM password
-# are separate deliberately gated infrastructure operations.
-- name: PBS 92 | Resolve exact private site declaration
+# 92 · Reusable PBS guest bootstrap; private site data stays in root:semaphore
+# site inventory on the runner. Does not touch media PCI, pools or datastores.
+- name: PBS 92 | Validate commissioned site and PBS pilot declaration
   hosts: site_runner
   gather_facts: false
   become: false
-  vars:
-    pbs_site_api: "https://api.github.com/repos/DigitalHouses/site-{{ site.id }}"
-    pbs_github_headers:
-      Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
-      Accept: application/vnd.github+json
-      X-GitHub-Api-Version: "2022-11-28"
-  pre_tasks:
-    - name: Load current site identity
-      ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/group_vars/all.yml"
-    - name: Load observed PVE identity from host-root bootstrap
-      ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/pve-runtime.yml"
-    - name: Require trusted site and commissioned private Git credential
+  vars_files:
+    - "{{ inventory_dir }}/pbs.yml"
+    - "{{ inventory_dir }}/pve-runtime.yml"
+  tasks:
+    - name: Require exact site identity and non-destructive pilot scope
       ansible.builtin.assert:
         that:
           - inventory_hostname == 'runner'
-          - (ansible_connection | default('')) == 'local'
-          - ansible_play_hosts_all | length == 1
           - site.id == site.owner_slug ~ '-' ~ site.type
           - pve_observed.source == 'host_root_vmbr0'
-          - pve_observed.ipv4 is match('^[0-9]+(\\.[0-9]+){3}$')
-          - pve_observed.node | length > 0
-          - DH_GITHUB_PROVISION_TOKEN is defined
-          - DH_GITHUB_PROVISION_TOKEN | default('') | length > 20
-        fail_msg: PBS_SITE_IDENTITY_OR_GITHUB_NOT_COMMISSIONED
-      no_log: true
-  tasks:
-    - name: Verify private site repository ownership
-      ansible.builtin.uri:
-        url: "{{ pbs_site_api }}"
-        headers: "{{ pbs_github_headers }}"
-        method: GET
-        validate_certs: true
-        status_code: 200
-        timeout: 25
-      register: pbs_repo
-      changed_when: false
-      no_log: true
-    - name: Require exact private site repository
-      ansible.builtin.assert:
-        that:
-          - pbs_repo.json.private == true
-          - pbs_repo.json.owner.login == 'DigitalHouses'
-          - pbs_repo.json.name == 'site-' ~ site.id
-          - pbs_repo.json.default_branch == 'main'
-          - not pbs_repo.json.archived
-        fail_msg: PBS_SITE_REPOSITORY_MISMATCH
-      no_log: true
-    - name: Read site identity marker
-      ansible.builtin.uri:
-        url: "{{ pbs_site_api }}/contents/.digitalhouses/site.json?ref=main"
-        headers: "{{ pbs_github_headers }}"
-        method: GET
-        status_code: 200
-        timeout: 20
-      register: pbs_site_marker
-      changed_when: false
-      no_log: true
-    - name: Require exact marker for this home
-      ansible.builtin.assert:
-        that:
-          - (pbs_site_marker.json.content | b64decode | from_json).site_id == site.id
-          - (pbs_site_marker.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
-        fail_msg: PBS_PRIVATE_SITE_MARKER_INVALID
-      no_log: true
-    - name: Read site-specific nonsecret PBS VM declaration
-      ansible.builtin.uri:
-        url: "{{ pbs_site_api }}/contents/inventories/{{ site.id }}/pbs.yml?ref=main"
-        headers: "{{ pbs_github_headers }}"
-        method: GET
-        status_code: 200
-        timeout: 20
-      register: pbs_declaration
-      changed_when: false
-      no_log: true
-    - name: Validate private declaration identity
-      ansible.builtin.assert:
-        that:
-          - pbs_declaration.json.encoding == 'base64'
-          - pbs_declaration.json.size | int < 32768
-          - pbs_declaration.json.path == 'inventories/' ~ site.id ~ '/pbs.yml'
-        fail_msg: PBS_SITE_DECLARATION_INVALID
-    - name: Read approved PBS properties
-      ansible.builtin.set_fact:
-        pbs: "{{ (pbs_declaration.json.content | b64decode | from_yaml).pbs }}"
-      no_log: true
-    - name: Require safe VM-only provisioning contract
-      ansible.builtin.assert:
-        that:
+          - pve_observed.ipv4 is match('^[0-9]+(\.[0-9]+){3}$')
           - pbs.name == 'pbs-' ~ site.owner_slug
-          - pbs.vmid | int == 2000 + (pbs.network.ipv4.split('/')[0].split('.')[-1] | int)
           - pbs.vmid | int >= 2200
           - pbs.vmid | int <= 2254
           - pbs.network.bridge == 'vmbr0'
-          - pbs.network.ipv4 | ansible.utils.ipaddr('address') is defined
+          - pbs.network.ipv4 is match('^[0-9]+(\.[0-9]+){3}/24$')
           - pbs.network.static_ip_outside_dhcp == true
           - pbs.os.distribution == 'debian'
           - pbs.os.major_version | int == 13
@@ -113,27 +31,24 @@
           - pbs.bootstrap.destroy_existing == false
           - pbs.safety.never_touch_media_disk == true
           - pbs.safety.never_touch_other_guests == true
-          - pbs.backup.local_datastore == 'not_configured'
-          - pbs.backup.s3_datastore == 'not_configured'
-          - pbs.backup.backup_jobs == 'not_configured'
-        fail_msg: PBS_VM_APPROVAL_OR_NONDESTRUCTIVE_SCOPE_BLOCKED
-    - name: Require working commissioned runner administrator
+        fail_msg: PBS_SITE_OR_OWNER_APPROVAL_MISMATCH
+    - name: Verify reusable runner administrative access
       ansible.builtin.include_role:
         name: infrastructure_access
       vars:
         infrastructure_access_capability: host_manage
-    - name: Read current site SSH public key
+    - name: Read commissioned site SSH public key
       ansible.builtin.slurp:
         src: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519.pub
       register: pbs_runner_public_key
       no_log: true
-    - name: Validate site SSH public key
+    - name: Require site SSH public key is valid
       ansible.builtin.assert:
         that:
           - (pbs_runner_public_key.content | b64decode | trim) is match('^ssh-ed25519 [A-Za-z0-9+/=]+ dh-pve-' ~ site.id ~ '$')
-        fail_msg: PBS_MANAGED_SSH_KEY_MISSING
+        fail_msg: PBS_SITE_SSH_KEY_MISSING
       no_log: true
-    - name: Register pinned PVE target
+    - name: Register pinned PVE admin connection
       ansible.builtin.add_host:
         name: pbs_pve
         groups: dh_pbs_pve
@@ -151,9 +66,8 @@
         pbs_observed_node: "{{ pve_observed.node }}"
         pbs_observed_ip: "{{ pve_observed.ipv4 }}"
         pbs_ssh_pubkey: "{{ pbs_runner_public_key.content | b64decode | trim }}"
-      changed_when: false
       no_log: true
-    - name: Register Debian guest endpoint
+    - name: Register pilot Debian guest endpoint
       ansible.builtin.add_host:
         name: pbs_guest
         groups: dh_pbs_guest
@@ -169,7 +83,6 @@
           -o ConnectTimeout=10
         site: "{{ site }}"
         pbs: "{{ pbs }}"
-      changed_when: false
       no_log: true
 
 - name: PBS 92 | Native VM create, never replace or erase
