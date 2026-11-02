@@ -378,6 +378,22 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     need(len(physical_disks) == 1
          and physical_disks[0]["name"] == matches[0]["name"],
          "MEDIA_PHYSICAL_DISK_TOPOLOGY_MISMATCH")
+    # A matching pool GUID and a matching attached HDD do not prove that
+    # the pool actually resides on that HDD. Inspect the sole real ZFS vdev
+    # before any VM deletion, and resolve partition/by-id paths to the
+    # underlying disk. Unknown or multi-vdev topologies fail closed.
+    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-P", pool)
+    vdevs = re.findall(
+        r"(?m)^\\s+(/dev/\\S+)\\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\\b",
+        status,
+    )
+    need(len(vdevs) == 1, "LEGACY_ZFS_VDEV_COUNT_INVALID")
+    vdev_parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o",
+                             "PKNAME", vdevs[0]).strip()
+    if not vdev_parent:
+        vdev_parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o",
+                                 "NAME", vdevs[0]).strip()
+    need(vdev_parent == matches[0]["name"], "LEGACY_ZFS_ON_FOREIGN_DISK")
     print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
 
 
