@@ -288,11 +288,139 @@
           - "media_qm_running.stdout == 'status: running'"
         fail_msg: MEDIA_VM_NOT_RUNNING_AFTER_NATIVE_PROVISION
 
+    # The QGA-to-PVE channel is authenticated using the already pinned PVE
+    # SSH key. Do NOT trust ssh-keyscan on its own after a VM recreation.
+    - name: Read new Media guest ED25519 host key over commissioned PVE QEMU Guest Agent
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - "{{ media_vm.vmid }}"
+          - --
+          - /bin/cat
+          - /etc/ssh/ssh_host_ed25519_key.pub
+      register: media_guest_hostkey_qga
+      changed_when: false
+      retries: 60
+      delay: 5
+      until: >-
+        media_guest_hostkey_qga.rc == 0
+        and ((media_guest_hostkey_qga.stdout | from_json).exited | int) == 1
+        and ((media_guest_hostkey_qga.stdout | from_json).exitcode | int) == 0
+
+    - name: Remember only the trusted Media guest SSH algorithm and public key
+      ansible.builtin.set_fact:
+        media_verified_ed25519_key: >-
+          {{ ((media_guest_hostkey_qga.stdout | from_json)['out-data'] | trim).split()[:2] | join(' ') }}
+
+    - name: Require a single valid Media guest ED25519 host key before network verification
+      ansible.builtin.assert:
+        that:
+          - "media_verified_ed25519_key is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}')"
+          - "not ((media_guest_hostkey_qga.stdout | from_json)['out-truncated'] | bool)"
+          - "((media_guest_hostkey_qga.stdout | from_json)['out-data'] | trim).splitlines() | length == 1"
+        fail_msg: MEDIA_QGA_HOST_KEY_INVALID
+
 - name: Media 80 | Configure approved Debian media apps and one-time ZFS
   hosts: site_runner
   gather_facts: false
   become: false
   tasks:
+    - name: Independently read advertised ED25519 key from Media guest SSH endpoint
+      ansible.builtin.command:
+        argv:
+          - ssh-keyscan
+          - -T
+          - '5'
+          - -t
+          - ed25519
+          - "{{ media_vm.network.ipv4.split('/')[0] }}"
+      register: media_ssh_keyscan
+      changed_when: false
+      retries: 30
+      delay: 5
+      until: >-
+        media_ssh_keyscan.rc == 0
+        and (
+          (media_vm.network.ipv4.split('/')[0] ~ ' ' ~
+          hostvars['media_pve'].media_verified_ed25519_key)
+          in media_ssh_keyscan.stdout_lines
+        )
+
+    - name: Verify SSH network identity equals the key read from authenticated QGA
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media_vm.network.ipv4.split('/')[0] ~ ' ' ~
+            hostvars['media_pve'].media_verified_ed25519_key)
+            in media_ssh_keyscan.stdout_lines
+          - "media_ssh_keyscan.stdout_lines | length == 1"
+        fail_msg: MEDIA_SSH_HOSTKEY_NETWORK_QGA_MISMATCH
+
+    - name: Inspect dedicated Media guest SSH trust file without following symlinks
+      ansible.builtin.stat:
+        path: /var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        follow: false
+      register: media_ssh_trust_before
+      become: true
+
+    - name: Reject symlinks, directories, or foreign SSH trust file paths
+      ansible.builtin.assert:
+        that:
+          - "not media_ssh_trust_before.stat.exists or media_ssh_trust_before.stat.isreg"
+          - "not (media_ssh_trust_before.stat.islnk | default(false))"
+        fail_msg: MEDIA_SSH_HOSTKEY_FILE_UNSAFE
+
+    - name: Atomically pin the newly recreated guest key with correct semaphore ownership
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        content: "{{ media_vm.network.ipv4.split('/')[0] }} {{ hostvars['media_pve'].media_verified_ed25519_key }}\n"
+        owner: semaphore
+        group: semaphore
+        mode: '0600'
+        follow: false
+      become: true
+
+    - name: Verify SSH trust file owner, group, type, and mode
+      ansible.builtin.stat:
+        path: /var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        follow: false
+      register: media_ssh_trust_after
+
+    - name: Refuse missing or unreadable guest trust file
+      ansible.builtin.assert:
+        that:
+          - "media_ssh_trust_after.stat.isreg"
+          - "media_ssh_trust_after.stat.pw_name == 'semaphore'"
+          - "media_ssh_trust_after.stat.gr_name == 'semaphore'"
+          - "media_ssh_trust_after.stat.mode == '0600'"
+        fail_msg: MEDIA_SSH_TRUST_WRONG_OWNER_OR_MODE
+
+    - name: Confirm connection as semaphore with strict SSH identity checking
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+          - -o
+          - ConnectTimeout=8
+          - "debian@{{ media_vm.network.ipv4.split('/')[0] }}"
+          - /bin/true
+      changed_when: false
+      retries: 24
+      delay: 5
+      register: media_guest_ssh_verified
+      until: media_guest_ssh_verified.rc == 0
+
     - name: Register newly commissioned Debian media VM using pinned runner SSH
       ansible.builtin.add_host:
         name: media_server
@@ -305,7 +433,7 @@
         ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes
-          -o StrictHostKeyChecking=accept-new
+          -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
         media_owner_slug: "{{ site.owner_slug }}"
         site: "{{ site }}"
