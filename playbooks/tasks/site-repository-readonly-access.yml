@@ -346,6 +346,64 @@
     fail_msg: SEMAPHORE_SITE_REPOSITORY_READBACK_FAILED
   no_log: true
 
-- name: Record verified SSH registration without claiming that Git clone was tested
+# These are official Semaphore repository endpoints, not custom git
+# subprocesses. /branches uses git ls-remote via the saved SSH Key Store
+# identity. /playbooks executes CloneOrPull in Semaphore's scratch checkout.
+# A 200 + a valid response from both proves the exact bound repository can
+# be read by Semaphore itself. On failure, emit only HTTP status.
+- name: Probe private site SSH remote branches using Semaphore native Git client
+  ansible.builtin.uri:
+    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories/{{ dh_site_registered_semaphore_repos[0].id }}/branches"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
+    ca_path: /etc/semaphore/tls.crt
+    status_code: 200
+    timeout: 45
+  register: dh_site_native_branches
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Require authenticated SSH ls-remote from Semaphore
+  ansible.builtin.assert:
+    that:
+      - dh_site_native_branches.status | default(0) == 200
+      - dh_site_native_branches.json is sequence
+      - dh_site_native_branches.json is not string
+      - "'main' in dh_site_native_branches.json"
+    fail_msg: >-
+      SEMAPHORE_PRIVATE_SITE_GIT_LS_REMOTE_BLOCKED:
+      HTTP {{ dh_site_native_branches.status | default(0) | int }};
+      inspect native Semaphore Git SSH host-key trust/connectivity.
+  no_log: false
+
+- name: Probe actual private site SSH checkout using Semaphore native clone
+  ansible.builtin.uri:
+    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories/{{ dh_site_registered_semaphore_repos[0].id }}/playbooks?branch=main&app=ansible"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
+    ca_path: /etc/semaphore/tls.crt
+    status_code: 200
+    timeout: 90
+  register: dh_site_native_clone
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Require successful Semaphore Git CloneOrPull using the site deploy key
+  ansible.builtin.assert:
+    that:
+      - dh_site_native_clone.status | default(0) == 200
+      - dh_site_native_clone.json is sequence
+      - dh_site_native_clone.json is not string
+    fail_msg: >-
+      SEMAPHORE_PRIVATE_SITE_GIT_CLONE_BLOCKED:
+      HTTP {{ dh_site_native_clone.status | default(0) | int }};
+      check the registered SSH key and pinned github.com host identity.
+  no_log: false
+
+- name: Confirm read-only private repository access and native Git checkout
   ansible.builtin.set_fact:
-    dh_site_repository_access_status: REGISTERED_CLONE_NOT_VERIFIED
+    dh_site_repository_access_status: VERIFIED_NATIVE_SSH_CLONE
