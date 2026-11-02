@@ -44,6 +44,8 @@ jobs:
             tests/test_cloudflare_read_scope.py \
             tests/test_cloudflare_cutover_contract.py \
             tests/test_runner_remote_commander_request.py \
+            tests/test_media_one_time_ntfs_erase.py \
+            tests/test_media80_native_jonsbo_contract.py \
             tests/test_task07_site_repo.py
       - name: Validate Task 05/06 Ansible syntax
         run: |
@@ -52,6 +54,7 @@ jobs:
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/provision-site-repository.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-cloudflare-cutover.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-runner-remote-commander.yml
+          ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/request-semaphore-catalog-sync.yml
       - name: Validate in-place inventory upgrade shell syntax
         run: bash -n bootstrap/upgrade-semaphore-site-inventory.sh
