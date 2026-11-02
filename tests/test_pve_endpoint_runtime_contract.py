@@ -47,10 +47,17 @@ class PveRuntimeContractTests(unittest.TestCase):
                      "playbooks/audit-pve-access.yml"):
             with self.subTest(path=path):
                 content = (ROOT / path).read_text()
-                self.assertIn("name: site_inventory_prepare", content)
-                self.assertIn("          - pve.yml", content)
-                self.assertLess(content.index("name: site_inventory_prepare"),
-                                content.index('file: "{{ inventory_dir }}/pve.yml"'))
+                if path == "playbooks/plan-pve-media-vm.yml":
+                    self.assertIn('file: "{{ inventory_dir }}/pve-runtime.yml"', content)
+                    self.assertIn("media_site_repo.json.private == true", content)
+                    self.assertIn("media_site_file.json.sha", content)
+                    self.assertIn("pve_observed.ipv4", content)
+                    self.assertNotIn("192.168.", content)
+                else:
+                    self.assertIn("name: site_inventory_prepare", content)
+                    self.assertIn("          - pve.yml", content)
+                    self.assertLess(content.index("name: site_inventory_prepare"),
+                                    content.index('file: "{{ inventory_dir }}/pve.yml"'))
 
 
 if __name__ == "__main__":
