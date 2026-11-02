@@ -49,7 +49,8 @@ def test_pve_role_requires_identity_and_approval_and_creates_only_stopped_lxc():
 
 def test_graphql_isolation_is_loaded_before_native_app_and_requires_service():
     steps = _yaml("roles/netalertx_native/tasks/main.yml")
-    order = [x["ansible.builtin.import_tasks"] for x in steps]
+    order = [x["ansible.builtin.import_tasks"] for x in steps
+             if "ansible.builtin.import_tasks" in x]
     assert order.index("packages.yml") < order.index("firewall.yml")
     assert order.index("firewall.yml") < order.index("install.yml")
     assert order.index("firewall.yml") < order.index("verify.yml")
