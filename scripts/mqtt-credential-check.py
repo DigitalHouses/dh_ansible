@@ -48,6 +48,7 @@ def receive_exact(sock: socket.socket, count: int) -> bytes:
 
 def check(host: str, username: str, password: str) -> str:
     if (not isinstance(host, str) or not 1 <= len(host) <= 253
+            or not host[0].isascii() or not host[0].isalnum()
             or not all(c.isascii() and (c.isalnum() or c in ".-")
                        for c in host)
             or ".." in host or host.endswith((".", "-"))):
@@ -62,7 +63,7 @@ def check(host: str, username: str, password: str) -> str:
     # Protocol Name MQTT, level 4 = v3.1.1; flags 0xC2:
     # clean session, username and password (no will/publish/subscribe).
     variable_header = encoded_string("MQTT") + bytes((4, 0xC2, 0, 10))
-    frame = (b"\\x10" + remaining_length(len(variable_header) + len(payload))
+    frame = (b"\x10" + remaining_length(len(variable_header) + len(payload))
              + variable_header + payload)
     try:
         with socket.create_connection((host, 1883), timeout=6) as sock:
@@ -71,7 +72,7 @@ def check(host: str, username: str, password: str) -> str:
             reply = receive_exact(sock, 4)
     except (OSError, TimeoutError, UnicodeError, ValueError):
         return "UNREACHABLE"
-    if reply[:3] != b"\\x20\\x02\\x00":
+    if reply[:3] != b"\x20\x02\x00":
         return "PROTOCOL_ERROR"
     code = reply[3]
     if code == 0:
