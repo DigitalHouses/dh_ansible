@@ -180,6 +180,28 @@ def test_task10_migrates_only_dns_owned_by_existing_shared_pve_route():
 
 
 
+
+def test_task10_origin_preflight_uses_public_pve_api_with_strict_tls():
+    """PVE /api2/json/version requires a ticket in current PVE builds."""
+    plays = yaml.safe_load(REQUEST.read_text())
+    tasks = plays[-1]["tasks"]
+    origin = next(t for t in tasks if t["name"] ==
+                  "Confirm PVE origin responds over verified HTTPS before DNS publication")
+    request = origin["ansible.builtin.uri"]
+    assert request["url"] == "{{ cf_origin }}/api2/json/access/domains"
+    assert request["status_code"] == 200
+    assert request["ca_path"] == "/etc/cloudflared/dh-pve-ca.pem"
+    assert request["validate_certs"] is True
+    assert origin["delegate_to"] == "cf_pve_target"
+    proof = next(t for t in tasks if t["name"] ==
+                 "Require PVE origin API and TLS validation succeeded")
+    conditions = proof["ansible.builtin.assert"]["that"]
+    assert "cf_origin_verified.json.data is sequence" in conditions
+    assert "cf_origin_verified.json.data is not string" in conditions
+    assert any("pve-api-daemon" in str(condition) for condition in conditions)
+    assert "/api2/json/version\"" not in REQUEST.read_text()
+
+
 def test_worker_pins_ssh_and_fixed_root_host_script():
     code = WORKER.read_text()
     assert "StrictHostKeyChecking=yes" in code
