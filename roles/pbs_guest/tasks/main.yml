@@ -9,6 +9,20 @@
       - pbs.name == 'pbs-' ~ site.owner_slug
     fail_msg: PBS_GUEST_OS_OR_IDENTITY_MISMATCH
 
+- name: Check whether the default PBS enterprise apt source exists
+  ansible.builtin.stat:
+    path: /etc/apt/sources.list.d/pbs-enterprise.sources
+  register: pbs_bootstrap_enterprise_repo
+
+- name: Disable unused PBS enterprise repository for no-subscription site deployments
+  ansible.builtin.lineinfile:
+    path: /etc/apt/sources.list.d/pbs-enterprise.sources
+    regexp: '^Enabled:'
+    line: 'Enabled: no'
+    insertafter: EOF
+    backup: true
+  when: pbs_bootstrap_enterprise_repo.stat.exists
+
 - name: Install supporting system packages
   ansible.builtin.apt:
     name:
