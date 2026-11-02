@@ -1,4 +1,4 @@
-> **Состояние 02.11.2026:** №07 (Task #24) — LIVE SUCCESS, private site repo и Semaphore native SSH clone подтверждены. №10 требует **native Ansible migration**, старый `dh-cloudflare-switch.path` не входит в Tiny Bootstrap. Реализация объединена в main (PR #124); до E2E её не считать успешной. [Новый операторский runbook №10](../cloudflare-cutover-semaphore.md). Remote Desktop Commander в этом сеансе не подключён, самостоятельный live запуск не подтверждён. Никакого повторного ввода credentials или повторного №07.
+> **Состояние 02.11.2026:** №07 (Task #24) — LIVE SUCCESS; №40 (Task #30) — LIVE SUCCESS, Remote Desktop Commander `ansible-serzhan-home` Online и удалённый read-only доступ подтверждён; №10 (Task #32) — **LIVE PASS**, dedicated PVE Tunnel `serzhan-home-pve` Healthy, strict TLS, DNS и Cloudflare Access challenge VERIFIED, повторное выполнение `changed=0`. Авторизованный вход в PVE UI — отдельный пользовательский acceptance. [Runbook №10](../cloudflare-cutover-semaphore.md). Не использовать legacy `dh-cloudflare-switch.path`; credentials №05/06 повторно не вводить.
 
 # AI Agent Operations — единый порядок запуска DigitalHouses Ansible / Semaphore
 
@@ -10,7 +10,7 @@
 
 **Принято на Jonsbo, site `serzhan-home`, тестовый CT1231:** новый четырёхэтапный Bootstrap успешно создал чистый Debian 13 LXC, получил pinned Git checkout, установил Ansible + Semaphore HTTPS и создал **ровно одну №00**. `CT_CREATE=PASS`, `CODE_GIT_SHA=PASS`, `SEMAPHORE_INSTALL=PASS`, `TASK_00_ONLY=PASS`, `BOOTSTRAP_FRESH_DONE=PASS`, `RESULT_RC=0`. Оператор отдельно запустил №00 в Semaphore: `created=10`, `unchanged=1`, `updated=0`, `failed=0`, `unreachable=0`; инфраструктурные задачи не исполнялись. Полный отчёт: [Tiny Bootstrap — acceptance](../acceptance/tiny-bootstrap-2026-10-31.md).
 
-**Граница:** Bootstrap не устанавливает Remote Commander, Media Server, private Fleet, PVE Access или индивидуальных installers. №40 переведена на общий [Ansible privilege contract](../decisions/0020-infrastructure-privilege-and-software-installation.md) с `become`. Административный доступ на текущем CT1231 ещё не commissioned; обновление №00 не повышает права Linux. См. [runbook №40](remote-commander-commissioning.md). Нельзя переносить успех старого Python Bootstrap/worker на новый runner; отсутствие worker на чистом CT является ожидаемым состоянием, а не ошибкой Bootstrap.
+**Граница:** Tiny Bootstrap не устанавливает Remote Commander, Media Server или индивидуальные installers. Отдельная №40 в последующей live-приёмке успешно установила Remote Commander, а общий [Ansible privilege contract](../decisions/0020-infrastructure-privilege-and-software-installation.md) проверил `become` с effective UID=0 на runner CT1231; №10 успешно использовала ранее commissioned PVE SSH и Cloudflare API. Обновление №00 само по себе не является доказательством текущих прав Linux. См. [runbook №40](remote-commander-commissioning.md). Нельзя переносить успех старого Python Bootstrap/worker на новый runner; отсутствие worker на чистом CT является ожидаемым состоянием, а не ошибкой Bootstrap.
 
 **Новый разрешённый Fresh E2E для №05/06 (31.10.2026):** владелец прямо запросил удалить **только** CT1231 на Jonsbo и заново выполнить однокомандный Bootstrap. Перед удалением обязательно проверить живые PVE vmbr0 identity, точные CT hostname, IP, unprivileged, rootfs и отсутствие внешних mount points. Сохранять HAOS VM2253 и все другие гости. Это адресное разрешение на **один** тестовый цикл; ни повторное удаление после E2E, ни снос иных гостей не разрешены. Сам Bootstrap не удаляет контейнеры и не поддерживает `--resume*`. Никаких ручных замен seeder/скриптов в LXC. [Порядок №05/06](credential-setup.md).
 
@@ -22,7 +22,7 @@
 
 ## 0. Короткая памятка на 30 секунд
 
-1. Проверь доступные подключения: в пилоте рабочий путь — **Remote Desktop Commander → `ansible-serzhan-home` (site runner, CT1231)**. На принятом runner после Tiny Bootstrap установлены Ansible и Semaphore; `semaphore` не имеет общего подтверждённого `become` на локальном LXC. Для всех software/service задач требуется единый site/target commissioning административных credentials, а не отдельный worker на каждый номер. См. [ADR-0020](../decisions/0020-infrastructure-privilege-and-software-installation.md).
+1. Проверь доступные подключения: в пилоте рабочий путь — **Remote Desktop Commander → `ansible-serzhan-home` (site runner, CT1231)**. №40 LIVE #30 подтвердила `semaphore` → `become` effective UID=0 **только внутри runner CT1231**. На остальных Linux targets права требуют отдельной проверки. Для всех software/service задач требуется единый site/target commissioning административных credentials, а не отдельный worker на каждый номер. См. [ADR-0020](../decisions/0020-infrastructure-privilege-and-software-installation.md).
 2. Прочитай текущие `AGENTS.md` и **этот** документ. Уточни site, требуемую задачу/действия, разрешение владельца; не переносить параметры из чужого дома.
 3. До любого apply проверь **живую** идентичность site/VM/диска, параллельные процессы, pending worker request, Git SHA checkout, Git SHA pinned worker, целостность manifest и актуальные approvals Fleet.
 4. **Основной путь** — штатный Semaphore UI/API, если он доступен и разрешён. **Подтверждённый инженерный путь** — непосредственный запуск **того же Ansible playbook от пользователя `semaphore`** на site runner с тем же site inventory; для этого **не нужен Semaphore API** и не нужен ручной запуск PVE helper.
@@ -75,7 +75,7 @@ python3 "$TOOL" --site serzhan-home --task 80 --commit "$SHA" \
 | --- | --- |
 | `DigitalHouses/dh_ansible` | PUBLIC: roles, playbooks, каталог шаблонов, тесты; pin на **полный** Git commit |
 | `DigitalHouses/dh_ansible_fleet_detail` | PRIVATE: per-site inventory/approvals/Vault; не копировать секреты в chat/Git/public CI |
-| Site runner | Пилот `ansible-serzhan-home`; локальный пользователь `semaphore` без общих root-прав |
+| Site runner | Пилот `ansible-serzhan-home`; №40 LIVE PASS: `semaphore` → `become` UID=0 только внутри runner LXC, не на всех target hosts |
 | Site inventory (материализация) | Tiny Bootstrap создаёт только `/var/lib/ansible/site-data/<site>/hosts.yml` и `group_vars/all.yml`; приватные `media_vm.yml`, `pve.yml` требуют отдельной доставки из Fleet |
 | Рабочий Ansible | `/opt/ansible/venv/bin/ansible-playbook`, roles path из текущего checkout |
 | Direct checkout | `/var/lib/semaphore/dh-media-direct-<short SHA>`; владелец `semaphore`; точный SHA проверяется |
