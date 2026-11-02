@@ -319,6 +319,7 @@
         that:
           - "media_verified_ed25519_key is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}')"
           - "not ((media_guest_hostkey_qga.stdout | from_json)['out-truncated'] | bool)"
+          - "((media_guest_hostkey_qga.stdout | from_json)['out-data'] | trim).splitlines() | length == 1"
         fail_msg: MEDIA_QGA_HOST_KEY_INVALID
 
 - name: Media 80 | Configure approved Debian media apps and one-time ZFS
@@ -354,6 +355,7 @@
             (media_vm.network.ipv4.split('/')[0] ~ ' ' ~
             hostvars['media_pve'].media_verified_ed25519_key)
             in media_ssh_keyscan.stdout_lines
+          - "media_ssh_keyscan.stdout_lines | length == 1"
         fail_msg: MEDIA_SSH_HOSTKEY_NETWORK_QGA_MISMATCH
 
     - name: Inspect dedicated Media guest SSH trust file without following symlinks
