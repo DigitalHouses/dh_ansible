@@ -213,16 +213,14 @@
         that:
           - pbs_pilot_fs_type.stdout == 'nfs'
         fail_msg: PBS_NFS_MOUNT_NOT_ACTIVE_REFUSE_LOCAL_DATASTORE
-    - name: Verify PBS backup service UID can write to root-squashed export
+    - name: Verify root can initialize PBS datastore over restricted NFS export
       ansible.builtin.command:
-        argv: [touch, "{{ pbs.pilot.mount_path }}/.dh-nfs-write-check"]
-      become_user: backup
+        argv: [touch, "{{ pbs.pilot.mount_path }}/.dh-nfs-root-check"]
       changed_when: false
-    - name: Remove just our write probe
+    - name: Remove only our root access probe
       ansible.builtin.file:
-        path: "{{ pbs.pilot.mount_path }}/.dh-nfs-write-check"
+        path: "{{ pbs.pilot.mount_path }}/.dh-nfs-root-check"
         state: absent
-      become_user: backup
     - name: Inspect existing PBS datastores
       ansible.builtin.command:
         argv: [proxmox-backup-manager, datastore, list, --output-format, json]
