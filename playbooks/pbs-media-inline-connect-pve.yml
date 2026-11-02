@@ -230,6 +230,7 @@
         content: "{{ hostvars['inline_connect_media'].token_secret }}\n"
         owner: root
         mode: '0600'
+        unsafe_writes: true  # pmxcfs does not permit atomic rename into /etc/pve/priv
       no_log: true
     - name: Verify PVE protected storage secret exists and has correct permissions
       ansible.builtin.stat:
