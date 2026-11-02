@@ -36,21 +36,49 @@ def cfg():
     }
 
 
-def test_semaphore_request_has_no_root_or_secret_pass_through():
-    play = yaml.safe_load(REQUEST.read_text())[0]
-    assert play["hosts"] == "site_runner"
-    assert play["become"] is False
-    text = REQUEST.read_text()
-    assert "dh-cloudflare-switch.path" in text
-    assert "SWITCH:{{ cloudflare_cutover_nonce.stdout }}" in text
-    assert "cloudflare_cutover_status.stdout == cloudflare_cutover_nonce.stdout ~ '|PASS'" in text
-    assert "cloudflare_cutover_nonce.stdout ~ '|FAILED'" in text
-    for task in play["pre_tasks"] + play["tasks"]:
-        assert "ansible.builtin.shell" not in task
-        assert "ansible.builtin.raw" not in task
-        cmd = task.get("ansible.builtin.command")
-        if cmd:
-            assert cmd["argv"][0] in {"systemctl", "hostname", "cat"}
+def test_task10_native_ansible_contract():
+    """New bootstrap has no legacy cutover watcher; 10 uses commissioned SSH/API."""
+    play = yaml.safe_load(REQUEST.read_text())
+    assert len(play) == 3
+    assert play[0]["hosts"] == "site_runner"
+    assert play[1]["hosts"] == "cf_pve_target_group"
+    assert play[2]["hosts"] == "site_runner"
+    for p in play:
+        assert p["become"] is False
+        for task in p.get("pre_tasks", []) + p.get("tasks", []):
+            assert "ansible.builtin.shell" not in task
+            assert "ansible.builtin.raw" not in task
+    code = REQUEST.read_text()
+    for forbidden in ("dh-cloudflare-switch.path", "dh-cloudflare-switch.request",
+                      "dh-cloudflare-switch.status", "noTLSVerify: true",
+                      "validate_certs: false", "tunnel_secret"):
+        assert forbidden not in code
+    for required in ("dh_pve_admin_ed25519", "dh_pve_known_hosts",
+                     "ansible.builtin.apt:", "ansible.builtin.systemd_service:",
+                     "/cfd_tunnel", "/dns_records", "/access/apps",
+                     "caPool: /etc/cloudflared/dh-pve-ca.pem",
+                     "--token-file", "cloudflared.service"):
+        assert required in code
+
+
+def test_task10_guards_existing_resources_and_publication_order():
+    play = yaml.safe_load(REQUEST.read_text())
+    preflight = [t["name"] for t in play[0]["tasks"]]
+    final = [t["name"] for t in play[2]["tasks"]]
+    assert preflight.index("Refuse bypass, everyone or empty user allowlists") < preflight.index(
+        "Create an absent remotely managed tunnel (no legacy deletion)")
+    assert preflight.index("Protect all foreign tunnel and DNS resources") < preflight.index(
+        "Create an absent remotely managed tunnel (no legacy deletion)")
+    assert final.index("Require actual healthy Tunnel on Cloudflare edge") < final.index(
+        "Create only absent DNS record after Access and healthy connector")
+    assert final.index("Create only absent DNS record after Access and healthy connector") < final.index(
+        "Never report success if Access was bypassed")
+    service_tasks = play[1]["tasks"]
+    assert any("ansible.builtin.copy" in t and t["ansible.builtin.copy"].get("mode") == "0600"
+               and t.get("no_log") is True for t in service_tasks)
+    assert all(t.get("no_log") is True for p in play for t in p.get("tasks", [])
+               if "ansible.builtin.uri" in t and "/cfd_tunnel" in
+               t["ansible.builtin.uri"].get("url", ""))
 
 
 def test_worker_pins_ssh_and_fixed_root_host_script():
