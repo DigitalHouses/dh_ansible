@@ -42,11 +42,12 @@
       Components: pbs-no-subscription
       Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 
-- name: Install Proxmox Backup Server without changing kernel or host storage
+- name: Install complete official Proxmox Backup Server with ZFS-capable Proxmox kernel
   ansible.builtin.apt:
-    name: proxmox-backup-server
+    name: proxmox-backup
     state: present
     update_cache: true
+    fail_on_autoremove: true
 
 - name: Start verified PBS and standard guest services
   ansible.builtin.systemd_service:
