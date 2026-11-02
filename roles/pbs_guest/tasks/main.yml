@@ -1,0 +1,90 @@
+---
+# Official PBS 4.x Debian 13 package installation. No datastore / disk actions.
+- name: Require the intended Debian 13 managed PBS guest
+  ansible.builtin.assert:
+    that:
+      - ansible_facts['distribution'] == 'Debian'
+      - ansible_facts['distribution_major_version'] == '13'
+      - inventory_hostname == 'pbs_guest'
+      - pbs.name == 'pbs-' ~ site.owner_slug
+    fail_msg: PBS_GUEST_OS_OR_IDENTITY_MISMATCH
+
+- name: Install supporting system packages
+  ansible.builtin.apt:
+    name:
+      - ca-certificates
+      - qemu-guest-agent
+      - avahi-daemon
+      - curl
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Install official signed Proxmox Trixie archive key
+  ansible.builtin.get_url:
+    url: https://enterprise.proxmox.com/debian/proxmox-archive-keyring-trixie.gpg
+    dest: /usr/share/keyrings/proxmox-archive-keyring.gpg
+    checksum: sha256:136673be77aba35dcce385b28737689ad64fd785a797e57897589aed08db6e45
+    owner: root
+    group: root
+    mode: '0644'
+
+- name: Enable official PBS 4 no-subscription apt repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/proxmox-pbs.sources
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      Types: deb
+      URIs: http://download.proxmox.com/debian/pbs
+      Suites: trixie
+      Components: pbs-no-subscription
+      Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
+
+- name: Install Proxmox Backup Server without changing kernel or host storage
+  ansible.builtin.apt:
+    name: proxmox-backup-server
+    state: present
+    update_cache: true
+
+- name: Start verified PBS and standard guest services
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop:
+    - qemu-guest-agent
+    - avahi-daemon
+    - proxmox-backup
+    - proxmox-backup-proxy
+
+- name: Wait for the PBS HTTPS administrative endpoint
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: 8007
+    state: started
+    timeout: 90
+
+- name: Verify actual PBS package version
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, version]
+  register: pbs_installed_version
+  changed_when: false
+
+- name: Require expected major PBS version
+  ansible.builtin.assert:
+    that:
+      - "'proxmox-backup-server 4.' in pbs_installed_version.stdout"
+    fail_msg: PBS_EXPECTED_MAJOR_VERSION_NOT_INSTALLED
+
+- name: Report service bootstrap only, without inventing backup readiness
+  ansible.builtin.debug:
+    msg:
+      result: PBS_SERVICE_INSTALLED
+      installed_version: "{{ pbs_installed_version.stdout }}"
+      web_url: "https://{{ pbs.network.ipv4.split('/')[0] }}:8007"
+      root_password: NOT_COMMISSIONED
+      datastore: NOT_CONFIGURED
+      backup_job: NOT_CONFIGURED
+      no_media_disk_changes: true
