@@ -236,7 +236,7 @@ def verify_one_time_ntfs_erase(data, physical):
             and approval.get("approved") is True
             and approval.get("scope") == "first_create_only"
             and approval.get("partition_filesystem") == "ntfs"
-            and approval.get("partition_label") == "HITACHI_4TB"
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", approval.get("partition_label", "")) is not None
             and approval.get("wwn") == spec["wwn"]
             and approval.get("serial") == spec["serial"]
             and approval.get("size_bytes") == spec["size_bytes"]
@@ -287,7 +287,7 @@ def verify_one_time_ntfs_erase(data, physical):
             and command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
                         children[1]["path"]) == "ntfs"
             and command("/usr/sbin/blkid", "-o", "value", "-s", "LABEL",
-                        children[1]["path"]) == "HITACHI_4TB",
+                        children[1]["path"]) == approval["partition_label"],
             "NTFS_APPROVED_FILESYSTEM_LABEL_MISMATCH")
     for path in (physical, children[0]["path"], children[1]["path"]):
         require(command("/usr/bin/findmnt", "-rn", "--source", path,
