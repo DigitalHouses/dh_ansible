@@ -1,6 +1,6 @@
 # Semaphore №10 — Cloudflare Tunnel до Proxmox VE
 
-**Дата:** 02.11.2026. **Статус:** реализация с отдельным PVE-туннелем подготовлена; полная live-приёмка после запуска Semaphore не выполнена.
+**Дата:** 02.11.2026. **Статус:** Task #32 LIVE PASS, idempotent rerun (`changed=0`), Cloudflare Access challenge independently verified; authenticated browser login remains required.
 
 ## Почему изменили схему
 
@@ -45,9 +45,31 @@ ingress c `caPool` и строгим TLS. Существующий общий si
 HTTP 200, структура JSON и заголовок `pve-api-daemon` обязательны.
 Не подставлять PVE root password, ticket или `validate_certs: false`.
 
-После PR/merge остаётся проверить DNS cutover, Cloudflare Access
-challenge и вход в PVE через браузер. До их завершения задача №10
-**не является LIVE PASS**.
+Для Task #31 DNS cutover и Access challenge ещё не подтверждались; итоговая приёмка выполнена в Task #32 ниже.
+
+## LIVE Task #32 · 02.11.2026 — PASS и idempotency
+
+С использованием Git commit `cc789d3` Semaphore №10 отработала успешно,
+`runner ok=52 changed=0 failed=0`,
+`cf_pve_target ok=17 changed=0 failed=0`.
+Повторный прогон не менял ни API Cloudflare, ни конфигурацию PVE:
+
+- существующий отдельный Tunnel `serzhan-home-pve` найден и подтверждён
+  `HEALTHY`; создание Tunnel и запись ingress пропущены как ненужные;
+- TLS origin `192.168.11.6:8006`, PVE API и строгий CA readback — PASS;
+- пакет и systemd unit `cloudflared` уже установлен/active, restart не потребовался;
+- DNS PVE CNAME найден правильным; Access policy/redirect — VERIFIED;
+- `shared_tunnel_untouched=true`, `legacy_deleted=false`, старый общий
+  Tunnel `serzhan-home` оставлен без изменений.
+
+Независимая read-only проверка с подключённого site runner:
+`https://dh-serzhan-home-pve.digitalhouses.vip/` ответил **HTTP 302** на
+Cloudflare Access `/cdn-cgi/access/login/`. URL авторизации с временными
+параметрами не сохранять в Git и отчётах.
+
+**Открытый пункт:** успешный браузерный вход *после* Access с подтверждением
+PVE UI ещё не засвидетельствован. Инфраструктурная часть №10 — LIVE PASS;
+полный пользовательский E2E допускает отдельную проверку.
 
 ## Выполнение и приёмка
 
