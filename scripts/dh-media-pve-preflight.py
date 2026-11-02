@@ -65,7 +65,7 @@ def verify_actual_data_disk(data):
     disk = link.resolve(strict=True)
     need(disk.name.startswith("sd") and disk.is_block_device(),
          "DISK_DEVICE_UNEXPECTED")
-    info = json.loads(command("/usr/bin/lsblk", "-J", "-b", "-o",
+    info = json.loads(command("/usr/bin/lsblk", "-J", "-T", "-b", "-o",
                               "PATH,TYPE,MODEL,SERIAL,WWN,SIZE,FSTYPE,LABEL,PARTUUID,MOUNTPOINTS",
                               str(disk)))
     devices = info.get("blockdevices", [])
