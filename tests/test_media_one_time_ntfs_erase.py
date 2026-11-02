@@ -108,15 +108,37 @@ def test_unapproved_foreign_partition_still_blocks(tmp_path):
             m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb", "erase")
 
 
-def test_canonical_pool_is_preserved_even_with_erase_survey(tmp_path):
+def test_canonical_pool_is_recreated_when_erase_is_explicitly_selected():
+    m = module()
+    data = approved_data()
+    calls = []
+    def simulate(*args, **kwargs):
+        calls.append(args)
+        return ""
+    with patch.object(m, "get_pool", side_effect=["123", None, "456"]), \
+         patch.object(m, "ensure_import", return_value=("123", False)) as imported, \
+         patch.object(m, "verify_pool_disk") as verified, \
+         patch.object(m, "command", side_effect=simulate):
+        assert m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef",
+                               "/dev/sdb", "erase") == ("456", True)
+    imported.assert_called_once()
+    assert verified.call_count == 2
+    assert ("/usr/sbin/zpool", "destroy", "serzhan-pool") in calls
+    assert ("/usr/sbin/wipefs", "--all", "/dev/sdb") in calls
+    assert ("/usr/sbin/sgdisk", "--zap-all", "/dev/sdb") in calls
+    assert any(call[:3] == ("/usr/sbin/zpool", "create", "-f")
+               and call[-2:] == ("serzhan-pool", "/dev/disk/by-id/wwn-0x1234567890abcdef")
+               for call in calls)
+
+
+def test_canonical_pool_is_preserved_only_when_operator_selected_import():
     m = module()
     data = approved_data()
     with patch.object(m, "get_pool", return_value="123"), \
-         patch.object(m, "ensure_import", return_value=("123", False)) as verified, \
+         patch.object(m, "ensure_import", return_value=("123", False)), \
          patch.object(m, "command", side_effect=AssertionError("must not wipe")):
         assert m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef",
-                               "/dev/sdb", "erase") == ("123", False)
-        verified.assert_called_once()
+                               "/dev/sdb", "preserve") == ("123", False)
 
 
 def test_wrong_partuuid_never_creates_marker(tmp_path):
