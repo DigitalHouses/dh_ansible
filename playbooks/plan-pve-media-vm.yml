@@ -317,7 +317,10 @@
     - name: Require a single valid Media guest ED25519 host key before network verification
       ansible.builtin.assert:
         that:
-          - "media_verified_ed25519_key is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}
+          - "media_verified_ed25519_key is match('^ssh-ed25519 [A-Za-z0-9+/]{60,}={0,2}')"
+          - "not ((media_guest_hostkey_qga.stdout | from_json)['out-truncated'] | bool)"
+        fail_msg: MEDIA_QGA_HOST_KEY_INVALID
+
 - name: Media 80 | Configure approved Debian media apps and one-time ZFS
   hosts: site_runner
   gather_facts: false
