@@ -86,7 +86,10 @@ jobs:
         run: ansible-galaxy collection install -r requirements/collections.yml
 
       - name: Validate repository policies
-        run: python -m pytest -q -m "not private_fleet" tests/
+        # These integration fixtures exercise root-owned 0600 files and root-only
+        # helper entrypoints. Run in the disposable CI VM as root; the separate
+        # native_credentials job remains unprivileged.
+        run: sudo -H "$(command -v python)" -m pytest -q -m "not private_fleet" tests/
       - name: Validate Cloudflare root worker Python syntax
         run: |
           python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
