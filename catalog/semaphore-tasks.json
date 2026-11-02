@@ -21,6 +21,15 @@
           "values": []
         },
         {
+          "name": "DH_INPUT_MQTT_BROKER_HOST",
+          "title": "MQTT · IP-адрес или имя брокера",
+          "description": "IPv4/DNS-имя MQTT-брокера этого объекта, без схемы и порта (по умолчанию 1883). Пустое поле сохраняет прежнее значение.",
+          "type": "text",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
           "name": "DH_INPUT_MQTT_USERNAME",
           "title": "MQTT · логин объекта",
           "description": "Оставьте пустым, чтобы сохранить прежнее значение. site uses PVE Agent or Plex Agent with remote MQTT broker.",
