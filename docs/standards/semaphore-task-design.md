@@ -131,14 +131,15 @@ Workflow — граф крупных операторских этапов, а �
 | **00** | Управление каталогом → root-worker + localhost Semaphore API | Действует; **не** обновляет Fleet Detail |
 | **05** | Site credentials → Secret Survey `target: env` → официальный localhost Semaphore API → Key Store / Variable Groups | Новая целевая форма в Draft PR, пока не принята E2E в UI; legacy №05 остаётся рабочей |
 | **06** | Глобальная проверка всего обязательного набора site credentials с причинами и действиями | Целевое решение ADR-0021; текущая legacy №06 вводит Fleet Vault password; новая проверка ещё не реализована |
+| **07** | Создание/adopt приватного site GitHub-репозитория после успешной №06; никаких workflows в private repo | Каталог опубликован; live-приёмка определяется отдельно |
 | **10** | Cloudflare connector → fixed-purpose root-worker | Действует по защищённому запросу |
 | **20** | Простой Ansible smoke | Действует |
 | **30** | Ansible read-only runner audit | Действует |
-| **40** | `infrastructure_access` → существующая роль `runner_remote_commander` через Ansible `become`; pairing в Semaphore | Новая реализация в Git; пока BLOCKED до общего admin commissioning на CT1231, не принята E2E |
+| **40** | Установка Remote Commander через `infrastructure_access` и обычный Ansible `become`; pairing отображается в Semaphore | Проверяется live, без отдельного worker и без фиктивного кода авторизации |
 | **50** | Read-only PVE access audit → root-worker | Действует |
 | **60** | NetAlertX plan + root-worker + guest provisioning/apply | Действует; пример one-click |
 | **70** | HAOS mTLS preflight + approved root-worker | Действует |
-| **80** | Media VM: `site_inventory_prepare` → PCI/storage preflight → nonce + pinned root-worker → PVE VM lifecycle → guest apps | Реальный one-click запуск работает на пилотном runner, но любая ошибка приложения возвращает FAIL; `create + erase` и `keep + import` — независимые явно утверждаемые параметры. Резервный прямой Ansible-запуск описан в [runbook](../runbooks/media-semaphore-launch.md) и не создаёт Task в Semaphore |
+| **80** | Media VM: проверка private site GitHub → native Ansible + commissioned PVE SSH/`become` → аппаратный preflight → VM lifecycle → SSH QGA trust → guest apps | `create/keep/recreate` и `import/erase` — отдельные явные параметры; никакого автоматического разрушения или root-worker на каждую операцию |
 | **81** | Media Acceptance E2E: independent read-only fixed-purpose worker, pinned SHA, sanitized PASS/FAIL/SKIP report | Independent task; direct run by `semaphore` uses the generic catalog launcher; it is not a new privileged pathway and does not bypass security-deny |
 | **90** | PVE NFS Backups: Semaphore nonce → root-worker → pinned PVE SSH → проверка экспорта/хранилища → `pvesm add nfs` при отсутствии → mount/read-write acceptance | Независимая операция; PVE SSH-ключ root-only; не изменяет backup jobs, не запускает резервное копирование и не трогает данные |
 
