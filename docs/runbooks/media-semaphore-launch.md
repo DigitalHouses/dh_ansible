@@ -1,5 +1,11 @@
 # Media Server: запуск Semaphore и прямой инженерный fallback
 
+> **Fresh Jonsbo site · 02.11.2026 · №80 BLOCKED BY ARCHITECTURE/INVENTORY (READ-ONLY AUDIT):** На новом PVE, несмотря на live PASS №10/№40, нет прежнего `dh-pve-access-audit.path` и нет старого private Fleet cache `/var/lib/semaphore/.dh-credentials/fleet`. Текущая №80 ожидает оба и не может выполнить новый native deployment. **НЕ устанавливать legacy root watcher в качестве обхода** — для №80/№81 требуется тот же reusable native Ansible PVE root SSH, что и №10, плюс site-owned inventory. Контракт сохранения данных обязателен.
+>
+> Live hardware readback: target media VM отсутствует; есть другие рабочие guests, которые нельзя трогать. Фактическая SATA data drive имеет существующий NTFS volume (не ZFS), поэтому `import` невозможен, а `erase` является уничтожением пользовательских данных и **не разрешён по умолчанию**. Устаревший Fleet site inventory описывает иной диск/WWN, иные GPU/SATA BDF, VMID, IP и backups. **Нельзя подменять ими фактические hardware facts**. Для нового Jonsbo: read-only `qm/pct/lsblk/blkid/PCI/IOMMU` → обновить отдельную site inventory декларацию → получить явное approval на стирание именно распознанного NTFS-диска, если это задумано → только потом native VM/ZFS deploy. Без approval — можно готовить код и аудит, нельзя трогать HDD.
+>
+> Acceptance №80: native Ansible PVE target; pinned host key и actual PVE IP, no fixed worker; VM lifecycle create/keep/recreate отдельно от disk import/erase; strict WWN/serial/size/signatures; preservation of other guests; guest QGA/SSH, ZFS, apps, SMB/NFS, Plex/Jellyfin, GPU event, PVE backup after acceptance. №81 тоже не должна ссылаться на отсутствующий worker. **Текущую №80 на новом объекте не запускать до выпуска native реализации.**
+
 **Обязательная точка входа для AI:** [Единый операционный runbook](ai-agent-execution.md). Здесь только особенности медиасервера, прежние инциденты и проверки; команды, release-publishing и общий порядок исполнения поддерживаются **в одном документе**, не в истории чатов.
 
 **Область:** задача `80-Медиасервер · Развёртывание`, runner Ansible/Semaphore и защищённый PVE worker.  
