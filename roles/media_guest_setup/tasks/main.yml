@@ -312,62 +312,62 @@
     - music
   changed_when: false
 
-- name: Inspect existing Plex library paths without changing its database
+- name: Install Plex library reconciler that checks the actual database
+  ansible.builtin.copy:
+    src: dh-plex-libraries.py
+    dest: /usr/local/sbin/dh-plex-libraries
+    owner: root
+    group: root
+    mode: '0755'
+
+- name: Inspect Plex library roots using read-only database access
   ansible.builtin.command:
     argv:
-      - runuser
-      - -u
-      - plex
-      - --
-      - python3
-      - -c
-      - |
-        import sqlite3
-        db = "/var/lib/plexmediaserver/Library/Application Support/Plex Media Server/Plug-in Support/Databases/com.plexapp.plugins.library.db"
-        with sqlite3.connect("file:" + db + "?mode=ro", uri=True) as connection:
-            for (path,) in connection.execute("SELECT root_path FROM section_locations"):
-                print(path)
-  register: media_existing_plex_paths
+      - /usr/local/sbin/dh-plex-libraries
+      - --mode
+      - check
+      - --media-root
+      - "{{ '/' ~ media_vm.storage.media_dataset }}"
+  become_user: plex
+  register: media_plex_libraries_before
   changed_when: false
 
-- name: Create missing Plex libraries using the installed Plex scanner
-  ansible.builtin.command:
-    argv:
-      - runuser
-      - -u
-      - plex
-      - --
-      - /usr/lib/plexmediaserver/Plex Media Scanner
-      - --add-section
-      - "{{ item.title }}"
-      - --type
-      - "{{ item.type }}"
-      - --agent
-      - "{{ item.agent }}"
-      - --location
-      - "{{ '/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder }}"
-      - --lang
-      - ru
-  loop:
-    - {title: 'Фильмы', folder: movies, type: '1', agent: 'tv.plex.agents.movie'}
-    - {title: 'Сериалы', folder: tvshows, type: '2', agent: 'tv.plex.agents.series'}
-    - {title: 'Музыка', folder: music, type: '8', agent: 'tv.plex.agents.music'}
-  when: ('/' ~ media_vm.storage.media_dataset ~ '/' ~ item.folder) not in media_existing_plex_paths.stdout_lines
-  register: media_new_plex_sections
+- name: Require known Plex library status before first-start repair
+  ansible.builtin.assert:
+    that:
+      - media_plex_libraries_before.stdout in ['PLEX_LIBRARIES=READY', 'PLEX_LIBRARIES=NEEDS_UPDATE']
+    fail_msg: MEDIA_PLEX_LIBRARY_INSPECTION_FAILED
 
-- name: Scan only newly created Plex libraries
+- name: Create missing Plex libraries only with confirmed database readback
   ansible.builtin.command:
     argv:
-      - runuser
-      - -u
-      - plex
-      - --
-      - /usr/lib/plexmediaserver/Plex Media Scanner
-      - --scan
-      - --section
-      - "{{ item.stdout | regex_search('ID [0-9]+') | regex_replace('ID ', '') }}"
-  loop: "{{ media_new_plex_sections.results }}"
-  when: item.changed | default(false)
+      - /usr/local/sbin/dh-plex-libraries
+      - --mode
+      - apply
+      - --media-root
+      - "{{ '/' ~ media_vm.storage.media_dataset }}"
+  become_user: plex
+  register: media_plex_libraries_applied
+  changed_when: "'PLEX_LIBRARY_CREATED=' in media_plex_libraries_applied.stdout"
+  when: media_plex_libraries_before.stdout == 'PLEX_LIBRARIES=NEEDS_UPDATE'
+
+- name: Independently verify all three Plex library locations and types
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-plex-libraries
+      - --mode
+      - check
+      - --media-root
+      - "{{ '/' ~ media_vm.storage.media_dataset }}"
+  become_user: plex
+  register: media_plex_libraries_after
+  changed_when: false
+
+- name: Refuse successful deployment with any missing Plex library
+  ansible.builtin.assert:
+    that:
+      - media_plex_libraries_after.stdout == 'PLEX_LIBRARIES=READY'
+    fail_msg: MEDIA_PLEX_LIBRARY_MISSING_AFTER_SCANNER
 
 - name: Validate Plex local HTTP service
   ansible.builtin.uri:
