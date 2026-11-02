@@ -60,11 +60,11 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
 
     def test_scope_matches_current_catalog(self):
         titles = [task["title"] for task in self.catalog["tasks"]]
-        self.assertEqual(len(titles), 13)
+        self.assertEqual(len(titles), 14)
         for n in ("00-", "05-", "06-", "10-", "50-", "70-", "80-", "81-", "90-"):
             self.assertTrue(any(title.startswith(n) for title in titles))
         self.assertFalse(any("PVE Agent" in title for title in titles))
-        self.assertFalse(any(title.startswith("07-") for title in titles))
+        self.assertTrue(any(title.startswith("07-") for title in titles))
         self.assertTrue(self.registry["rules"]["all_secret_fields_optional"])
         self.assertIn("KEEP", self.registry["rules"]["blank"])
 

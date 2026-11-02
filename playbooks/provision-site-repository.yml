@@ -1,0 +1,215 @@
+---
+# Reusable site data repository, no passwords or common Ansible code.
+# DigitalHouses is currently a GitHub USER account: POST /user/repos.
+# Existing private repo is ADOPTED only if its site marker is verified.
+- name: 07 — Provision private repository for this site
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  vars:
+    dh_git_owner: DigitalHouses
+    dh_git_name: "site-{{ site.id }}"
+    dh_git_api: "https://api.github.com/repos/{{ dh_git_owner }}/{{ dh_git_name }}"
+    dh_git_marker:
+      schema: 1
+      site_id: "{{ site.id }}"
+      purpose: digitalhouses_ansible_site
+    dh_git_headers:
+      Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: "2022-11-28"
+  module_defaults:
+    ansible.builtin.uri:
+      headers: "{{ dh_git_headers }}"
+      use_proxy: false
+      validate_certs: true
+      follow_redirects: none
+      timeout: 15
+  pre_tasks:
+    - name: Load canonical site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Restrict execution to the matching site runner
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - ansible_play_hosts_all | length == 1
+          - (ansible_connection | default('')) == 'local'
+          - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - site.id == site.owner_slug ~ '-' ~ site.type
+    - name: Read actual site runner hostname
+      ansible.builtin.command:
+        argv: [hostname]
+      changed_when: false
+      register: dh_git_runner
+    - name: Refuse another site runner
+      ansible.builtin.assert:
+        that: dh_git_runner.stdout == 'ansible-' ~ site.id
+  tasks:
+    - name: Check presence of GitHub provisioning identity
+      ansible.builtin.set_fact:
+        dh_git_token_present: "{{ DH_GITHUB_PROVISION_TOKEN is defined and (DH_GITHUB_PROVISION_TOKEN | default('') | length >= 20) }}"
+      no_log: true
+    - name: Require initial GitHub credential saved by Task 05
+      ansible.builtin.assert:
+        that: dh_git_token_present
+        fail_msg: GITHUB_PROVISION_TOKEN_MISSING_USE_TASK_05
+
+    - name: Verify authenticated GitHub owner
+      ansible.builtin.uri:
+        url: https://api.github.com/user
+        method: GET
+        status_code: [200, 401, 403]
+      register: dh_git_actor
+      changed_when: false
+      no_log: true
+    - name: Refuse token from another GitHub account
+      ansible.builtin.assert:
+        that:
+          - dh_git_actor.status == 200
+          - dh_git_actor.json.login | default('') == dh_git_owner
+          - dh_git_actor.json.type | default('') == 'User'
+        fail_msg: GITHUB_PROVISION_ACCOUNT_MISMATCH
+
+    - name: Locate the exact site repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}"
+        method: GET
+        status_code: [200, 404]
+      register: dh_git_before
+      changed_when: false
+      no_log: true
+
+    - name: Create only a missing PRIVATE site repository
+      ansible.builtin.uri:
+        url: https://api.github.com/user/repos
+        method: POST
+        body_format: json
+        body:
+          name: "{{ dh_git_name }}"
+          private: true
+          auto_init: true
+          description: "DigitalHouses private Ansible inventory · {{ site.id }}"
+          has_issues: false
+          has_projects: false
+          has_wiki: false
+        status_code: [201, 403, 422]
+      register: dh_git_created
+      when: dh_git_before.status == 404
+      no_log: true
+
+    - name: Require successful private repository creation or safe adoption
+      ansible.builtin.assert:
+        that:
+          - dh_git_before.status == 200 or dh_git_created.status | default(0) == 201
+        fail_msg: >-
+          GITHUB_PRIVATE_REPO_CREATION_BLOCKED:
+          check owner login and repository creation/Contents permissions.
+      when: dh_git_before.status == 404
+
+    - name: Verify actual repository identity after creation or adoption
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}"
+        method: GET
+        status_code: 200
+      register: dh_git_repo
+      changed_when: false
+      no_log: true
+    - name: Demand exact private repository identity
+      ansible.builtin.assert:
+        that:
+          - dh_git_repo.json.owner.login == dh_git_owner
+          - dh_git_repo.json.owner.type == 'User'
+          - dh_git_repo.json.full_name == dh_git_owner ~ '/' ~ dh_git_name
+          - dh_git_repo.json.private == true
+          - not dh_git_repo.json.archived
+          - dh_git_repo.json.default_branch | length > 0
+        fail_msg: GITHUB_SITE_REPO_NOT_PRIVATE_OR_WRONG_OWNER
+
+    - name: Examine existing site marker before any initialization
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/.digitalhouses/site.json"
+        method: GET
+        status_code: [200, 404]
+      register: dh_git_marker_before
+      changed_when: false
+      no_log: true
+    - name: Never adopt an unrelated or unmarked site repository
+      ansible.builtin.assert:
+        that:
+          - dh_git_marker_before.status == 200
+          - (dh_git_marker_before.json.content | b64decode | from_json).schema == 1
+          - (dh_git_marker_before.json.content | b64decode | from_json).site_id == site.id
+          - (dh_git_marker_before.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
+        fail_msg: GITHUB_EXISTING_REPOSITORY_MARKER_MISMATCH
+      when: dh_git_before.status == 200
+      no_log: true
+
+    - name: Initialize identity marker only for new repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/.digitalhouses/site.json"
+        method: PUT
+        body_format: json
+        body:
+          message: "Initialize DigitalHouses site identity"
+          branch: "{{ dh_git_repo.json.default_branch }}"
+          content: "{{ dh_git_marker | to_nice_json | b64encode }}"
+        status_code: 201
+      when:
+        - dh_git_before.status == 404
+        - dh_git_marker_before.status == 404
+      no_log: true
+    - name: Initialize nonsecret site inventory only for new repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/inventories/{{ site.id }}/site.yml"
+        method: PUT
+        body_format: json
+        body:
+          message: "Initialize nonsecret site inventory"
+          branch: "{{ dh_git_repo.json.default_branch }}"
+          content: "{{ {'site': {'id': site.id, 'owner_slug': site.owner_slug, 'type': site.type}} | to_nice_yaml | b64encode }}"
+        status_code: 201
+      when: dh_git_before.status == 404
+      no_log: true
+
+    - name: Read back site repository ownership marker
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/.digitalhouses/site.json"
+        method: GET
+        status_code: 200
+      register: dh_git_marker_after
+      changed_when: false
+      no_log: true
+    - name: Verify exact site marker readback
+      ansible.builtin.assert:
+        that:
+          - (dh_git_marker_after.json.content | b64decode | from_json).schema == 1
+          - (dh_git_marker_after.json.content | b64decode | from_json).site_id == site.id
+          - (dh_git_marker_after.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
+        fail_msg: GITHUB_SITE_MARKER_READBACK_FAILED
+      no_log: true
+    - name: Read back site inventory
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/inventories/{{ site.id }}/site.yml"
+        method: GET
+        status_code: 200
+      register: dh_git_inventory_after
+      changed_when: false
+      no_log: true
+    - name: Verify site inventory has the correct identity
+      ansible.builtin.assert:
+        that:
+          - (dh_git_inventory_after.json.content | b64decode | from_yaml).site.id == site.id
+        fail_msg: GITHUB_SITE_INVENTORY_READBACK_FAILED
+      no_log: true
+
+    - name: Report safe site repository result
+      ansible.builtin.debug:
+        msg:
+          site: "{{ site.id }}"
+          repository: "{{ dh_git_owner }}/{{ dh_git_name }}"
+          private: true
+          action: "{{ 'CREATED' if dh_git_before.status == 404 else 'ADOPTED' }}"
+          marker: VERIFIED
+          inventory: VERIFIED
+          routine_read_only_access: NOT_COMMISSIONED

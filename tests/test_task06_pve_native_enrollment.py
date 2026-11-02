@@ -122,6 +122,7 @@ def test_readiness_is_only_after_key_based_remote_root_identity():
     msg = report["ansible.builtin.debug"]["msg"]
     assert "dh_mqtt_status" in msg["overall"]
     assert "dh_cloudflare_status" in msg["overall"]
+    assert "dh_github_status" in msg["overall"]
     assert msg["pve_ssh"]["status"] == "READY"
     assert msg["password_or_ticket_logged"] is False
     gate = final["tasks"][-1]

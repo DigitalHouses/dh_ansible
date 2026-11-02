@@ -20,7 +20,7 @@ def seeder_module():
 
 def test_task_05_06_are_not_bootstrap_tasks():
     tasks = json.loads(CATALOG.read_text())["tasks"]
-    assert [item["title"][:2] for item in tasks[:4]] == ["00", "05", "06", "10"]
+    assert [item["title"][:2] for item in tasks[:4]] == ["00", "05", "06", "07"]
     assert tasks[1]["playbook"] == "playbooks/obtain-site-credentials.yml"
     assert tasks[2]["playbook"] == "playbooks/check-site-credentials.yml"
     assert len(seeder_module().BOOTSTRAP_TEMPLATES) == 1
