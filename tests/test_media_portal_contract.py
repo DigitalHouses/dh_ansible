@@ -26,6 +26,8 @@ def render_html(applications, admin=False):
     env.filters["bool"] = bool
     vm = {
         "name": "mediaserver-demo",
+        "vmid": 2238,
+        "storage": {"pool_name": "demo-pool"},
         "network": {"ipv4": "192.0.2.238/24"},
         "discovery": {
             "friendly_name": "Домашний медиасервер",
@@ -42,7 +44,7 @@ def render_html(applications, admin=False):
                              "description": "Система виртуализации"}],
         },
     }
-    return env.from_string(PAGE.read_text()).render(media_vm=vm)
+    return env.from_string(PAGE.read_text()).render(media_vm=vm, site={"owner_slug": "demo"})
 
 
 def test_all_media_services_visible_even_if_system_admin_section_hidden():
@@ -59,6 +61,7 @@ def test_all_media_services_visible_even_if_system_admin_section_hidden():
     assert "Finder" in page
     assert "Сохраните эту страницу в закладки" in page
     assert "password=" not in page.lower()
+    assert "qm guest exec 2238 -- cat /demo-pool/digitalhouses/credentials/demo.txt" in page
 
 
 def test_only_enabled_apps_have_links_and_system_admin_separate():
