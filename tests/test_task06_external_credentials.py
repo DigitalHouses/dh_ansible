@@ -118,6 +118,29 @@ def test_task06_is_read_only_for_mqtt_and_cloudflare_and_no_cli_secret():
     assert "DH_CLOUDFLARE_API_TOKEN" not in str(uri["url"])
 
 
+def test_nonsecret_mqtt_settings_resolved_from_semaphore_environment():
+    # Task 05's native Variable Group `env` is a process environment, NOT
+    # an Ansible `vars` mapping. Only secret type=var comes as an Ansible var.
+    play = PLAYS[0]
+    resolve = next(t for t in play["tasks"]
+                   if t["name"] == "Resolve MQTT nonsecret settings from Semaphore environment")
+    values = resolve["ansible.builtin.set_fact"]
+    assert "lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST')" in values["dh_mqtt_broker_host"]
+    assert "lookup('ansible.builtin.env', 'DH_MQTT_USERNAME')" in values["dh_mqtt_login"]
+    assert resolve["no_log"] is True
+    presence = next(t for t in play["tasks"]
+                    if t["name"] == "Establish which MQTT site credentials were provided")
+    assert "dh_mqtt_broker_host | length > 0" in presence["ansible.builtin.set_fact"]["dh_mqtt_host_present"]
+    assert "dh_mqtt_login | length > 0" in presence["ansible.builtin.set_fact"]["dh_mqtt_username_present"]
+    mqtt = next(t for t in play["tasks"]
+                if t["name"].startswith("Authenticate to the configured MQTT broker"))
+    payload = mqtt["ansible.builtin.command"]["stdin"]
+    assert "'host': dh_mqtt_broker_host" in payload
+    assert "'username': dh_mqtt_login" in payload
+    assert "'password': DH_MQTT_PASSWORD" in payload
+    assert mqtt["no_log"] is True
+
+
 def test_missing_optional_credentials_are_not_false_ready():
     txt = PLAYBOOK.read_text()
     assert "'NOT_CONFIGURED'" in txt
