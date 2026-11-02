@@ -1,124 +1,37 @@
 # Semaphore №10 — Cloudflare Tunnel до Proxmox VE
 
-**Дата:** 02.11.2026. **Статус:** после PR #124 первый live запуск Task #25 не прошёл preflight (несуществующее `pve_observed.api_hostname`, `changed=0`). Исправление совместимости внесено отдельным PR; до реального E2E нельзя объявлять LIVE PASS.
+**Дата:** 02.11.2026. **Статус:** реализация с отдельным PVE-туннелем подготовлена; полная live-приёмка после запуска Semaphore не выполнена.
 
-## Что меняется
+## Почему изменили схему
 
-Задача **10-Создание туннеля CF до PVE** выполняет в одном запуске
-`audit → preflight → reconcile → verify`. Устанавливать старый
-`dh-cloudflare-switch.path`, отдельный root worker или запускать ручной
-`cloudflare-commission.py --enroll` на свежем объекте **не требуется**.
+Live Task #27 обнаружила существующий общий Tunnel `<site.id>` с четырьмя ingress-правилами: PVE-hostname совпадал, но origin и TLS-параметры отличались от нового PVE. Прежняя задача блокировала запись с `CF_EXISTING_INGRESS_NOT_OWNED` и `changed=0`. Этот общий Tunnel может обслуживать другие приложения; его ingress и коннекторы **не менять**.
 
-Один доверенный контур Semaphore/Ansible использует уже полученные:
-- Cloudflare API credential `DH_CLOUDFLARE_API_TOKEN` из native Semaphore Variable Group (Task 05);
-- root SSH-ключ PVE и pinned known_hosts, проверенные Task 06;
-- фактическую PVE identity из bootstrap `pve-runtime.yml`, CA `pve-root-ca.pem`, локальную `site.id`.
+Новая модель: **один отдельный Tunnel для PVE**, `<site.id>-pve`. Старый общий `<site.id>` сохраняется с исходными четырьмя правилами. Публичное имя PVE не меняется: `dh-<site.id>-pve.digitalhouses.vip`.
 
-Никаких новых Survey-полей и повторного ввода credentials. На
-`serzhan-home` текущий PVE — **<observed-PVE-IP>**, не старый адрес Fleet.
-Дом определяется site identity, а не жёстко заданным IP в общем коде.
+## Алгоритм №10
 
-## Границы безопасности
+1. **Read-only preflight:** site/runner identity, pinned SSH/PVE CA, актуальный PVE IP, Cloudflare zone, единственная покрывающая Access application и ограниченные allow-policy, старый CNAME и точный site Tunnel. Если CNAME указывает на старый общий Tunnel, через API подтверждаем, что ровно одно его ingress-правило соответствует нашему PVE-hostname. Не выводим чужие DNS/ingress/токены и не перезаписываем их.
+2. **PVE package/service preflight:** проверка фактического PVE node, наличия и принадлежности `cloudflared.service`; при отсутствии `cloudflared` установить через подписанный официальный APT; проверить, что бинарник поддерживает `--token-file` (версия >= 2025.4.0). Чужой systemd unit не заменять. Прежде чем создавать Tunnel, убедиться в готовности ПО. На этом этапе пустую службу запускать **нельзя** — ещё нет token.
+3. **Tunnel provisioning:** найти или создать отдельно `<site.id>-pve`, установить только один PVE ingress `https://<observed-PVE-IP>:8006` с `caPool=/etc/cloudflared/dh-pve-ca.pem`, `noTLSVerify=false` и конечный `http_status:404`. Чужие правила в новом туннеле блокируют изменения. Получить connector token через Cloudflare API, скрыть его из логов.
+4. **systemd activation:** положить токен в root-only файл на PVE, установить own systemd unit, включить и поднять `cloudflared.service`; повторный запуск без изменения токена и unit не делает restart. `systemctl active` обязателен.
+5. **Только после запуска:** Cloudflare API подтверждает `Tunnel status=healthy` (не `inactive/down/degraded`); происхождение PVE проверяется отдельно HTTPS с доверенным PVE CA. `Healthy` нельзя требовать **до создания туннеля** — Cloudflare выдаёт статус только после подключения connector.
+6. **DNS cutover:** только после Access, Healthy, strict origin TLS и повторной проверки DNS. Если CNAME отсутствует — создать. Если указывает на свой dedicated Tunnel — ничего не менять. Если указывает на прежний `<site.id>`, который ранее точно подтверждён как прежний владелец PVE-hostname — заменить **только этот CNAME**. Не менять старый Tunnel, его ingress и два других маршрута. Если DNS изменился во время задачи — блокировка `CF_DNS_CONCURRENT_CHANGE_OR_FOREIGN_OWNER`.
+7. **Acceptance:** readback CNAME, HTTPS redirect на Cloudflare Access для неаутентифицированного клиента, затем отдельная проверка авторизованного входа в PVE. Повтор №10 должен завершаться без инфраструктурных изменений.
 
-Публичное имя: `dh-<site.id>-pve.digitalhouses.vip`.
-Туннель: `<site.id>` (`config_src=cloudflare`).
-Сервис на origin: `https://<observed-pve-ip>:8006`.
+## Безопасность и credentials
 
-До любого Cloudflare POST/PUT задача требует:
-1. точное совпадение site/runner/PVE, работающий root SSH с проверкой host key;
-2. Cloudflare Zone Read, однозначную активную зону `digitalhouses.vip`;
-3. **ровно одно** действующее приложение Access, покрывающее точное имя
-   либо утверждённый wildcard `*.digitalhouses.vip`;
-4. действующие ограниченные allow-политики с email, без bypass/everyone;
-5. отсутствие чужого туннеля, DNS-конфликта или неразрешённого ingress drift.
+Секреты из native Semaphore №05/06, root SSH с закреплённым host key, фактический PVE из bootstrap. Не требуются новые Survey/ручные root scripts, `dh-cloudflare-switch.path` или повторный ввод пароля. API/токены скрыты `no_log`; токен на PVE только root:root `0600`; не передаётся как аргумент shell.
 
-Отсутствие Access **не приводит к публичному открытию PVE** — задача блокируется
-с `CF_ACCESS_APPLICATION_MISSING_OR_AMBIGUOUS` или
-`CF_ACCESS_ALLOWLIST_NOT_PROVEN`. Этот выпуск не придумывает допустимые
-email/группы и не меняет общие приложения Access других объектов.
+**Важное отличие:** `systemctl active` доказывает работу локального процесса, а `healthy` от Cloudflare подтверждает подключения к edge. Ни одно из них само по себе не доказывает успешный вход в PVE через Access.
 
-При отсутствии site-туннеля создаётся remote-managed Tunnel через Cloudflare
-API, выставляется **только** canonical ingress + 404 fallback. При
-существующем site-туннеле выполняется readback/adopt; чужие маршруты
-не перезаписываются. Из Cloudflare API берётся connector token и Ansible
-записывает его на PVE с root:root 0600, **не в CLI argv**, не в Git.
-Origin использует PVE CA (`caPool`) и `noTLSVerify=false`. Проверка имени сертификата выполняется по фактическому IPv4 в HTTPS origin URL; этот IPv4 уже валидировался №06 через pinned PVE CA и TLS fingerprint. В свежем `pve-runtime.yml` нет `api_hostname`, поэтому №10 не требует такого поля.
+## Выполнение и приёмка
 
-На PVE Ansible устанавливает `cloudflared` из подписанного официального
-APT-репозитория только при отсутствии пакета; установку и `systemd`
-выполняет через обычное root SSH. Если существующая служба
-`cloudflared.service` принадлежит legacy/неизвестному развёртыванию, задача
-**BLOCKED**, не прерывает её и не пытается автоматически перенести старый
-туннель. Никаких скрытых перезапусков чужих служб. При изменении токена, CA
-или service unit только тогда выполняется restart; повтор совпадающего
-состояния — read-only + штатная проверка службы.
+После проверки PR/merge — один запуск **`10-Создание туннеля CF до PVE`** в Semaphore. При ошибке прислать полный task log (без секретов). Не удалять общий Tunnel и не чистить его маршруты. После PASS открыть адрес в браузере, авторизоваться в Access и убедиться, что действительно показана новая PVE на фактическом IP.
 
-DNS CNAME создаётся **только после подтверждения Cloudflare API
-`healthy`** и повторного чтения ingress. После публикации проверяется
-точный DNS и неаутентифицированный HTTP redirect на Cloudflare Access.
-**Browser login с правами пользователя остаётся отдельной проверкой**
-и не подменяется успешным API ответом.
-
-## LIVE Task #26 · 02.11.2026 · существующий ingress отличается
-
-Во втором живом запуске №10 приняла сайт, PVE SSH и trust, Cloudflare Zone,
-существующий Access с allow-политиками и DNS collision preflight, но
-остановилась на `CF_EXISTING_INGRESS_NOT_OWNED`: Cloudflare уже содержит
-remote-managed Tunnel этого site, однако его список ingress-правил не совпадает
-с принятой canonical схемой. `changed=0`, никаких Cloudflare или PVE записей.
-
-Нельзя угадывать реальный ingress и разрешать любое несовпадение, особенно
-если правила включают другие hostnames или origin. Следующая ревизия выводит
-**только read-only structural diagnostics**:
-число правил; exact-match флаги canonical hostname и PVE origin; ожидаемый
-`caPool` и явную проверку TLS; наличие legacy originServerName override;
-имена TLS-опций без их значений; 404 fallback; количество лишних правил.
-При несовпадении задача **продолжает BLOCKED без изменений**.
-Ни internal IP, ни foreign routes, ни секреты в Semaphore не показываются.
-
-После просмотра этого безопасного вывода можно подготовить адресную миграцию
-или точный ADOPT только для подтверждённого существующего ingress. Не
-предлагать пользователю вручную удалять туннель или обходить блокировку
-`no_log`. №40 Remote Desktop Commander остаётся следующим этапом после
-живой приёмки №10.
-
-## Как запустить после merge
-
-1. В Semaphore обновить **№00-Обновить список задач**, если требуется
-   получить новый Git SHA каталога (шаблон №10 остаётся с прежним ID).
-   Никакого Bootstrap/удаления CT1231/повторной №05/№07.
-2. Запустить **№10-Создание туннеля CF до PVE** без Survey-параметров.
-3. Сохранить полный безопасный Task output и сообщить ошибку
-   `CF_...`, если есть. Сообщения облачного API и токены не выводятся
-   (`no_log`).
-4. После PASS открыть `https://dh-serzhan-home-pve.digitalhouses.vip`,
-   пройти Access и проверить PVE UI, потом **повторить №10**.
-   У повторного запуска инфраструктурные изменения должны быть 0.
-
-**Важно:** установка/доступность пакета, Cloudflare permission WRITE и
-реальная внешняя авторизация **ещё не доказаны** до живого E2E.
-Отказы Cloudflare 403 на POST/PUT или получение tunnel token означают,
-что имеющийся credential не имеет нужного права; GET-only диагностика №06
-никогда не считалась доказательством возможности записи.
-
-## Контракт для AI-агентов
-
-- `target`: Cloudflare API + PVE host;
-- `operations`: external API, software_manage, service_manage;
-- `identity`: Semaphore native CF credential + PVE commissioned root SSH;
-- `credential_source`: Task 05/06 native Semaphore + bootstrap trust;
-- `approval`: запуск №10 владельцем, только exact site, без destructive migration;
-- `postconditions`: API tunnel healthy, protected ingress, service active,
-  DNS readback, Access challenge, второй запуск без изменений;
-- `privilege_status`: PVE root SSH READY по №06, CF WRITE — PENDING до E2E.
-
-Старые инструкции по ручной root-only Cloudflare enrollment и watcher
-сохранены в Git **только для legacy-развёртываний**. Они не являются
-пререквизитом новой №10, не удаляются автоматически и не используются
-для новых объектов.
+Профильный тест CI и `ansible-playbook --syntax-check` обязательны. Live состояние не объявляется успешным до результатов реального запуска и проверки браузером.
 
 Официальные источники:
-- https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/get-started/create-remote-tunnel-api/
-- https://developers.cloudflare.com/api/resources/zero_trust/subresources/tunnels/subresources/cloudflared/
-- https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/
+- https://developers.cloudflare.com/tunnel/get-started/
+- https://developers.cloudflare.com/tunnel/observability/
+- https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/
 - https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/run-parameters/
