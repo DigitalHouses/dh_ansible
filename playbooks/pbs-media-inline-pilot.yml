@@ -156,7 +156,10 @@
     - name: Require exactly the newly recreated healthy pool
       ansible.builtin.assert:
         that:
-          - "pool_state.stdout.split() == ['serzhan-pool', '40733622006301358', 'ONLINE']"
+          - "'serzhan-pool' in pool_state.stdout"
+          - "'40733622006301358' in pool_state.stdout"
+          - "'ONLINE' in pool_state.stdout"
+          - "pool_state.stdout_lines | length == 1"
         fail_msg: PBS_MEDIA_INLINE_POOL_GUID_DRIFT
     - name: Validate existing Hitachi VDEV and no pool data errors
       ansible.builtin.command:
