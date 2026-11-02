@@ -102,6 +102,48 @@
           - pbs_zfs_initial_ready
         fail_msg: PBS_ZFS_KERNEL_MISSING_DO_NOT_TOUCH_MEDIA_OR_PCI
       when: pbs_zfs_kernel_action == 'audit'
+    # After physical PCI transfer the previous NFS provider VM is stopped.
+    # Detach only the exact obsolete pilot client mount; no contents are deleted.
+    - name: Read old NFS pilot mount source without traversing the filesystem
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_old_nfs_mount
+      changed_when: false
+      failed_when: false
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Verify only the old site-specific pilot export may be detached
+      ansible.builtin.assert:
+        that:
+          - pbs_old_nfs_mount.rc != 0 or pbs_old_nfs_mount.stdout == pbs.pilot.nfs_server ~ ':' ~ pbs.pilot.export_path
+        fail_msg: PBS_ZFS_NFS_MOUNT_IDENTITY_MISMATCH
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Preserve original NFS fstab in a dated local backup and disable only this entry
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: "^{{ pbs.pilot.nfs_server | regex_escape }}:{{ pbs.pilot.export_path | regex_escape }}\\s+{{ pbs.pilot.mount_path | regex_escape }}\\s+nfs4\\s+"
+        state: absent
+        backup: true
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Detach old, inactive NFS pilot mount without contacting stopped media VM
+      ansible.builtin.command:
+        argv: [umount, -l, "{{ pbs.pilot.mount_path }}"]
+      when:
+        - pbs_zfs_kernel_action == 'install_and_reboot'
+        - pbs_old_nfs_mount.rc == 0
+      register: pbs_old_nfs_detach
+    - name: Confirm NFS mount no longer active in PBS guest
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_old_nfs_after
+      changed_when: false
+      failed_when: false
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Require NFS dependency detached before reboot
+      ansible.builtin.assert:
+        that:
+          - pbs_old_nfs_after.rc != 0
+        fail_msg: PBS_ZFS_NFS_STILL_ATTACHED_NO_REBOOT
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
     - name: Install the official full PBS meta-package (includes ZFS kernel)
       ansible.builtin.apt:
         name: proxmox-backup
@@ -155,22 +197,25 @@
         state: started
         timeout: 90
       changed_when: false
-    - name: Read current NFS filesystem type
+    - name: Check pilot NFS mount state after kernel restart
       ansible.builtin.command:
-        argv: [stat, -f, -c, '%T', "{{ pbs.pilot.mount_path }}"]
-      register: pbs_zfs_current_mount
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_zfs_post_nfs
       changed_when: false
-    - name: Require NFS baseline not inadvertently detached
+      failed_when: false
+    - name: Require old NFS storage is not mounted when PCI transfer has already occurred
       ansible.builtin.assert:
         that:
-          - pbs_zfs_current_mount.stdout == 'nfs'
-        fail_msg: PBS_ZFS_BASELINE_NFS_NOT_MOUNTED
+          - pbs_zfs_post_nfs.rc != 0
+        fail_msg: PBS_ZFS_STALE_NFS_MOUNT_RESTORED
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
     - name: Report ZFS-ready guest without importing any pool
       ansible.builtin.debug:
         msg:
           result: PBS_ZFS_KERNEL_READY
           before: "{{ pbs_kernel_before.stdout }}"
           after: "{{ pbs_kernel_after.stdout }}"
-          nfs_baseline_preserved: true
+          nfs_baseline_fstab_saved_locally: true
+          stale_nfs_mount_detached: true
           media_vm_unchanged: true
           pci_transfer_performed: false
