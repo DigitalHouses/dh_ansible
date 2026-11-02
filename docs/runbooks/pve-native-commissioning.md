@@ -1,3 +1,11 @@
+## Новый штатный сценарий — Semaphore Task №06 (PR #112, ещё не live accepted)
+
+Решение владельца: **№06 сама делает PVE commissioning**. Bootstrap получает фактический `vmbr0`/node/TLS CA/leaf fingerprint/SSH host public key напрямую от своего PVE-host-root контекста и переносит **только эти публичные данные** в site inventory. Bootstrap не предоставляет административного SSH-доступа и не вводит пароли. Пользователь через №05 один раз сохраняет root password.
+
+№06 проверяет по pinned HTTPS `root@pam` + `/nodes`. Только после этого генерирует `semaphore` ED25519 key и пытается noninteractive SSH по strict host key. Если текущий ключ не разрешён, стандартный Ansible SSH с `ansible_password`/sshpass передаёт сохранённый root password **на подтверждённый хост**, проверяет node и `vmbr0` перед добавлением публичного SSH-ключа в разрешённый PVE root `authorized_keys`. После этого независимо проверяет root доступ по ключу и `qm list`. Повторы идемпотентны. `READY` только после API и SSH.
+
+**Текущий CT1231 создан по предыдущему Bootstrap, без pinned trust seed:** №06 на нём не сможет комиссионировать PVE. Не создавать доверие через unauthenticated TOFU, не выполнять ручной commissioning, не удалять runner без отдельного разрешения на Fresh E2E. Пока новый live E2E не прошёл, этот раздел описывает **реализуемую версию**, а не принятую готовность.
+
 > **CURRENT OWNER DECISION · 2026-11-02 · NEW CT1231:** ручной запуск PVE host-root commissioning **не допускается**. Настройка PVE после Fresh Bootstrap — строго Semaphore + Ansible (см. [issue #111](https://github.com/DigitalHouses/dh_ansible/issues/111)). Этот документ ниже описывает **исторический** сценарий, по которому был принят предыдущий, позднее удалённый CT1231; не повторять его на текущем CT. Новый CT успешно выполнил Bootstrap, №00 и №05, но PVE trust/SSH НЕ commissioned. №06 ожидает trust, без него будет `PVE_TRUST_NOT_COMMISSIONED`. Нативная Task 08 ещё не реализована. Требуется интегрировать public PVE CA/cert fingerprint/SSH host key в 4-шаговый Bootstrap как исходное доверие и выполнить само подключение штатной задачей Semaphore + Ansible. До реализации — BLOCKED; не обходить строгую проверку SSH/TLS.
 
 # PVE native commissioning

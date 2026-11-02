@@ -1,3 +1,5 @@
+**После первоначального Bootstrap доступ к PVE подключается только штатной задачей Semaphore №06.** Целевой единый поток: Bootstrap (публичная PVE CA/TLS/SSH trust из исходного PVE-host-root) → №00 → №05 (только PVE root password) → №06 (API root@pam, key enrollment через pinned SSH host, подтверждённый root SSH). **№08 не вводится; ручной PVE commissioning больше не нормативен.** Реализация [PR #112](https://github.com/DigitalHouses/dh_ansible/pull/112) и [issue #111](https://github.com/DigitalHouses/dh_ansible/issues/111), live Fresh E2E ещё ожидается. Текущий CT1231 нельзя применять к новому сценарию без доверенного начального trust seed. Не удалять его автоматически.
+
 # DigitalHouses · Ansible
 
 Один универсальный набор кода для объектов DigitalHouses. **Дом отличается данными, а не кодом.**

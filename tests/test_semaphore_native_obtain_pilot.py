@@ -20,9 +20,12 @@ class NativeCredentialContract(unittest.TestCase):
                 (ROOT / "playbooks" / (name + ".yml")).read_text(encoding="utf-8")
             )
             self.assertIsInstance(document, list)
-            self.assertEqual(len(document), 1)
+            self.assertEqual(len(document), 1 if name == "obtain-site-credentials" else 3)
             self.assertEqual(document[0]["hosts"], "site_runner")
             self.assertEqual(document[0]["gather_facts"], False)
+            if name == "check-site-credentials":
+                self.assertEqual(document[1]["hosts"], "dh_pve_first_enrollment")
+                self.assertEqual(document[2]["hosts"], "dh_pve_key_probe")
 
     def test_no_custom_task05_python(self):
         self.assertFalse((ROOT / "scripts/semaphore-obtain-credentials.py").exists())

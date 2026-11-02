@@ -1,3 +1,7 @@
+## Целевой поток №06 — API + SSH commissioning (PR #112)
+
+В одном задании **№06 «Проверить credentials объекта»** после №05 выполняются две проверки: `root@pam` API через доверенную PVE CA/hostname/SHA256 pin и SSH-доступ Ansible под root по site-scoped ключу. При первом запуске задача создаёт ключ и авторизует только его публичную часть через password SSH на host-key-pinned PVE, получив единственный сохранённый пароль из штатной Semaphore Variable Group. Повтор №06 не меняет PVE при уже работающем ключе. `overall=READY` означает готовность и API, и SSH. **№08 не существует и не будет создаваться.** Для этого Fresh Bootstrap должен заранее передать только **публичные** PVE trust materials с действительного PVE-хоста. [Описание реализации](https://github.com/DigitalHouses/dh_ansible/issues/111). До нового Fresh E2E работа ещё **не принята**.
+
 > **Решение владельца после повторного Fresh Bootstrap, 02.11.2026:** commissioning PVE root SSH/TLS разрешён **только через Semaphore + Ansible**, без самостоятельной команды `commission-pve-runner.py` на PVE. На **текущем** заново установленном CT1231 №00 и №05 выполнились успешно, но №06 не может подтвердить PVE до появления доверенного CA/SSH identity; прежнее `READY` относится к удалённому предыдущему CT1231. Детали реализации — [issue #111](https://github.com/DigitalHouses/dh_ansible/issues/111). Пока нет нативной задачи и trusted seed, дальнейшие проверки PVE BLOCKED. Не предлагать ручной Shell PVE как штатное решение.
 
 # Semaphore 2.20 Beta — получение и проверка credentials объекта (№05/06)

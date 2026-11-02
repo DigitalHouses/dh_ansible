@@ -28,10 +28,12 @@ install -d -o root -g root -m 0700 "$LOG_DIR"
 LOG="$(mktemp "$LOG_DIR/tiny-$(date -u +%Y%m%dT%H%M%SZ).XXXXXXXX.log")"
 chmod 0600 "$LOG"
 MOUNTED=0
+TRUST_TMP=""
 on_exit() {
   local rc=$?
   trap - EXIT
   if (( MOUNTED )); then pct unmount "$CTID" || true; fi
+  if [[ -n "$TRUST_TMP" && -d "$TRUST_TMP" ]]; then rm -rf -- "$TRUST_TMP"; fi
   echo "RESULT_RC=$rc"
   echo "LOG_FILE=$LOG"
   echo "TERMINAL STAYS OPEN"
@@ -112,6 +114,12 @@ echo "SEMAPHORE_INSTALL=PASS"
 
 echo "=== 4/4 · SINGLE TASK 00 ==="
 pct exec "$CTID" -- bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh "$SITE" "$CODE_RELEASE" "${HOST_CIDR%/*}"
+# Public PVE trust is anchored by THIS PVE root host during Bootstrap, before
+# Task 05 receives a password. SSH authorization remains exclusively Task 06.
+TRUST_TMP="$(mktemp -d /tmp/dh-pve-public-trust.XXXXXXXX)"
+pct pull "$CTID" /opt/digitalhouses/src/bootstrap/commission-pve-runner.py "$TRUST_TMP/commission-pve-runner.py"
+pct pull "$CTID" /opt/digitalhouses/src/bootstrap/seed-pve-public-trust.py "$TRUST_TMP/seed-pve-public-trust.py"
+python3 "$TRUST_TMP/seed-pve-public-trust.py" --runner-ctid "$CTID" --site "$SITE"
 echo "BOOTSTRAP_FRESH_DONE=PASS"
 echo "SEMAPHORE_URL=https://$RUNNER_IP:3000/"
 echo "ADMIN_PASSWORD_FILE=CT$CTID:/root/dh-semaphore-initial-admin-password"
