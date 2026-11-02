@@ -1,0 +1,151 @@
+---
+# PBS PCI Pilot: allow only UID 34 (backup) traversal into the existing
+# /serzhan-pool/backups parent. Do not chmod/chgrp parent, alter media files,
+# mount existing datasets or change NFS baseline.
+- name: PBS PCI ACL | Verify site and register PBS guest
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Read private PBS site data
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Verify the permitted PCI pilot
+      ansible.builtin.assert:
+        that:
+          - "site.id == 'serzhan-home'"
+          - "pbs.vmid | int == 2233"
+          - "pbs.network.ipv4.split('/')[0] == '192.168.11.233'"
+          - "pbs.safety.never_touch_media_disk | bool"
+        fail_msg: PBS_PCI_PARENT_ACL_WRONG_SITE
+    - name: Register pinned PBS guest
+      ansible.builtin.add_host:
+        name: pbs_pci_acl_guest
+        groups: dh_pbs_pci_acl_guest
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+      changed_when: false
+
+- name: PBS PCI ACL | Grant backup user traverse-only on existing parent
+  hosts: dh_pbs_pci_acl_guest
+  gather_facts: false
+  become: true
+  vars:
+    parent: /serzhan-pool/backups
+    datastore: /serzhan-pool/backups/pbs-pci-pilot
+  tasks:
+    - name: Require root privilege contract
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Read ZFS parent dataset name at mountpoint
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ parent }}"]
+      register: parent_source
+      changed_when: false
+    - name: Read PCI datastore dataset source
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ datastore }}"]
+      register: datastore_source
+      changed_when: false
+    - name: Inspect existing parent directory owner and permissions
+      ansible.builtin.stat:
+        path: "{{ parent }}"
+      register: parent_meta
+    - name: Inspect isolated PCI datastore directory
+      ansible.builtin.stat:
+        path: "{{ datastore }}"
+      register: pci_meta
+    - name: Require exact filesystem identity and original directory ownership
+      ansible.builtin.assert:
+        that:
+          - "parent_source.stdout == 'serzhan-pool/backups'"
+          - "datastore_source.stdout == 'serzhan-pool/backups/pbs-pci-pilot'"
+          - "parent_meta.stat.uid == 0"
+          - "parent_meta.stat.gid == 1002"
+          - "parent_meta.stat.mode == '2770'"
+          - "pci_meta.stat.uid == 34"
+          - "pci_meta.stat.gid == 34"
+        fail_msg: PBS_PCI_PARENT_ACL_UNEXPECTED_PERMISSIONS
+    - name: Confirm ZFS POSIX ACL support on parent
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, acltype, serzhan-pool/backups]
+      register: zfs_acltype
+      changed_when: false
+    - name: Require supported ACL semantics
+      ansible.builtin.assert:
+        that:
+          - "zfs_acltype.stdout == 'posix'"
+    - name: Install standard POSIX ACL utilities on PBS guest
+      ansible.builtin.apt:
+        name: acl
+        state: present
+        update_cache: false
+        fail_on_autoremove: true
+    - name: Give only backup UID traversal permission to existing parent
+      ansible.builtin.command:
+        argv: [setfacl, -m, 'u:backup:--x', "{{ parent }}"]
+    - name: Independently read exact parent ACL
+      ansible.builtin.command:
+        argv: [getfacl, -c, -p, "{{ parent }}"]
+      register: parent_acl
+      changed_when: false
+    - name: Verify backup user ACL is execute-only
+      ansible.builtin.assert:
+        that:
+          - "'user:backup:--x' in parent_acl.stdout_lines"
+          - "'group::rwx' in parent_acl.stdout_lines"
+        fail_msg: PBS_PCI_PARENT_ACL_NOT_MINIMAL
+    - name: Verify backup user may traverse parent
+      ansible.builtin.command:
+        argv: [runuser, -u, backup, --, test, -x, "{{ parent }}"]
+      changed_when: false
+    - name: Verify backup user may not list parent
+      ansible.builtin.command:
+        argv: [runuser, -u, backup, --, test, -r, "{{ parent }}"]
+      register: parent_read
+      changed_when: false
+      failed_when: false
+    - name: Verify backup user may not write parent
+      ansible.builtin.command:
+        argv: [runuser, -u, backup, --, test, -w, "{{ parent }}"]
+      register: parent_write
+      changed_when: false
+      failed_when: false
+    - name: Require no read or write permissions on shared parent
+      ansible.builtin.assert:
+        that:
+          - "parent_read.rc != 0"
+          - "parent_write.rc != 0"
+        fail_msg: PBS_PCI_PARENT_ACL_TOO_BROAD
+    - name: Verify backup user can traverse to new .chunks directory
+      ansible.builtin.command:
+        argv: [runuser, -u, backup, --, test, -r, "{{ datastore }}/.chunks"]
+      changed_when: false
+    - name: Verify original ownership, group and setgid mode preserved
+      ansible.builtin.stat:
+        path: "{{ parent }}"
+      register: parent_meta_after
+    - name: Confirm POSIX ACL preserved existing group and setgid
+      ansible.builtin.assert:
+        that:
+          - "parent_meta_after.stat.uid == 0"
+          - "parent_meta_after.stat.gid == 1002"
+          - "parent_meta_after.stat.mode == '2770'"
+        fail_msg: PBS_PCI_PARENT_CHANGED_ORIGINAL_MODE
+    - name: Report isolated corrected PBS access
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PCI_PARENT_TRAVERSE_ACL_READY
+          parent: "{{ parent }}"
+          permission: 'u:backup:--x'
+          original_group_preserved: true
+          media_data_unchanged: true
