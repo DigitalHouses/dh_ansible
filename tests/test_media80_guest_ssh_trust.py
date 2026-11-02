@@ -116,9 +116,9 @@ def test_keyscan_banners_and_duplicate_keys_are_not_conflicting_host_keys():
     assert "media_ssh_scanned_host_keys ==" in str(verified)
     assert "stdout_lines | length == 1" not in str(verified)
 
-    ip = "192.168.11.232"
+    ip = "192.0.2.232"
     good = ip + " ssh-ed25519 AAAA"
-    banner = "# 192.168.11.232:22 SSH-2.0-OpenSSH_9.2"
+    banner = "# 192.0.2.232:22 SSH-2.0-OpenSSH_9.2"
     records = [banner, good, good]
     def exact_keys(records):
         return list(dict.fromkeys(

@@ -49,3 +49,31 @@ def test_bootstrap_normalizes_host_locale_before_guest_commands():
     assert "unset LANGUAGE" in INSTALLER
     assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index("pct create")
     assert INSTALLER.index("export LANG=C.UTF-8 LC_ALL=C.UTF-8") < INSTALLER.index('pct exec "$CTID"')
+
+def test_operator_site_id_is_validated_and_confirmed_before_mutation():
+    """The current installer uses one exact, bounded prompt, not legacy OAuth."""
+    assert 'read -r -p "Site ID (<owner>-<type>): " SITE' in INSTALLER
+    assert 'SITE="${SITE%$' in INSTALLER
+    assert r'SITE =~ ^[a-z][a-z0-9]*(-[a-z0-9]+)+$' in INSTALLER
+    assert '[[ ${#SITE} -le 31' in INSTALLER
+    assert 'read -r -p "Confirm site $SITE (y/n): " YES' in INSTALLER
+    assert '[[ $YES == y || $YES == Y ]]' in INSTALLER
+    assert 'BLOCKED: site not confirmed' in INSTALLER
+    assert INSTALLER.index('Confirm site $SITE') < INSTALLER.index('pct create "$CTID"')
+
+def test_fresh_bootstrap_never_overwrites_a_guest_or_executes_replacement():
+    assert 'pct config "$CTID"' in INSTALLER
+    assert 'qm config "$CTID"' in INSTALLER
+    assert 'fresh Bootstrap only' in INSTALLER
+    for token in ('pct destroy', 'qm destroy', 'replace-site-runner.sh',
+                  '--resume-semaphore', '--resume-ansible', 'pvesm free'):
+        assert token not in INSTALLER
+
+def test_bootstrap_keeps_local_journal_root_only_and_does_not_echo_password():
+    assert 'umask 077' in INSTALLER
+    assert 'install -d -o root -g root -m 0700' in INSTALLER
+    assert 'chmod 0600 "$LOG"' in INSTALLER
+    assert 'ADMIN_PASSWORD_FILE=' in INSTALLER
+    assert 'echo "$PASSWORD"' not in INSTALLER
+    assert 'pct exec $CTID -- cat /root/dh-semaphore-initial-admin-password' in INSTALLER
+    assert 'TERMINAL STAYS OPEN' in INSTALLER

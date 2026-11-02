@@ -7,15 +7,24 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLE = ROOT / "roles/media_guest_setup"
 
 
-def test_fleet_identity_preflight_precedes_pve_worker():
-    play = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())[0]
-    names = [task["name"] for task in play["pre_tasks"]]
-    assert names.index("Validate Fleet-provided media identities before PVE worker") < names.index("Validate canonical storage inventory")
+def test_private_site_media_accounts_are_validated_before_pve_apply():
+    plays = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
+    pre = plays[0]["pre_tasks"]
+    names = [task["name"] for task in pre]
+    assert names.index("Require correct local site and preexisting native credentials") < names.index(
+        "Verify reusable administrative file-management rights on runner")
+    steps = plays[0]["tasks"]
+    names = [task["name"] for task in steps]
+    assert names.index("Refuse foreign or public site configuration") < names.index(
+        "Parse approved media VM declaration (nonsecret)")
+    assert names.index("Validate media file and backup account contracts") < names.index(
+        "Register exactly the commissioned PVE root SSH target")
+    assert steps[names.index("Validate media file and backup account contracts")][
+        "ansible.builtin.import_tasks"] == "media-accounts-preflight.yml"
     guard = yaml.safe_load((ROOT / "playbooks/media-accounts-preflight.yml").read_text())
     assert len(guard) == 4
-    assert guard[-1]['name'] == 'Require complete media v3 site declaration before PVE worker'
-    assert guard[-1]['no_log'] is True
-    assert 'MEDIA_V3_FLEET_INCOMPLETE' in str(guard[-1])
+    assert guard[-1]["no_log"] is True
+    assert "MEDIA_V3_FLEET_INCOMPLETE" in str(guard[-1])
     content = str(guard)
     assert "serzhan_admin" in content and "administrator" in content
     assert "item.password is not defined" in content
@@ -76,7 +85,9 @@ def test_portal_and_discovery_are_declared_without_secrets():
     # The root-only CLI command contains the word "password", but no credential value.
     assert "password=" not in page.lower()
     assert "secret=" not in page.lower()
-    assert 'value="/usr/local/sbin/dh-media-password-show"' in page
+    assert 'id="pve-root-cli"' in page
+    assert 'qm guest exec {{ media_vm.vmid }} -- cat /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ site.owner_slug }}.txt' in page
+    assert 'readonly' in page
     assert ":32400/web" in page
 
 

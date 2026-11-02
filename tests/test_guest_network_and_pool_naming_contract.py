@@ -112,17 +112,20 @@ def test_legacy_import_keeps_old_name_and_erase_requires_owner_pool():
                     assert False, "Canonical owner-pool must proceed to disk identification"
 
 
-def test_canonical_pool_name_validation_only_applies_to_erase():
+def test_media_pool_uses_owner_naming_and_reuses_one_zfs_reconciler():
     play = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
-    tasks = play[0]["pre_tasks"]
-    task = next(x for x in tasks if x["name"] == "Validate canonical storage inventory")
-    clauses = task["ansible.builtin.assert"]["that"]
-    assert "media_raw_disk_action != 'erase' or media_vm.storage.pool_name == site.owner_slug ~ '-pool'" in clauses
+    steps = play[0]["tasks"]
+    gate = next(x for x in steps if x["name"] ==
+                "Require specific declared VM, hardware, pool and network boundaries")
+    clauses = gate["ansible.builtin.assert"]["that"]
+    assert "media_vm.storage.pool_name == site.owner_slug ~ '-pool'" in clauses
     assert "media_vm.storage.pool_name == site.id ~ '-pool'" not in clauses
     setup = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     zfs = next(x for x in setup if x["name"] ==
                "Reconcile physical ZFS pool and declared datasets")
-    assert "--owner" in zfs["ansible.builtin.command"]["argv"]
+    argv = zfs["ansible.builtin.command"]["argv"]
+    assert "--owner" in argv and "{{ media_owner_slug }}" in argv
+    assert "--action" in argv and "{{ media_raw_disk_action }}" in argv
 
 
 def test_pinned_installer_stages_reusable_role():

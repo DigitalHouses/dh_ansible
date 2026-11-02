@@ -64,6 +64,14 @@ def adapters(rotation, owner, stamps, a, b):
     }
 
 
+
+def test_unprivileged_password_rotation_is_rejected_before_filesystem_access(monkeypatch, tmp_path):
+    import pytest
+    rot = transaction()
+    monkeypatch.setattr(rot.os, "geteuid", lambda: 1000)
+    with pytest.raises(rot.Blocked, match="ROTATION_REQUIRES_ROOT"):
+        rot.preflight_scope(tmp_path / "unmanaged-owner.txt")
+
 def test_rotation_commits_app_passwords_stamps_and_passport_only_after_verification():
     rot = transaction()
     with tempfile.TemporaryDirectory() as d:

@@ -26,7 +26,8 @@ def test_resolvers_are_site_scoped_and_trigger_backend_restart_only_if_changed()
     role = yaml.safe_load((ROOT / "roles/netalertx_native/tasks/main.yml").read_text())
     verify = (ROOT / "roles/netalertx_native/tasks/verify.yml").read_text()
     assert "netalertx.application.name_resolution" in play
-    imports = [step["ansible.builtin.import_tasks"] for step in role]
+    imports = [step["ansible.builtin.import_tasks"] for step in role
+               if "ansible.builtin.import_tasks" in step]
     assert imports.index("install.yml") < imports.index("name_resolution.yml")
     assert imports.index("name_resolution.yml") < imports.index("verify.yml")
     assert "netalertx_native_name_config_changed" in verify

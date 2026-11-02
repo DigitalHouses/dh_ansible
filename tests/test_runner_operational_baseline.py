@@ -49,11 +49,18 @@ class RunnerOperationalBaselineTests(unittest.TestCase):
         for path, names in cases.items():
             with self.subTest(playbook=path):
                 text = (ROOT / path).read_text()
-                self.assertIn("name: site_inventory_prepare", text)
-                for name in names:
-                    self.assertIn("          - " + name, text)
-                self.assertLess(text.index("name: site_inventory_prepare"),
-                                text.index('file: "{{ inventory_dir }}/' + names[0] + '"'))
+                if path == "playbooks/plan-pve-media-vm.yml":
+                    # Native Task 80 validates the specific private site repo,
+                    # signed file metadata and actual PVE host observation.
+                    self.assertIn("media_site_repo.json.private == true", text)
+                    self.assertIn("media_site_file.json.sha", text)
+                    self.assertIn("pve-runtime.yml", text)
+                else:
+                    self.assertIn("name: site_inventory_prepare", text)
+                    for name in names:
+                        self.assertIn("          - " + name, text)
+                    self.assertLess(text.index("name: site_inventory_prepare"),
+                                    text.index('file: "{{ inventory_dir }}/' + names[0] + '"'))
 
 
 if __name__ == "__main__":

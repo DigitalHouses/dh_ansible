@@ -16,14 +16,20 @@ def load():
     return module
 
 
-def test_task80_must_send_checkout_sha_before_root_vm_writes():
-    source = (ROOT / "playbooks/plan-pve-media-vm.yml").read_text()
-    worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
-    assert "media_checkout_sha.stdout" in source
-    assert "MEDIA_DEPLOY_REPOSITORY_PIN_MISSING" in source
-    assert 'SOURCE_SHA="${BASH_REMATCH[5]}"' in worker
-    assert '--expected-commit "$SOURCE_SHA"' in worker
-    assert worker.index("dh-pve-media-release-verify") < worker.index("dh-pve-media-deploy \\")
+def test_task80_reads_verified_private_site_blob_before_native_pve_apply():
+    import yaml
+    plays = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
+    first = str(plays[0])
+    assert "media_site_file.json.sha is match('^[0-9a-f]{40}$')" in first
+    assert "site_inventory_git_blob" in first
+    assert "MEDIA_SITE_FILE_INVALID" in first
+    pve = plays[1]["tasks"]
+    texts = str(pve)
+    assert "dh-media-pve-preflight.py" in texts
+    assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in texts
+    assert "dh-pve-media-deploy.py" in texts
+    assert texts.index("MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED") < texts.index(
+        "dh-pve-media-deploy.py")
 
 
 def test_bootstrap_publishes_complete_bundle_manifest_last():
@@ -65,6 +71,7 @@ def test_worker_detects_wrong_commit_or_mixed_files(tmp_path, monkeypatch):
         "assets": {path: hashlib.sha256(value.encode()).hexdigest()
                    for path, value in payloads.items()},
     }))
+    manifest.chmod(0o600)  # the protected production verifier requires this mode
     monkeypatch.setattr(module, "checked_file",
                         lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest())
     assert module.verify(sha, root=root, manifest=manifest, external={}) == len(payloads)
