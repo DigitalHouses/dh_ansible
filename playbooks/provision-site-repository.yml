@@ -10,6 +10,11 @@
     dh_git_owner: DigitalHouses
     dh_git_name: "site-{{ site.id }}"
     dh_git_api: "https://api.github.com/repos/{{ dh_git_owner }}/{{ dh_git_name }}"
+    dh_site_semaphore_api: https://127.0.0.1:3000/api
+    dh_site_key_name: "GitHub site-{{ site.id }} · read-only"
+    dh_site_deploy_title: "digitalhouses-{{ site.id }}-semaphore-ro"
+    dh_site_semaphore_repo_name: "DigitalHouses site data (private)"
+    dh_site_git_ssh_url: "git@github.com:{{ dh_git_owner }}/{{ dh_git_name }}.git"
     dh_git_marker:
       schema: 1
       site_id: "{{ site.id }}"
@@ -286,6 +291,9 @@
         fail_msg: GITHUB_SITE_INVENTORY_READBACK_FAILED
       no_log: true
 
+    - name: Commission routine private repository access through native Semaphore and GitHub APIs
+      ansible.builtin.import_tasks: tasks/site-repository-readonly-access.yml
+
     - name: Report safe site repository result
       ansible.builtin.debug:
         msg:
@@ -295,4 +303,4 @@
           action: "{{ 'CREATED' if dh_git_before.status == 404 else 'RECOVERED' if (dh_git_pristine_recovery | default(false)) else 'ADOPTED' }}"
           marker: VERIFIED
           inventory: VERIFIED
-          routine_read_only_access: NOT_COMMISSIONED
+          routine_read_only_access: "{{ dh_site_repository_access_status }}"
