@@ -1,0 +1,182 @@
+---
+# PBS in Media VM pilot: create only fresh child ZFS dataset and initialize
+# datastore while Plex/Jellyfin remain running on the existing Debian kernel.
+- name: PBS inline datastore | Register exact existing Media VM
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load private site Media declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/media_vm.yml"
+    - name: Load commissioned PBS pilot declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Scope final A/B datastore only to existing Media VM and new pool
+      ansible.builtin.assert:
+        that:
+          - "site.id == 'serzhan-home'"
+          - "media_vm.vmid | int == 2232"
+          - "pbs.media_vm_pilot.vmid | int == 2232"
+          - "pbs.media_vm_pilot.pool_guid == '40733622006301358'"
+          - "pbs.media_vm_pilot.zfs_dataset == 'serzhan-pool/backups/pbs-media-pilot'"
+          - "pbs.media_vm_pilot.mount_path == '/serzhan-pool/backups/pbs-media-pilot'"
+          - "pbs.media_vm_pilot.refquota_gib | int == 128"
+          - "pbs.media_vm_pilot.preserve_media_services | bool"
+          - "pbs.media_vm_pilot.safety.never_touch_media_dataset | bool"
+          - "pbs.media_vm_pilot.safety.never_increase_vm_resources | bool"
+          - "media_vm.storage.disk.wwn == '0x5000cca22bc6ef0d'"
+        fail_msg: PBS_MEDIA_DATASTORE_SCOPE_MISMATCH
+    - name: Register pinned Media guest connection
+      ansible.builtin.add_host:
+        name: inline_datastore_media
+        groups: dh_inline_datastore_media
+        ansible_host: "192.168.11.232"
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+      changed_when: false
+
+- name: PBS inline datastore | Prepare exclusive, bounded new ZFS child and benchmark initialization
+  hosts: dh_inline_datastore_media
+  gather_facts: false
+  become: true
+  vars:
+    pool: serzhan-pool
+    dataset: serzhan-pool/backups/pbs-media-pilot
+    target: /serzhan-pool/backups/pbs-media-pilot
+  tasks:
+    - name: Require existing commissioned Linux administrative rights
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Require newly recreated ZFS GUID
+      ansible.builtin.command:
+        argv: [zpool, get, -H, -o, value, guid, "{{ pool }}"]
+      register: pool_guid
+      changed_when: false
+    - name: Require expected pool before any ZFS child creation
+      ansible.builtin.assert:
+        that:
+          - "pool_guid.stdout == '40733622006301358'"
+        fail_msg: PBS_MEDIA_DATASTORE_POOL_GUID_MISMATCH
+    - name: Confirm physical Hitachi sole VDEV
+      ansible.builtin.command:
+        argv: [zpool, status, -P, "{{ pool }}"]
+      register: zpool_state
+      changed_when: false
+    - name: Require clean Hitachi and existing media pool
+      ansible.builtin.assert:
+        that:
+          - "'wwn-0x5000cca22bc6ef0d-part1' in zpool_state.stdout"
+          - "'errors: No known data errors' in zpool_state.stdout"
+          - "'state: ONLINE' in zpool_state.stdout"
+    - name: Inspect existing ZFS datasets before any write
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name, -r, "{{ pool }}"]
+      register: datasets
+      changed_when: false
+    - name: Refuse a missing media dataset or conflicting child
+      ansible.builtin.assert:
+        that:
+          - "pool ~ '/media' in datasets.stdout_lines"
+          - "pool ~ '/backups' in datasets.stdout_lines"
+          - "dataset not in datasets.stdout_lines"
+        fail_msg: PBS_MEDIA_DATASTORE_NOT_FRESH_OR_MEDIA_MISSING
+    - name: Require exact physical parent directory backing by ZFS
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, /serzhan-pool/backups]
+      register: parent_mount
+      changed_when: false
+    - name: Confirm backup parent is existing ZFS dataset
+      ansible.builtin.assert:
+        that:
+          - "parent_mount.stdout == 'serzhan-pool/backups'"
+    - name: Check original media service health before datastore initialization
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop:
+        - proxmox-backup.service
+        - proxmox-backup-proxy.service
+        - plexmediaserver.service
+        - jellyfin.service
+      register: service_health
+      changed_when: false
+    - name: Verify both PBS and original media running
+      ansible.builtin.assert:
+        that:
+          - "service_health.results | map(attribute='stdout') | unique | list == ['active']"
+    - name: Ensure POSIX ACL command available for one-directory traverse permission
+      ansible.builtin.apt:
+        name: acl
+        state: present
+    - name: Create only the new bounded PBS child dataset with dedicated I/O properties
+      ansible.builtin.command:
+        argv:
+          - zfs
+          - create
+          - -o
+          - atime=on
+          - -o
+          - compression=lz4
+          - -o
+          - refquota=128G
+          - "{{ dataset }}"
+    - name: Restrict child dataset ownership to PBS backup service user
+      ansible.builtin.file:
+        path: "{{ target }}"
+        owner: backup
+        group: backup
+        mode: '0750'
+        state: directory
+    - name: Grant PBS backup service only parent traversal without listing
+      ansible.builtin.command:
+        argv: [setfacl, -m, 'u:backup:--x', /serzhan-pool/backups]
+    - name: Confirm child dataset is mounted on the exact ZFS source
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ target }}"]
+      register: child_mount
+      changed_when: false
+    - name: Require correct child filesystem
+      ansible.builtin.assert:
+        that:
+          - "child_mount.stdout == dataset"
+    - name: Install isolated Python benchmark without touching media services
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../scripts/pbs-media-datastore-benchmark.py"
+        dest: /usr/local/sbin/dh-pbs-media-datastore-benchmark
+        owner: root
+        group: root
+        mode: '0700'
+    - name: Measure new PBS datastore initialization and exact 65536 chunk directories
+      ansible.builtin.command:
+        argv: [/usr/bin/python3, /usr/local/sbin/dh-pbs-media-datastore-benchmark]
+      register: first_init
+      changed_when: true
+    - name: Require new datastore initialization benchmark succeeded
+      ansible.builtin.assert:
+        that:
+          - "(first_init.stdout | from_json).command_exit_code == 0"
+          - "(first_init.stdout | from_json).chunk_directory_count == 65536"
+          - "(first_init.stdout | from_json).new_datastore == 'pbs-media-pilot'"
+    - name: Confirm original Media and PBS services still running after metadata stress
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop: [proxmox-backup.service, proxmox-backup-proxy.service, plexmediaserver.service, jellyfin.service]
+      register: after_services
+      changed_when: false
+    - name: Require stable co-located service health
+      ansible.builtin.assert:
+        that:
+          - "after_services.results | map(attribute='stdout') | unique | list == ['active']"
+    - name: Report initialization result for A/B comparison
+      ansible.builtin.debug:
+        msg:
+          result: PBS_MEDIA_INLINE_DATASTORE_READY
+          benchmark: "{{ first_init.stdout | from_json }}"
