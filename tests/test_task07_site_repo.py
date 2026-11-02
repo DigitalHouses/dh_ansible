@@ -80,7 +80,6 @@ def test_adoption_does_not_force_push_or_delete():
     assert "method: DELETE" not in s
     assert "qm destroy" not in s
     assert "pct destroy" not in s
-    assert "read_only_access: NOT_COMMISSIONED" not in s
     assert "routine_read_only_access: NOT_COMMISSIONED" in s
 
 
