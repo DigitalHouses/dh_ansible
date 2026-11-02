@@ -27,8 +27,8 @@ def test_current_service_invocation_only_prevents_stale_pairing():
     assert "systemctl" in source and "InvocationID" in source
     assert "_SYSTEMD_INVOCATION_ID={{ remote_service_invocation.stdout }}" in source
     assert "^[a-f0-9]{32}$" in source
-    assert "--since '-13 min'" in source
     reader = task("Read only filtered device-pairing status from this service invocation")
+    assert "--since '-13 min'" in reader["ansible.builtin.shell"]
     assert reader["no_log"] is True
     assert reader["changed_when"] is False
 
