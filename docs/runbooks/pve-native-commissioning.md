@@ -1,3 +1,5 @@
+> **CURRENT OWNER DECISION · 2026-11-02 · NEW CT1231:** ручной запуск PVE host-root commissioning **не допускается**. Настройка PVE после Fresh Bootstrap — строго Semaphore + Ansible (см. [issue #111](https://github.com/DigitalHouses/dh_ansible/issues/111)). Этот документ ниже описывает **исторический** сценарий, по которому был принят предыдущий, позднее удалённый CT1231; не повторять его на текущем CT. Новый CT успешно выполнил Bootstrap, №00 и №05, но PVE trust/SSH НЕ commissioned. №06 ожидает trust, без него будет `PVE_TRUST_NOT_COMMISSIONED`. Нативная Task 08 ещё не реализована. Требуется интегрировать public PVE CA/cert fingerprint/SSH host key в 4-шаговый Bootstrap как исходное доверие и выполнить само подключение штатной задачей Semaphore + Ansible. До реализации — BLOCKED; не обходить строгую проверку SSH/TLS.
+
 # PVE native commissioning
 
 One-time infrastructure enrollment; not a task-specific worker.
