@@ -732,9 +732,12 @@
       no_log: true
 
 
+    # /api2/json/version is authenticated on this Proxmox release and
+    # legitimately returns 401 No ticket. The authentication-domain endpoint
+    # is public, read-only and still exercises verified HTTPS to the PVE API.
     - name: Confirm PVE origin responds over verified HTTPS before DNS publication
       ansible.builtin.uri:
-        url: "{{ cf_origin }}/api2/json/version"
+        url: "{{ cf_origin }}/api2/json/access/domains"
         method: GET
         ca_path: /etc/cloudflared/dh-pve-ca.pem
         validate_certs: true
@@ -748,7 +751,10 @@
       ansible.builtin.assert:
         that:
           - cf_origin_verified.status == 200
-          - cf_origin_verified.json.data.version | default('') | length > 0
+          - cf_origin_verified.json.data is defined
+          - cf_origin_verified.json.data is sequence
+          - cf_origin_verified.json.data is not string
+          - cf_origin_verified.server | default('') is search('pve-api-daemon')
         fail_msg: CF_PVE_TLS_OR_ORIGIN_NOT_READY
 
     - name: Reinspect exact DNS just before any replacement
