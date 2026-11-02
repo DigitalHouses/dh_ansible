@@ -166,6 +166,30 @@
       "title": "90-PVE · Подключить NFS Backups",
       "playbook": "playbooks/request-pve-media-backup-nfs.yml",
       "view": "02 · Развёртывание"
+    },
+    {
+      "title": "93-PBS · PCI/ZFS · Импорт существующего пула",
+      "playbook": "playbooks/pbs-pci-operator-import.yml",
+      "view": "02 · Развёртывание",
+      "survey_vars": [
+        {
+          "name": "pbs_pci_action",
+          "title": "PCI/ZFS · действие",
+          "description": "audit: проверка PCI и ZFS без изменений; import: импорт только утверждённого существующего ZFS-пула после аппаратной проверки. Никогда не стирает диск. Запуск оператором вручную.",
+          "type": "enum",
+          "required": true,
+          "values": [
+            {
+              "name": "Только проверка — без изменений (audit)",
+              "value": "audit"
+            },
+            {
+              "name": "Импорт существующего ZFS без монтирования (import)",
+              "value": "import"
+            }
+          ]
+        }
+      ]
     }
   ]
 }
