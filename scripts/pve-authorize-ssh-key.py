@@ -6,6 +6,7 @@ ED25519 key and expected node/IP/site. No passwords or private keys in argv.
 """
 import argparse
 import base64
+import binascii
 import ipaddress
 import json
 import os
@@ -50,7 +51,7 @@ def authorize(site, expected_node, expected_ip, key_text):
             and parts[2] == "dh-pve-" + site, "UNEXPECTED_PVE_PUBLIC_KEY")
     try:
         raw = base64.b64decode(parts[1], validate=True)
-    except ValueError as error:
+    except (ValueError, binascii.Error) as error:
         raise Blocked("INVALID_PVE_ED25519_KEY") from error
     require(b"ssh-ed25519" in raw[:20] and len(raw) >= 45,
             "INVALID_PVE_ED25519_KEY")
@@ -99,7 +100,7 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except (Blocked, OSError, ValueError, UnicodeDecodeError,
+    except (Blocked, OSError, ValueError, UnicodeDecodeError, binascii.Error,
             subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print("PVE_NATIVE_SSH_KEY=BLOCKED:" + type(error).__name__, file=sys.stderr)
         sys.exit(2)
