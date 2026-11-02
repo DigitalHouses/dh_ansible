@@ -323,7 +323,7 @@
     - name: Start new managed PBS guest if stopped
       ansible.builtin.command:
         argv: [qm, start, "{{ pbs.vmid }}"]
-      when: pbs_vm_state.stdout == 'status: stopped'
+      when: "pbs_vm_state.stdout == 'status: stopped'"
 
 - name: PBS 92 | Install official backup server software
   hosts: dh_pbs_guest
