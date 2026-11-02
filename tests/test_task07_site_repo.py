@@ -6,6 +6,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 P = ROOT / "playbooks/provision-site-repository.yml"
+RO = ROOT / "playbooks/tasks/site-repository-readonly-access.yml"
 C = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
 
 
@@ -136,7 +137,8 @@ def test_adoption_does_not_force_push_or_delete():
     assert "method: DELETE" not in s
     assert "qm destroy" not in s
     assert "pct destroy" not in s
-    assert "routine_read_only_access: NOT_COMMISSIONED" in s
+    assert "dh_site_repository_access_status" in s
+    assert "tasks/site-repository-readonly-access.yml" in s
 
 
 def test_readiness_only_proves_github_owner_not_create_rights():
@@ -150,3 +152,73 @@ def test_readiness_only_proves_github_owner_not_create_rights():
     report = yaml.safe_load((ROOT / "playbooks/check-site-credentials.yml").read_text())[-1]["tasks"][-2]
     msg = report["ansible.builtin.debug"]["msg"]
     assert msg["github_repository_creation_permission"] == "NOT_VERIFIED_READ_ONLY"
+
+
+def test_routine_access_is_native_git_and_semaphore_not_another_credential_store():
+    play = yaml.safe_load(P.read_text())[0]
+    routine = task(play, "Commission routine private repository access")
+    assert routine["ansible.builtin.import_tasks"] == "tasks/site-repository-readonly-access.yml"
+    idx = play["tasks"].index(routine)
+    assert idx > play["tasks"].index(task(play, "Verify site inventory"))
+    assert idx < play["tasks"].index(task(play, "Report safe site repository result"))
+    msg = task(play, "Report safe site repository result")["ansible.builtin.debug"]["msg"]
+    assert "dh_site_repository_access_status" in msg["routine_read_only_access"]
+    assert yaml.safe_load(RO.read_text())
+
+
+def test_site_ssh_key_generated_by_semaphore_not_exported_or_staged_on_disk():
+    ts = yaml.safe_load(RO.read_text())
+    gen = next(t for t in ts if t["name"].startswith("Ask native Semaphore Key Store"))
+    api = gen["ansible.builtin.uri"]
+    assert api["method"] == "POST"
+    assert api["body"]["generate_ssh_key"] is True
+    assert api["body"]["type"] == "ssh"
+    assert api["body"]["ssh"]["login"] == "git"
+    assert "dh_site_named_keys | length == 0" == gen["when"]
+    assert gen["no_log"] is True
+    txt = RO.read_text()
+    assert "private_key:" not in txt
+    assert "ssh-keygen" not in txt
+    assert "mktemp" not in txt
+    assert "copy:" not in txt
+    assert "write_file" not in txt
+    assert "method: DELETE" not in txt
+
+
+def test_site_deploy_key_is_strict_read_only_and_idempotent():
+    ts = yaml.safe_load(RO.read_text())
+    deploy = next(t for t in ts if t["name"].startswith("Register one read-only deploy key"))
+    api = deploy["ansible.builtin.uri"]
+    assert api["method"] == "POST"
+    assert api["url"] == "{{ dh_git_api }}/keys"
+    assert api["body"]["read_only"] is True
+    assert deploy["when"] == "dh_site_named_deploy_keys | length == 0"
+    assert deploy["no_log"] is True
+    for prefix in (
+        "Read current deploy keys",
+        "Read back registered GitHub deploy key",
+    ):
+        item = next(t for t in ts if t["name"].startswith(prefix))
+        assert item["ansible.builtin.uri"]["method"] == "GET"
+        assert item["no_log"] is True
+    check = next(t for t in ts if t["name"].startswith("Require exactly one matching read-only deploy key"))
+    assert any("read_only == true" in x for x in check["ansible.builtin.assert"]["that"])
+    assert any("public_key" in x for x in check["ansible.builtin.assert"]["that"])
+
+
+def test_site_repo_bound_only_to_correct_local_semaphore_project_and_key():
+    ts = yaml.safe_load(RO.read_text())
+    projects = next(t for t in ts if t["name"].startswith("Restrict registration to exactly"))
+    assert "site.id" in str(projects)
+    create = next(t for t in ts if t["name"].startswith("Register private site repository"))
+    assert create["no_log"] is True
+    assert create["when"] == "dh_site_named_semaphore_repos | length == 0"
+    body = create["ansible.builtin.uri"]["body"]
+    assert body["git_url"] == "{{ dh_site_git_ssh_url }}"
+    assert body["git_branch"] == "main"
+    assert body["ssh_key_id"] == "{{ dh_site_ssh_key_id }}"
+    verify = next(t for t in ts if t["name"].startswith("Verify exactly one private site repository binding"))
+    assert any("ssh_key_id" in x for x in verify["ansible.builtin.assert"]["that"])
+    assert any("git_url" in x for x in verify["ansible.builtin.assert"]["that"])
+    assert any("project_id" in x for x in verify["ansible.builtin.assert"]["that"])
+    assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "REGISTERED_CLONE_NOT_VERIFIED"

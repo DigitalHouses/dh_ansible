@@ -88,3 +88,39 @@ Ticket, пароль, API token и request body не выводятся в Task 
 - №07 GitHub private site repository и общий `pre_tasks` gate для всех действующих задач — отдельные утверждённые work items и пока **не реализованы**.
 - Принятая 31.10.2026 историческая Fleet Vault авторизация относится к **старому** набору задач и не распространяется на новый сценарий.
 - Сохранять доступ к базе Semaphore и отдельно её `access_key_encryption` для будущих бэкапов. Ни один секрет не должен существовать только как успешная строка Task 05.
+
+
+## №07 · Постоянное read-only подключение приватного site-repo (02.11.2026)
+
+После принятого live E2E создания/восстановления `DigitalHouses/site-serzhan-home`
+и повторной идемпотентной проверки №07 (Semaphore Task #21, `action=ADOPTED`,
+`failed=0`) готовится следующий штатный этап **в этой же №07**, без новой
+формы credentials и без отдельной worker-службы:
+
+1. Проверить private repo, владельца, маркер `.digitalhouses/site.json`
+   и inventory. При несовпадении прекратить работу до изменения секретов.
+2. Через HTTPS API собственного проекта Semaphore получить или однократно
+   создать **native Key Store SSH credential** с `generate_ssh_key=true`.
+   Semaphore сам генерирует SSH keypair, сохраняет приватную часть в своей
+   зашифрованной БД, а API предоставляет только публичную часть `plain.public_key`.
+   Не генерировать и не сохранять приватные ключи в файловой системе runner.
+3. Через GitHub REST API привязать именно этот публичный ключ к приватному
+   site-repo как **deploy key с `read_only=true`**. Повторная №07 проверяет
+   ключ и не создаёт дубликаты; при drift — `BLOCKED`, без замены ключей.
+4. Через штатный Semaphore `POST /project/{id}/repositories` зарегистрировать
+   `git@github.com:DigitalHouses/site-<site_id>.git`, ветку `main`, и
+   привязать сохранённую identity из Key Store. Существующие привязки не
+   перезаписываются.
+5. Только после readback GitHub + Semaphore — состояние
+   `REGISTERED_CLONE_NOT_VERIFIED`. **Это не доказательство фактического
+   Git clone**: следующий отдельный acceptance должен выполнить чтение
+   репозитория средствами Semaphore и проверить SSH host-key trust.
+
+Provisioning PAT, введённый в №05, используется лишь на этапе регистрации
+GitHub deploy key и не помещается в Semaphore repository credentials.
+**Не отзывать его до завершения live clone acceptance.** Дальнейшее
+отключение/отзыв PAT и поддержка повторной №07 без него — отдельный
+обязательный пункт перед окончательным выпуском bootstrap onboarding.
+
+Сама публикация playbook/тестов не равна live приемке. Статус новой
+возможности считать `PENDING` до успешного запуска через Semaphore.
