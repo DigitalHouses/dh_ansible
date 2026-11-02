@@ -1,0 +1,273 @@
+---
+# Connect a new PBS datastore living INSIDE the already running Media VM.
+# Generate a new scoped token; transport secret via Ansible hostvars only,
+# store it directly under /etc/pve/priv/storage (0600), never log or GitHub.
+- name: PBS inline PVE connect | Register exact existing VM and PVE
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load private site PBS declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Load Media VM declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/media_vm.yml"
+    - name: Load observed PVE address
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require fresh PBS local to Media VM and bounded scope
+      ansible.builtin.assert:
+        that:
+          - "site.id == 'serzhan-home'"
+          - "pve_observed.ipv4 == '192.168.11.6'"
+          - "media_vm.vmid | int == 2232"
+          - "pbs.media_vm_pilot.vmid | int == 2232"
+          - "pbs.media_vm_pilot.datastore == 'pbs-media-pilot'"
+          - "pbs.media_vm_pilot.zfs_dataset == 'serzhan-pool/backups/pbs-media-pilot'"
+          - "pbs.media_vm_pilot.pool_guid == '40733622006301358'"
+          - "pbs.media_vm_pilot.safety.never_touch_media_dataset | bool"
+        fail_msg: PBS_MEDIA_CONNECT_WRONG_SITE
+    - name: Register existing Media VM PBS daemon and ZFS mount
+      ansible.builtin.add_host:
+        name: inline_connect_media
+        groups: dh_inline_connect_media
+        ansible_host: 192.168.11.232
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+      changed_when: false
+    - name: Register commissioned PVE host
+      ansible.builtin.add_host:
+        name: inline_connect_pve
+        groups: dh_inline_connect_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+      changed_when: false
+
+- name: PBS inline PVE connect | Mint dedicated scoped PBS API token
+  hosts: dh_inline_connect_media
+  gather_facts: false
+  become: true
+  vars:
+    store: pbs-media-pilot
+    tokenid: "root@pam!dh-pve-media-pilot"
+  tasks:
+    - name: Require existing authorized Linux administration
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: service_manage
+    - name: Verify only expected existing ZFS dataset is mounted
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, /serzhan-pool/backups/pbs-media-pilot]
+      register: target_mount
+      changed_when: false
+    - name: Verify filesystem is only approved media PBS child
+      ansible.builtin.assert:
+        that:
+          - "target_mount.stdout == 'serzhan-pool/backups/pbs-media-pilot'"
+    - name: Verify existing new PBS datastore
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: stores
+      changed_when: false
+    - name: Require datastore path and name match
+      ansible.builtin.assert:
+        that:
+          - "(stores.stdout | from_json | selectattr('name', 'equalto', store) | selectattr('path', 'equalto', '/serzhan-pool/backups/pbs-media-pilot') | list | length) == 1"
+    - name: Require both media players and PBS remain active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop: [proxmox-backup.service, proxmox-backup-proxy.service, plexmediaserver.service, jellyfin.service]
+      register: service_health
+      changed_when: false
+    - name: Require all services active
+      ansible.builtin.assert:
+        that:
+          - "service_health.results | map(attribute='stdout') | unique | list == ['active']"
+    - name: Check dedicated token does not exist before one-time secret generation
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+      register: existing_tokens
+      changed_when: false
+      no_log: true
+    - name: Refuse rotating an existing token without preserving its secret
+      ansible.builtin.assert:
+        that:
+          - "(existing_tokens.stdout | from_json | selectattr('tokenid', 'equalto', tokenid) | list | length) == 0"
+        fail_msg: PBS_MEDIA_TOKEN_ALREADY_EXISTS
+    - name: Generate exactly one dedicated API token without revealing secret
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, generate-token, root@pam, dh-pve-media-pilot]
+      register: token_generated
+      changed_when: true
+      no_log: true
+    - name: Parse generated token secret only into nonlogged per-host memory
+      ansible.builtin.set_fact:
+        token_secret: "{{ (token_generated.stdout | regex_search('\"value\"\\s*:\\s*\"([^\"]+)\"', '\\1')) | first }}"
+      no_log: true
+    - name: Verify protected token generated with acceptable secret length
+      ansible.builtin.assert:
+        that:
+          - "token_secret is defined"
+          - "token_secret | length >= 30"
+        fail_msg: PBS_MEDIA_TOKEN_SECRET_NOT_READY
+      no_log: true
+    - name: Grant dedicated token only backup permission to its pilot datastore
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, update, "/datastore/{{ store }}", DatastoreBackup, --auth-id, "{{ tokenid }}"]
+      changed_when: true
+    - name: Grant audit capability solely on pilot datastore
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, update, "/datastore/{{ store }}", DatastoreAudit, --auth-id, "{{ tokenid }}"]
+      changed_when: true
+    - name: Read PBS server TLS certificate fingerprint
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, /etc/proxmox-backup/proxy.pem, -noout, -fingerprint, -sha256]
+      register: pem_fingerprint
+      changed_when: false
+    - name: Retain only SHA256 TLS fingerprint for PVE storage declaration
+      ansible.builtin.set_fact:
+        pbs_tls_fingerprint: "{{ pem_fingerprint.stdout | regex_replace('^sha256 Fingerprint=', '') }}"
+    - name: Validate fingerprint is standard 32-byte SHA256
+      ansible.builtin.assert:
+        that:
+          - "pbs_tls_fingerprint | length == 95"
+    - name: Report new scoped PBS API token generated with secret hidden
+      ansible.builtin.debug:
+        msg:
+          result: PBS_MEDIA_SCOPED_TOKEN_READY
+          token_id: "{{ tokenid }}"
+          private_secret: protected_in_ansible_memory_only
+
+- name: PBS inline PVE connect | Add dedicated PBS storage with protected token secret
+  hosts: dh_inline_connect_pve
+  gather_facts: false
+  vars:
+    store: pbs-media-pilot
+    tokenid: "root@pam!dh-pve-media-pilot"
+  tasks:
+    - name: Require commissioned PVE root operation rights
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Verify old PBS VM remains absent
+      ansible.builtin.stat:
+        path: /etc/pve/qemu-server/2233.conf
+      register: old_pbs_vm
+    - name: Require no old PBS VM that can accidentally own the disk
+      ansible.builtin.assert:
+        that:
+          - "not old_pbs_vm.stat.exists"
+    - name: Verify Media VM still running
+      ansible.builtin.command:
+        argv: [qm, status, '2232']
+      register: media_status
+      changed_when: false
+    - name: Require correct active Media VM
+      ansible.builtin.assert:
+        that:
+          - "media_status.stdout == 'status: running'"
+    - name: Check PVE storage ID not already used
+      ansible.builtin.command:
+        argv: [pvesm, status]
+      register: pve_storage_status
+      changed_when: false
+    - name: Require new unique PVE storage identifier
+      ansible.builtin.assert:
+        that:
+          - "store not in pve_storage_status.stdout"
+        fail_msg: PBS_MEDIA_STORAGE_ID_ALREADY_USED
+    - name: Check PVE private secret file does not already exist
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ store }}.pw"
+        follow: false
+      register: existing_secret
+      no_log: true
+    - name: Require untouched secure local password path
+      ansible.builtin.assert:
+        that:
+          - "not existing_secret.stat.exists"
+        fail_msg: PBS_MEDIA_STORAGE_SECRET_ALREADY_EXISTS
+      no_log: true
+    - name: Register new PBS backend disabled until token is installed
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - add
+          - pbs
+          - "{{ store }}"
+          - --server
+          - 192.168.11.232
+          - --datastore
+          - "{{ store }}"
+          - --username
+          - "{{ tokenid }}"
+          - --fingerprint
+          - "{{ hostvars['inline_connect_media'].pbs_tls_fingerprint }}"
+          - --content
+          - backup
+          - --disable
+          - '1'
+      changed_when: true
+    # /etc/pve is pmxcfs: its FUSE filesystem rejects atomic rename used
+    # by ansible.copy. Write directly to the protected path on a fresh ID,
+    # with the token transmitted only over SSH stdin, never as a CLI argument.
+    - name: Persist generated token via pmxcfs-compatible protected stdin write
+      ansible.builtin.shell:
+        cmd: "umask 077; cat > /etc/pve/priv/storage/{{ store }}.pw"
+        stdin: "{{ hostvars['inline_connect_media'].token_secret }}"
+        stdin_add_newline: false
+      no_log: true
+      changed_when: true
+    - name: Verify PVE protected storage secret exists and has correct permissions
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ store }}.pw"
+      register: new_secret
+      no_log: true
+    - name: Require real private PVE secret with no access leakage
+      ansible.builtin.assert:
+        that:
+          - "new_secret.stat.isreg"
+          - "new_secret.stat.mode == '0600'"
+          - "new_secret.stat.size >= 30"
+        fail_msg: PBS_MEDIA_PVE_SECRET_NOT_COMMISSIONED
+      no_log: true
+    - name: Enable only new local Media PBS pilot storage
+      ansible.builtin.command:
+        argv: [pvesm, set, "{{ store }}", --disable, '0']
+      changed_when: true
+    - name: Verify live PVE -> Media PBS datastore handshake
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ store }}"]
+      register: pve_pbs_ready
+      changed_when: false
+    - name: Require PBS storage is active and usable
+      ansible.builtin.assert:
+        that:
+          - "'pbs-media-pilot' in pve_pbs_ready.stdout"
+          - "'active' in pve_pbs_ready.stdout"
+        fail_msg: PBS_MEDIA_PVE_BACKUP_TARGET_NOT_READY
+    - name: Report completed PVE PBS datastore connection
+      ansible.builtin.debug:
+        msg:
+          result: PBS_MEDIA_PVE_STORAGE_READY
+          pve_storage: "{{ store }}"
+          media_vm: 2232
+          pbs_port: 8007
+          secret_location: protected_native_pve_storage
+          source_ctid: 1231
