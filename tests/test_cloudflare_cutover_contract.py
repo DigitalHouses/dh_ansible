@@ -39,10 +39,12 @@ def cfg():
 def test_task10_native_ansible_contract():
     """New bootstrap has no legacy cutover watcher; 10 uses commissioned SSH/API."""
     play = yaml.safe_load(REQUEST.read_text())
-    assert len(play) == 3
+    assert len(play) == 5
     assert play[0]["hosts"] == "site_runner"
-    assert play[1]["hosts"] == "cf_pve_target_group"
-    assert play[2]["hosts"] == "site_runner"
+    assert [p["hosts"] for p in play] == [
+        "site_runner", "cf_pve_target_group", "site_runner",
+        "cf_pve_target_group", "site_runner",
+    ]
     for p in play:
         assert p["become"] is False
         for task in p.get("pre_tasks", []) + p.get("tasks", []):
@@ -76,7 +78,7 @@ def test_task10_origin_matches_actual_fresh_bootstrap_pve_runtime():
     names = [t["name"] for t in root["pre_tasks"]]
     assert "Read observed PVE endpoint" in names
     assert "Require pinned PVE SSH and origin CA from Task 06/bootstrap" in names
-    configure = next(t for t in root["tasks"] if t["name"] ==
+    configure = next(t for t in plays[2]["tasks"] if t["name"] ==
                      "Resolve canonical Tunnel UUID and expected TLS ingress")
     origin = configure["ansible.builtin.set_fact"]["cf_expected_rules"][0]["originRequest"]
     assert origin["caPool"] == "/etc/cloudflared/dh-pve-ca.pem"
@@ -88,7 +90,7 @@ def test_task10_origin_matches_actual_fresh_bootstrap_pve_runtime():
 
 def test_existing_tunnel_drift_reports_only_structural_evidence_and_stops_writes():
     plays = yaml.safe_load(REQUEST.read_text())
-    tasks = plays[0]["tasks"]
+    tasks = plays[2]["tasks"]
     names = [task["name"] for task in tasks]
     report = "Report safe ingress drift diagnostics before fail-closed blocking"
     blocked = "Block any pre-existing foreign ingress rules"
@@ -117,23 +119,65 @@ def test_existing_tunnel_drift_reports_only_structural_evidence_and_stops_writes
     assert "cf_ingress_safe_diagnostic" not in str(tasks[names.index(apply)])
 
 def test_task10_guards_existing_resources_and_publication_order():
-    play = yaml.safe_load(REQUEST.read_text())
-    preflight = [t["name"] for t in play[0]["tasks"]]
-    final = [t["name"] for t in play[2]["tasks"]]
-    assert preflight.index("Refuse bypass, everyone or empty user allowlists") < preflight.index(
-        "Create an absent remotely managed tunnel (no legacy deletion)")
-    assert preflight.index("Protect all foreign tunnel and DNS resources") < preflight.index(
-        "Create an absent remotely managed tunnel (no legacy deletion)")
+    plays = yaml.safe_load(REQUEST.read_text())
+    before = [t["name"] for t in plays[0]["tasks"]]
+    pkg = [t["name"] for t in plays[1]["tasks"]]
+    provisioning = [t["name"] for t in plays[2]["tasks"]]
+    service = [t["name"] for t in plays[3]["tasks"]]
+    final = [t["name"] for t in plays[4]["tasks"]]
+    assert "Refuse bypass, everyone or empty user allowlists" in before
+    assert "Refuse foreign DNS and tunnel collisions before host/package changes" in before
+    assert "Prove legacy shared tunnel owns only the old PVE hostname being repointed" in before
+    assert "Read PVE hostname" in pkg
+    assert "Fail closed if an unknown unit already occupies the name" in pkg
+    assert "Install cloudflared via native apt" in pkg
+    assert "Require token-file feature (not token in service command)" in pkg
+    assert "Create an absent remotely managed tunnel (no legacy deletion)" in provisioning
+    assert provisioning.index("Block any pre-existing foreign ingress rules") < provisioning.index(
+        "Configure only empty canonical ingress with strict PVE TLS")
+    assert service.index("Install connector token with root-only permissions") < service.index(
+        "Start or restart only after a configuration change")
     assert final.index("Require actual healthy Tunnel on Cloudflare edge") < final.index(
+        "Confirm PVE origin responds over verified HTTPS before DNS publication")
+    assert final.index("Confirm PVE origin responds over verified HTTPS before DNS publication") < final.index(
         "Create only absent DNS record after Access and healthy connector")
     assert final.index("Create only absent DNS record after Access and healthy connector") < final.index(
+        "Redirect only the former shared PVE CNAME after dedicated Tunnel is healthy")
+    assert final.index("Redirect only the former shared PVE CNAME after dedicated Tunnel is healthy") < final.index(
         "Never report success if Access was bypassed")
-    service_tasks = play[1]["tasks"]
     assert any("ansible.builtin.copy" in t and t["ansible.builtin.copy"].get("mode") == "0600"
-               and t.get("no_log") is True for t in service_tasks)
-    assert all(t.get("no_log") is True for p in play for t in p.get("tasks", [])
+               and t.get("no_log") is True for t in plays[3]["tasks"])
+    assert all(t.get("no_log") is True for p in plays for t in p.get("tasks", [])
                if "ansible.builtin.uri" in t and "/cfd_tunnel" in
                t["ansible.builtin.uri"].get("url", ""))
+
+
+def test_task10_migrates_only_dns_owned_by_existing_shared_pve_route():
+    plays = yaml.safe_load(REQUEST.read_text())
+    runner = plays[0]
+    pve = plays[1]
+    provision = plays[2]
+    publish = plays[4]
+    source = REQUEST.read_text()
+    assert 'cf_tunnel_name: "{{ site.id }}-pve"' in source
+    assert "?name={{ cf_tunnel_name }}&is_deleted=false" in source
+    assert "?name={{ site.id }}&is_deleted=false" in source
+    assert "CF_SHARED_PVE_INGRESS_NOT_PROVEN" in source
+    assert "CF_DNS_CONCURRENT_CHANGE_OR_FOREIGN_OWNER" in source
+    assert "cf_dns_pre_publish.json.result[0].id == cf_dns_old.json.result[0].id" in source
+    assert "cf_dns_pre_publish.json.result[0].content == cf_dns_old.json.result[0].content" in source
+    assert "cf_shared_existing[0].id" in source
+    assert 'name: "{{ cf_tunnel_name }}"' in source
+    assert "shared_tunnel_untouched: true" in source
+    names = [t["name"] for t in publish["tasks"]]
+    assert names.index("Require actual healthy Tunnel on Cloudflare edge") < names.index(
+        "Redirect only the former shared PVE CNAME after dedicated Tunnel is healthy")
+    assert "Install cloudflared via native apt" in [t["name"] for t in pve["tasks"]]
+    assert "Install cloudflared via native apt" not in [t["name"] for t in provision["tasks"]]
+    assert not any("/configurations" in str(t["ansible.builtin.uri"].get("url", ""))
+                   and t["ansible.builtin.uri"].get("method") == "PUT"
+                   for t in runner["tasks"] if "ansible.builtin.uri" in t)
+
 
 
 def test_worker_pins_ssh_and_fixed_root_host_script():
