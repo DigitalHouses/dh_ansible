@@ -56,14 +56,18 @@ def test_runner_audit_yaml_structure_and_canonical_owner_name():
     assert len(play) == 1
     assert len(play[0]["roles"]) == 1
     names = [step["name"] for step in play[0]["pre_tasks"]]
-    assert names == [
+    expected = [
         "Require exactly one local target",
         "Read local runner hostname",
         "Validate runner hostname format",
         "Load site identity from the private inventory repository",
+        "Reconcile runner component inventory from authorized private Fleet",
         "Load desired runner state from the private inventory repository",
         "Check inventory identity matches local site",
     ]
+    assert names == expected
+    assert "site_inventory_prepare" in str(play[0]["pre_tasks"][4])
+    assert "runner.yml" in str(play[0]["pre_tasks"][4])
     tasks = play[0]["pre_tasks"]
     assert any("ansible-' ~ site.id" in str(step) for step in tasks)
     assert all("site_id_effective" not in str(step) for step in tasks)
