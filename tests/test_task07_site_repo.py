@@ -166,23 +166,74 @@ def test_routine_access_is_native_git_and_semaphore_not_another_credential_store
     assert yaml.safe_load(RO.read_text())
 
 
-def test_site_ssh_key_generated_by_semaphore_not_exported_or_staged_on_disk():
+def test_site_ed25519_generated_in_memory_imported_to_native_semaphore_key_store():
     ts = yaml.safe_load(RO.read_text())
-    gen = next(t for t in ts if t["name"].startswith("Ask native Semaphore Key Store"))
-    api = gen["ansible.builtin.uri"]
+    generate = next(t for t in ts if t["name"].startswith("Generate a fresh Ed25519"))
+    assert generate["no_log"] is True
+    cmd = generate["ansible.builtin.command"]["argv"]
+    assert cmd[0] == "{{ ansible_playbook_python }}"
+    assert cmd[1].endswith("/scripts/generate-site-git-ed25519.py")
+
+    store = next(t for t in ts if t["name"].startswith("Store Ed25519 SSH private key"))
+    api = store["ansible.builtin.uri"]
     assert api["method"] == "POST"
-    assert api["body"]["generate_ssh_key"] is True
     assert api["body"]["type"] == "ssh"
     assert api["body"]["ssh"]["login"] == "git"
-    assert "dh_site_named_keys | length == 0" == gen["when"]
-    assert gen["no_log"] is True
+    assert "dh_site_key_material.stdout" in api["body"]["ssh"]["private_key"]
+    assert store["no_log"] is True
+    assert store["when"] == "dh_site_named_keys | length == 0"
+
     txt = RO.read_text()
-    assert "private_key:" not in txt
+    assert "generate_ssh_key: true" not in txt
     assert "ssh-keygen" not in txt
     assert "mktemp" not in txt
     assert "copy:" not in txt
     assert "write_file" not in txt
     assert "method: DELETE" not in txt
+
+
+def test_ed25519_generation_round_trip_matches_ssh_public_key_without_file():
+    import importlib.util
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    source = ROOT / "scripts/generate-site-git-ed25519.py"
+    spec = importlib.util.spec_from_file_location("site_git_ed25519", source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    first = module.create_keypair()
+    second = module.create_keypair()
+    assert first["public_key"].startswith("ssh-ed25519 ")
+    assert first["public_key"] != second["public_key"]
+    assert first["private_key"].startswith("-----BEGIN OPENSSH PRIVATE KEY-----")
+
+    loaded = serialization.load_ssh_private_key(first["private_key"].encode(), password=None)
+    assert isinstance(loaded, Ed25519PrivateKey)
+    assert loaded.public_key().public_bytes(
+        encoding=serialization.Encoding.OpenSSH,
+        format=serialization.PublicFormat.OpenSSH,
+    ).decode() == first["public_key"]
+
+
+def test_public_ssh_key_is_declarative_site_data_and_not_secret():
+    ts = yaml.safe_load(RO.read_text())
+    save = next(t for t in ts if t["name"].startswith("Commit only the nonsecret public key"))
+    api = save["ansible.builtin.uri"]
+    assert api["method"] == "PUT"
+    assert "{{ dh_git_api }}/contents/{{ dh_site_public_file }}" == api["url"]
+    assert "public_key" in api["body"]["content"]
+    assert "private_key" not in api["body"]["content"]
+    assert save["no_log"] is True
+
+    incomplete = next(t for t in ts if t["name"].startswith("Refuse an incomplete Ed25519"))
+    assert "dh_site_pub_before.status == 404" in str(incomplete)
+    assert "GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION" in str(incomplete)
+
+    play = yaml.safe_load(P.read_text())[0]
+    assert play["vars"]["dh_site_public_file"] == ".digitalhouses/semaphore-deploy-ed25519.pub"
+    assert "Ed25519" in play["vars"]["dh_site_key_name"]
 
 
 def test_site_deploy_key_is_strict_read_only_and_idempotent():
