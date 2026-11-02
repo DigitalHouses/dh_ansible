@@ -133,22 +133,65 @@ def main():
               + data["pci"]["gpu"] + " sata=" + data["pci"]["sata_controller"]
               + " device=" + disk)
     else:
-        need(args.vm_action == "keep", "NATIVE_RECREATE_NOT_APPROVED")
         need(existing.is_file(), "MEDIA_VM_NOT_FOUND")
         conf = command("/usr/sbin/qm", "config", str(vmid))
         need("name: " + data["name"] in conf
              and "description: DigitalHouses managed media guest v2" in conf
              and "hostpci0: " + data["pci"]["gpu"] + ",pcie=1" in conf
-             and "hostpci1: " + data["pci"]["sata_controller"] + ",pcie=1" in conf,
+             and "hostpci1: " + data["pci"]["sata_controller"] + ",pcie=1" in conf
+             and "scsi0: local-lvm:vm-" + str(vmid) + "-disk-" in conf,
              "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
-        need(
-            (args.disk_action == "import"
-             and isinstance(data["storage"].get("import_pool_guid"), str))
-            or (args.disk_action == "erase"
-                and data["storage"].get("one_time_ntfs_erase", {}).get("approved") is True
-                and data["storage"]["one_time_ntfs_erase"]["scope"] == "first_create_only"),
-            "REUSE_REQUIRES_PINNED_POOL_OR_ONE_TIME_ERASE")
-        print("MEDIA_PVE_PREFLIGHT=PASS EXISTING_MANAGED_VM")
+        need(data["approvals"].get("provision") is True
+             and data["approvals"].get("sata_cutover") is True,
+             "MEDIA_VM_PROVISION_NOT_APPROVED")
+        if args.vm_action == "recreate":
+            # A running managed VM allows us to verify real PCI HDD identity
+            # and existing pool GUID without guessing from obsolete NTFS data.
+            # Operator chose 'recreate'; no policy-level veto of that choice.
+            need(command("/usr/sbin/qm", "status", str(vmid)) == "status: running",
+                 "MEDIA_VM_START_REQUIRED_FOR_IDENTITY_VERIFICATION")
+            def guest(*argv):
+                res = json.loads(command("/usr/sbin/qm", "guest", "exec",
+                                         str(vmid), "--", *argv))
+                need(res.get("exited") == 1 and res.get("exitcode") == 0,
+                     "MEDIA_GUEST_AGENT_IDENTITY_QUERY_FAILED")
+                return res.get("out-data", "").strip()
+            block_devices = json.loads(guest("/usr/bin/lsblk", "-J", "-b", "-d",
+                                             "-o", "NAME,TYPE,SERIAL,WWN,SIZE"))
+            physical = [d for d in block_devices.get("blockdevices", [])
+                        if d.get("type") == "disk"
+                        and d.get("serial") == data["storage"]["disk"]["serial"]
+                        and str(d.get("wwn") or "").lower()
+                           == data["storage"]["disk"]["wwn"].lower()
+                        and int(d.get("size") or 0)
+                           == int(data["storage"]["disk"]["size_bytes"])]
+            need(len(physical) == 1 and physical[0].get("name") != "sda",
+                 "MEDIA_PHYSICAL_HDD_IDENTITY_MISMATCH")
+            imported = dict(line.split()
+                            for line in guest("/usr/sbin/zpool", "list",
+                                              "-H", "-o", "name,guid").splitlines())
+            if args.disk_action == "erase":
+                expected = data["storage"].get("import_pool_guid")
+                need(isinstance(expected, str) and expected.isdecimal()
+                     and imported.get(data["storage"]["pool_name"]) == expected,
+                     "MEDIA_ERASE_SOURCE_POOL_GUID_MISMATCH")
+                need(data["storage"].get("destructive_without_backup") is True,
+                     "MEDIA_ERASE_NOT_SELECTED_IN_SITE_POLICY")
+            else:
+                need(imported.get(data["storage"]["pool_name"])
+                     == data["storage"].get("import_pool_guid"),
+                     "MEDIA_IMPORT_SOURCE_POOL_GUID_MISMATCH")
+            print("MEDIA_PVE_PREFLIGHT=PASS MANAGED_RECREATE_VERIFIED"
+                  " DISK_IDENTITY_AND_POOL_GUID", flush=True)
+        else:
+            need(
+                (args.disk_action == "import"
+                 and isinstance(data["storage"].get("import_pool_guid"), str))
+                or (args.disk_action == "erase"
+                    and data["storage"].get("destructive_without_backup") is True),
+                "MEDIA_KEEP_REQUIRES_EXPLICIT_DISK_ACTION")
+            print("MEDIA_PVE_PREFLIGHT=PASS EXISTING_MANAGED_VM")
+
 
 
 if __name__ == "__main__":
