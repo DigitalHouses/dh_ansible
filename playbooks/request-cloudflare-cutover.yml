@@ -312,6 +312,46 @@
         cf_old_rules: "{{ cf_config_before.json.result.config.ingress | default([]) }}"
       no_log: true
 
+    # Inspect only structure and exact-match booleans, never actual ingress
+    # hostnames, internal IPs, other routes or Cloudflare credentials. This
+    # makes fail-closed drift actionable without exposing foreign site data.
+    - name: Normalize existing ingress for a read-only ownership diagnosis
+      ansible.builtin.set_fact:
+        cf_first_rule: "{{ cf_old_rules[0] if cf_old_rules | length > 0 else {} }}"
+        cf_fallback_rule: "{{ cf_old_rules[-1] if cf_old_rules | length > 0 else {} }}"
+      no_log: true
+      changed_when: false
+
+    - name: Identify existing TLS options without showing their values
+      ansible.builtin.set_fact:
+        cf_first_origin_options: "{{ cf_first_rule.originRequest | default({}) }}"
+      no_log: true
+      changed_when: false
+
+    - name: Classify ingress shape with only site-relative results
+      ansible.builtin.set_fact:
+        cf_ingress_safe_diagnostic:
+          rule_count: "{{ cf_old_rules | length }}"
+          exact_pve_hostname: "{{ cf_first_rule.hostname | default('') == cf_host }}"
+          exact_pve_origin: "{{ cf_first_rule.service | default('') == cf_origin }}"
+          expected_origin_ca: "{{ cf_first_origin_options.caPool | default('') == '/etc/cloudflared/dh-pve-ca.pem' }}"
+          explicit_tls_verification: "{{ cf_first_origin_options.noTLSVerify is defined and cf_first_origin_options.noTLSVerify == false }}"
+          legacy_origin_name_override: "{{ cf_first_origin_options.originServerName is defined }}"
+          origin_option_names: "{{ cf_first_origin_options.keys() | list | sort }}"
+          exact_fallback_404: "{{ cf_fallback_rule.service | default('') == 'http_status:404' and cf_fallback_rule.hostname is not defined }}"
+          additional_route_count: "{{ [cf_old_rules | length - 2, 0] | max }}"
+      no_log: true
+      changed_when: false
+
+    - name: Report safe ingress drift diagnostics before fail-closed blocking
+      ansible.builtin.debug:
+        msg:
+          state: "READ_ONLY_INGRESS_AUDIT"
+          changed: false
+          diagnostic: "{{ cf_ingress_safe_diagnostic }}"
+          note: "Only exact-match flags, rule counts and option NAMES are shown; no hostnames, IPs, secret values or foreign routes"
+      when: cf_old_rules | length > 0
+
     - name: Block any pre-existing foreign ingress rules
       ansible.builtin.assert:
         that:
