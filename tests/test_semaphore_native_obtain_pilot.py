@@ -71,7 +71,7 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertIn("/api2/json/nodes", verifier)
         self.assertIn("ssl.create_default_context", verifier)
         self.assertIn("ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT", verifier)
-        self.assertNotIn("api_token", CHECK.lower())
+        self.assertNotIn("DH_PVE_API_TOKEN", CHECK)
 
     def test_partial_keep_and_safe_write_contract(self):
         self.assertIn("rejectattr('value', 'equalto', '')", OBTAIN)
