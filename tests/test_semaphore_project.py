@@ -65,7 +65,7 @@ def test_drift_is_blocked_without_overwriting():
     m.provision(api, "demo-office", "Тестовый дом", True)
     repo = next(v for k, v in api.records.items() if k.endswith("/repositories"))
     repo[0]["git_url"] = "git@github.com:other-org/repo.git"
-    with pytest.raises(m.Blocked, match="drift"):
+    with pytest.raises(m.Blocked, match="(?i)drift"):
         m.provision(api, "demo-office", "Тестовый дом", True)
     assert not [c for c in api.calls if c[0] in ("PUT", "DELETE")]
 
@@ -100,9 +100,12 @@ def test_public_code_private_fleet_inventory_boundary():
     assert "Fleet Detail Git (RO)" not in by_name
     assert by_name["Runner inventory (local-only)"]["type"] == "login_password"
     repos = next(items for path, items in resources.items() if path.endswith("/repositories"))
-    assert len(repos) == 1
-    code = repos[0]
+    assert len(repos) == 2
+    by_repo = {row["name"]: row for row in repos}
+    assert set(by_repo) == {"DigitalHouses code", "Site inventory (local)"}
+    code = by_repo["DigitalHouses code"]
     assert code["git_url"] == "https://github.com/DigitalHouses/dh_ansible.git"
+    assert by_repo["Site inventory (local)"]["git_url"].startswith("/var/lib/ansible/site-data/demo-office")
     assert code["ssh_key_id"] == by_name["Public Git (none)"]["id"]
     inventory = next(items for path, items in resources.items() if path.endswith("/inventory"))[0]
     assert inventory["type"] == "file"
@@ -123,7 +126,7 @@ def test_site_inventory_drift_blocks_without_mutation():
     inventory = next(items for path, items in api.records.items() if path.endswith("/inventory"))
     inventory[0]["inventory"] = "/tmp/untrusted.yml"
     posts = len([c for c in api.calls if c[0] == "POST"])
-    with pytest.raises(m.Blocked, match="drift"):
+    with pytest.raises(m.Blocked, match="(?i)drift"):
         m.provision(api, "demo-office", "Demo Site", True)
     assert len([c for c in api.calls if c[0] == "POST"]) == posts
     assert not [c for c in api.calls if c[0] in ("PUT", "DELETE")]
@@ -177,7 +180,7 @@ def test_rename_blocks_config_drift_instead_of_overwriting():
     api.records[path][0]["name"] = m.BOOTSTRAP_TEMPLATES[0][1]
     api.records[path][0]["autorun"] = True
     before = len([x for x in api.calls if x[0] == "PUT"])
-    with pytest.raises(m.Blocked, match="drift"):
+    with pytest.raises(m.Blocked, match="(?i)drift"):
         m.provision(api, "demo-office", "Demo Site", True)
     assert len([x for x in api.calls if x[0] == "PUT"]) == before
 
