@@ -1,0 +1,359 @@
+---
+# Final PBS A/B leg: move the exact Hitachi SATA controller from the
+# standalone PBS VM to the existing Media VM. No disk formatting or pool
+# destruction. The standalone PBS VM and its OS disk remain intact/offline.
+- name: PBS Media VM pilot | Resolve private site state and pinned endpoints
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load private PBS and Media VM declarations
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Load Media VM declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/media_vm.yml"
+    - name: Load observed PVE identity
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require the exact final A/B pilot and existing rollback points
+      ansible.builtin.assert:
+        that:
+          - "site.id == 'serzhan-home'"
+          - "pbs.vmid | int == 2233"
+          - "pbs.media_vm_pilot.vmid | int == 2232"
+          - "pbs.media_vm_pilot.ipv4.split('/')[0] == '192.168.11.232'"
+          - "pbs.media_vm_pilot.pci_controller == '0000:2b:00.0'"
+          - "pbs.media_vm_pilot.pci_slot == 'hostpci1'"
+          - "pbs.media_vm_pilot.rollback.media_vm_snapshot == 'pre-pbs-install-20261102'"
+          - "media_vm.vmid | int == 2232"
+          - "media_vm.pci.sata_controller == pbs.media_vm_pilot.pci_controller"
+          - "media_vm.pci.gpu == '0000:2f:00.0'"
+          - "media_vm.approvals.sata_cutover | bool"
+          - "media_vm.storage.disk.wwn == '0x5000cca22bc6ef0d'"
+          - "pve_observed.ipv4 == '192.168.11.6'"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_SCOPE_BLOCKED
+    - name: Register exact PVE root endpoint
+      ansible.builtin.add_host:
+        name: pbs_media_cutover_pve
+        groups: dh_pbs_media_cutover_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        media_vm: "{{ media_vm }}"
+      changed_when: false
+    - name: Register current standalone PBS guest
+      ansible.builtin.add_host:
+        name: pbs_media_cutover_old_guest
+        groups: dh_pbs_media_cutover_old_guest
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+      changed_when: false
+    - name: Register existing Media guest with its offline-pinned SSH host key
+      ansible.builtin.add_host:
+        name: pbs_media_cutover_media_guest
+        groups: dh_pbs_media_cutover_media_guest
+        ansible_host: "{{ pbs.media_vm_pilot.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        media_vm: "{{ media_vm }}"
+      changed_when: false
+
+- name: PBS Media VM pilot | Gracefully export the existing ZFS pool from standalone PBS
+  hosts: dh_pbs_media_cutover_old_guest
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Verify PBS administrative access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Require the exact existing pool is ONLINE and error-free
+      ansible.builtin.command:
+        argv: [zpool, status, -P, serzhan-pool]
+      register: old_pool_status
+      changed_when: false
+    - name: Require the exact Hitachi vdev and no known data errors
+      ansible.builtin.assert:
+        that:
+          - "'wwn-0x5000cca22bc6ef0d-part1' in old_pool_status.stdout"
+          - "'errors: No known data errors' in old_pool_status.stdout"
+          - "'state: ONLINE' in old_pool_status.stdout"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_OLD_POOL_NOT_HEALTHY
+    - name: Require PBS services are running before graceful shutdown
+      ansible.builtin.command:
+        argv: [systemctl, is-active, "{{ item }}"]
+      loop:
+        - proxmox-backup.service
+        - proxmox-backup-proxy.service
+      register: old_pbs_services
+      changed_when: false
+    - name: Stop PBS daemons before exporting their datastore filesystem
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: stopped
+      loop:
+        - proxmox-backup-proxy.service
+        - proxmox-backup.service
+    - name: Export existing pool cleanly; never force export
+      ansible.builtin.command:
+        argv: [zpool, export, serzhan-pool]
+    - name: Confirm pool is no longer imported in old PBS guest
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, name]
+      register: old_pools_after_export
+      changed_when: false
+      failed_when: false
+    - name: Require clean export
+      ansible.builtin.assert:
+        that:
+          - "'serzhan-pool' not in old_pools_after_export.stdout_lines"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_POOL_EXPORT_FAILED
+
+- name: PBS Media VM pilot | Transfer PCI ownership and boot existing Media VM
+  hosts: dh_pbs_media_cutover_pve
+  gather_facts: false
+  tasks:
+    - name: Verify commissioned PVE host access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Require Media VM and PBS VM current states
+      ansible.builtin.command:
+        argv: [qm, status, "{{ item }}"]
+      loop:
+        - '2232'
+        - '2233'
+      register: vm_states
+      changed_when: false
+    - name: Require Media stopped and standalone PBS running
+      ansible.builtin.assert:
+        that:
+          - "vm_states.results[0].stdout == 'status: stopped'"
+          - "vm_states.results[1].stdout == 'status: running'"
+    - name: Verify exact current PCI owner
+      ansible.builtin.command:
+        argv: [grep, -RlF, '0000:2b:00.0', /etc/pve/qemu-server]
+      register: pci_owner_before
+      changed_when: false
+    - name: Require SATA controller is owned only by standalone PBS
+      ansible.builtin.assert:
+        that:
+          - "pci_owner_before.stdout_lines == ['/etc/pve/qemu-server/2233.conf']"
+    - name: Verify GPU remains assigned to Media VM
+      ansible.builtin.command:
+        argv: [grep, -Fx, 'hostpci0: 0000:2f:00.0,pcie=1', /etc/pve/qemu-server/2232.conf]
+      changed_when: false
+    - name: Verify old PBS VM backup exists on PCI datastore
+      ansible.builtin.command:
+        argv: [pvesm, list, pbs-pci-pilot, --vmid, '2232']
+      register: media_vm_backup
+      changed_when: false
+    - name: Require backup archive and local rollback snapshot
+      ansible.builtin.assert:
+        that:
+          - "'backup/vm/2232/2026-11-02T15:05:51Z' in media_vm_backup.stdout"
+      fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_BACKUP_MISSING
+    - name: Verify local LVM-thin rollback snapshot exists
+      ansible.builtin.command:
+        argv: [qm, listsnapshot, '2232']
+      register: media_snapshots
+      changed_when: false
+    - name: Require named rollback snapshot
+      ansible.builtin.assert:
+        that:
+          - "'pre-pbs-install-20261102' in media_snapshots.stdout"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_SNAPSHOT_MISSING
+    - name: Refuse cutover during a PVE backup job
+      ansible.builtin.shell:
+        cmd: "if pgrep -x vzdump >/dev/null; then exit 1; else exit 0; fi"
+      changed_when: false
+    - name: Disable old PVE storage endpoint without deleting its config or data
+      ansible.builtin.command:
+        argv: [pvesm, set, pbs-pci-pilot, --disable, '1']
+    - name: Disable standalone PBS autostart while it no longer owns the disk
+      ansible.builtin.command:
+        argv: [qm, set, '2233', --onboot, '0']
+    - name: Gracefully shut down standalone PBS VM after clean ZFS export
+      ansible.builtin.command:
+        argv: [qm, shutdown, '2233', --timeout, '120']
+    - name: Wait until standalone PBS VM is fully stopped
+      ansible.builtin.command:
+        argv: [qm, status, '2233']
+      register: pbs_stopped
+      changed_when: false
+      until: pbs_stopped.stdout == 'status: stopped'
+      retries: 40
+      delay: 3
+    - name: Remove SATA PCI controller from stopped standalone PBS VM
+      ansible.builtin.command:
+        argv: [qm, set, '2233', --delete, hostpci0]
+    - name: Attach the same SATA PCI controller to Media VM hostpci1
+      ansible.builtin.command:
+        argv: [qm, set, '2232', --hostpci1, '0000:2b:00.0']
+    - name: Require exclusive PCI ownership by Media VM
+      ansible.builtin.command:
+        argv: [grep, -RlF, '0000:2b:00.0', /etc/pve/qemu-server]
+      register: pci_owner_after
+      changed_when: false
+    - name: Verify controller assigned only to Media VM
+      ansible.builtin.assert:
+        that:
+          - "pci_owner_after.stdout_lines == ['/etc/pve/qemu-server/2232.conf']"
+    - name: Keep Media VM autostart disabled until PBS and media checks pass
+      ansible.builtin.command:
+        argv: [qm, set, '2232', --onboot, '0']
+    - name: Start existing Media VM with GPU and Hitachi SATA controller
+      ansible.builtin.command:
+        argv: [qm, start, '2232']
+    - name: Wait for Media guest QEMU agent
+      ansible.builtin.command:
+        argv: [qm, guest, cmd, '2232', ping]
+      register: media_agent_ping
+      changed_when: false
+      until: media_agent_ping.rc == 0
+      retries: 60
+      delay: 5
+    - name: Confirm standalone PBS VM remains stopped
+      ansible.builtin.command:
+        argv: [qm, status, '2233']
+      register: pbs_still_stopped
+      changed_when: false
+    - name: Require fallback PBS VM stays offline
+      ansible.builtin.assert:
+        that:
+          - "pbs_still_stopped.stdout == 'status: stopped'"
+
+- name: PBS Media VM pilot | Validate original Debian, ZFS and media services
+  hosts: dh_pbs_media_cutover_media_guest
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for the existing Media VM SSH service
+      ansible.builtin.wait_for_connection:
+        timeout: 240
+        connect_timeout: 10
+      changed_when: false
+    - name: Gather existing Media VM facts
+      ansible.builtin.setup:
+    - name: Verify exact existing Media guest identity and preserve its kernel
+      ansible.builtin.assert:
+        that:
+          - "ansible_facts['distribution'] == 'Debian'"
+          - "ansible_facts['distribution_major_version'] == '13'"
+          - "ansible_facts['hostname'] == 'mediaserver-serzhan'"
+          - "ansible_facts['default_ipv4']['address'] == '192.168.11.232'"
+          - "ansible_facts['kernel'] == '6.12.113+deb13-amd64'"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_GUEST_IDENTITY_OR_KERNEL_MISMATCH
+    - name: Verify commissioned Media guest administrative access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Require the exact existing pool is imported and ONLINE
+      ansible.builtin.command:
+        argv: [zpool, status, -P, serzhan-pool]
+      register: media_pool_status
+      changed_when: false
+    - name: Require expected Hitachi WWN and clean pool state
+      ansible.builtin.assert:
+        that:
+          - "'wwn-0x5000cca22bc6ef0d-part1' in media_pool_status.stdout"
+          - "'errors: No known data errors' in media_pool_status.stdout"
+          - "'state: ONLINE' in media_pool_status.stdout"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_MEDIA_POOL_NOT_READY
+    - name: Verify original Media ZFS import/mount service succeeded
+      ansible.builtin.command:
+        argv: [systemctl, is-active, dh-media-zfs.service]
+      register: media_zfs_service
+      changed_when: false
+    - name: Require original media ZFS service active
+      ansible.builtin.assert:
+        that:
+          - "media_zfs_service.stdout == 'active'"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_MEDIA_ZFS_SERVICE_FAILED
+    - name: Verify all original datasets are mounted
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, mounted, "{{ item }}"]
+      loop:
+        - serzhan-pool/doc
+        - serzhan-pool/digitalhouses
+        - serzhan-pool/media
+        - serzhan-pool/downloads
+        - serzhan-pool/backups
+        - serzhan-pool/timemachine
+      register: media_datasets
+      changed_when: false
+    - name: Require all original Media datasets mounted
+      ansible.builtin.assert:
+        that:
+          - "item.stdout == 'yes'"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_DATASET_NOT_MOUNTED
+      loop: "{{ media_datasets.results }}"
+    - name: Verify Debian ZFS DKMS remains installed
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, zfs-dkms, zfsutils-linux]
+      changed_when: false
+    - name: Verify no PBS server package was installed before this pilot
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, proxmox-backup-server]
+      register: existing_pbs_package
+      changed_when: false
+      failed_when: false
+    - name: Require this is a fresh PBS installation target
+      ansible.builtin.assert:
+        that:
+          - "existing_pbs_package.rc != 0"
+        fail_msg: PBS_MEDIA_VM_SERVER_ALREADY_INSTALLED
+    - name: Verify PBS web port is unused before package installation
+      ansible.builtin.command:
+        argv: [bash, -lc, "! ss -lntH '( sport = :8007 )' | grep -q ."]
+      changed_when: false
+    - name: Read root filesystem free space
+      ansible.builtin.command:
+        argv: [df, -BG, --output=avail, /]
+      register: media_root_free
+      changed_when: false
+    - name: Require at least 20 GiB free for PBS packages, logs and cache
+      ansible.builtin.assert:
+        that:
+          - "media_root_free.stdout_lines[-1] | regex_replace('[^0-9]', '') | int >= 20"
+        fail_msg: PBS_MEDIA_VM_ROOT_SPACE_LOW
+    - name: Capture baseline CPU, memory and storage before PBS install
+      ansible.builtin.command:
+        argv: [bash, -lc, "printf 'KERNEL '; uname -r; printf 'MEM '; free -m | awk '/^Mem:/ {print $2, $3, $7}'; printf 'CPU '; nproc; printf 'ARC '; cat /sys/module/zfs/parameters/zfs_arc_max 2>/dev/null || true; printf 'POOL '; zpool list -H -o size,alloc,free,health serzhan-pool; printf 'DISK '; lsblk -dn -o NAME,SIZE,MODEL,SERIAL /dev/disk/by-id/wwn-0x5000cca22bc6ef0d"]
+      register: media_baseline
+      changed_when: false
+    - name: Report successful PCI handoff and baseline
+      ansible.builtin.debug:
+        msg:
+          result: PBS_MEDIA_VM_PCI_CUTOVER_READY
+          standalone_pbs_vm: stopped_and_preserved
+          media_vm: running
+          pool: serzhan-pool_ONLINE
+          media_datasets: all_mounted
+          debian_kernel: "{{ ansible_facts['kernel'] }}"
+          pbs_package_installed: false
+          baseline: "{{ media_baseline.stdout_lines }}"
