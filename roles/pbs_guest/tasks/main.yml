@@ -56,6 +56,41 @@
       Components: pbs-no-subscription
       Signed-By: /usr/share/keyrings/proxmox-archive-keyring.gpg
 
+- name: Detect BIOS firmware before full PBS package installation
+  ansible.builtin.stat:
+    path: /sys/firmware/efi
+  register: pbs_bootstrap_efi
+
+- name: Resolve managed PBS cloud image system disk on BIOS guests
+  ansible.builtin.command:
+    argv: [readlink, -f, /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0]
+  register: pbs_bootstrap_bootdisk
+  changed_when: false
+  when: not pbs_bootstrap_efi.stat.exists
+
+- name: Read root partition device on BIOS guests
+  ansible.builtin.command:
+    argv: [findmnt, -n, -o, SOURCE, /]
+  register: pbs_bootstrap_rootfs
+  changed_when: false
+  when: not pbs_bootstrap_efi.stat.exists
+
+- name: Do not preseed GRUB until managed OS disk identity is proven
+  ansible.builtin.assert:
+    that:
+      - pbs_bootstrap_bootdisk.stdout == '/dev/sda'
+      - pbs_bootstrap_rootfs.stdout == '/dev/sda1'
+    fail_msg: PBS_GRUB_BOOT_DISK_IDENTITY_MISMATCH
+  when: not pbs_bootstrap_efi.stat.exists
+
+- name: Preseed BIOS GRUB only to the managed PBS system disk
+  ansible.builtin.command:
+    argv: [debconf-set-selections]
+    stdin: |
+      grub-pc grub-pc/install_devices multiselect /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0
+      grub-pc grub-pc/install_devices_empty boolean false
+  when: not pbs_bootstrap_efi.stat.exists
+
 - name: Install complete official Proxmox Backup Server with ZFS-capable Proxmox kernel
   ansible.builtin.apt:
     name: proxmox-backup
