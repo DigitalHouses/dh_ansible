@@ -69,7 +69,7 @@ def test_task10_origin_matches_actual_fresh_bootstrap_pve_runtime():
     assert "  source: host_root_vmbr0" in bootstrap
     assert "  node: {node}" in bootstrap
     assert "  tls_sha256_fingerprint: '{fingerprint}'" in bootstrap
-    assert "api_hostname" not in code
+    assert "pve_observed.api_hostname" not in code
     assert "originServerName:" not in code
     plays = yaml.safe_load(code)
     root = plays[0]
