@@ -71,6 +71,7 @@ def test_worker_detects_wrong_commit_or_mixed_files(tmp_path, monkeypatch):
         "assets": {path: hashlib.sha256(value.encode()).hexdigest()
                    for path, value in payloads.items()},
     }))
+    manifest.chmod(0o600)  # the protected production verifier requires this mode
     monkeypatch.setattr(module, "checked_file",
                         lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest())
     assert module.verify(sha, root=root, manifest=manifest, external={}) == len(payloads)
