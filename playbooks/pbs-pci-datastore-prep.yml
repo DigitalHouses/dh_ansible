@@ -15,11 +15,11 @@
     - name: Require exact site and preservation contract
       ansible.builtin.assert:
         that:
-          - site.id == 'serzhan-home'
-          - pbs.vmid | int == 2233
-          - pbs.name == 'pbs-serzhan'
-          - pbs.network.ipv4.split('/')[0] == '192.168.11.233'
-          - pbs.pilot.source_ctid | int == 1231
+          - "site.id == 'serzhan-home'"
+          - "pbs.vmid | int == 2233"
+          - "pbs.name == 'pbs-serzhan'"
+          - "pbs.network.ipv4.split('/')[0] == '192.168.11.233'"
+          - "pbs.pilot.source_ctid | int == 1231"
           - pbs.safety.never_touch_media_disk | bool
           - pbs.safety.never_touch_other_guests | bool
         fail_msg: PBS_PCI_PREP_WRONG_SITE
@@ -71,9 +71,9 @@
     - name: Fail closed unless controller exclusively belongs to PBS
       ansible.builtin.assert:
         that:
-          - media_status.stdout == 'status: stopped'
-          - pbs_status.stdout == 'status: running'
-          - pci_owner.stdout_lines == ['/etc/pve/qemu-server/2233.conf']
+          - "media_status.stdout == 'status: stopped'"
+          - "pbs_status.stdout == 'status: running'"
+          - "pci_owner.stdout_lines == ['/etc/pve/qemu-server/2233.conf']"
         fail_msg: PBS_PCI_PREP_CONTROLLER_OWNERSHIP_FAILED
 
 - name: PBS PCI datastore | Create bounded new dataset without altering old ones
@@ -103,10 +103,10 @@
     - name: Require old media and NFS baseline intact
       ansible.builtin.assert:
         that:
-          - pool_health.stdout == 'ONLINE'
-          - pool ~ '/media' in datasets_before.stdout_lines
-          - pool ~ '/backups/pbs-pilot' in datasets_before.stdout_lines
-          - pci_dataset not in datasets_before.stdout_lines
+          - "pool_health.stdout == 'ONLINE'"
+          - "pool ~ '/media' in datasets_before.stdout_lines"
+          - "pool ~ '/backups/pbs-pilot' in datasets_before.stdout_lines"
+          - "pci_dataset not in datasets_before.stdout_lines"
         fail_msg: PBS_PCI_PREP_EXISTING_DATA_OR_DUPLICATE_DATASET
     - name: Verify permanent Hitachi disk identity from pool
       ansible.builtin.command:
@@ -128,8 +128,8 @@
     - name: Refuse unexpected parent ZFS mounts
       ansible.builtin.assert:
         that:
-          - mountpoints.results[0].stdout == '/serzhan-pool'
-          - mountpoints.results[1].stdout == '/serzhan-pool/backups'
+          - "mountpoints.results[0].stdout == '/serzhan-pool'"
+          - "mountpoints.results[1].stdout == '/serzhan-pool/backups'"
         fail_msg: PBS_PCI_PREP_PARENT_MOUNT_DRIFT
     - name: Mount only ZFS pool root (no media or old NFS datasets)
       ansible.builtin.command:
@@ -173,8 +173,8 @@
     - name: Require new dataset mounted and atime enabled
       ansible.builtin.assert:
         that:
-          - new_mount.stdout == pci_dataset
-          - new_atime.stdout == 'on'
+          - "new_mount.stdout == pci_dataset"
+          - "new_atime.stdout == 'on'"
         fail_msg: PBS_PCI_PREP_NEW_DATASET_INVALID
     - name: Confirm existing media and NFS baseline datasets remain unmounted
       ansible.builtin.command:
@@ -185,8 +185,8 @@
     - name: Require preservation of unmounted existing media and backups
       ansible.builtin.assert:
         that:
-          - existing_mounted.results[0].stdout == 'no'
-          - existing_mounted.results[1].stdout == 'no'
+          - "existing_mounted.results[0].stdout == 'no'"
+          - "existing_mounted.results[1].stdout == 'no'"
         fail_msg: PBS_PCI_PREP_ORIGINAL_DATA_MOUNT_CHANGED
     - name: Report isolated new benchmark dataset
       ansible.builtin.debug:
