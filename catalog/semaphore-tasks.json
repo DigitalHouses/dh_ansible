@@ -57,6 +57,15 @@
           "values": []
         },
         {
+          "name": "DH_INPUT_PBS_ADMIN_PASSWORD",
+          "title": "Proxmox Backup Server · пароль администратора",
+          "description": "Пароль для admin@pbs (отдельно от root PVE). Пустое поле сохраняет прежний пароль. Используется задачей развертывания PBS для создания/восстановления администратора.",
+          "type": "secret",
+          "target": "env",
+          "required": false,
+          "values": []
+        },
+        {
           "name": "DH_INPUT_CLOUDFLARE_API_TOKEN",
           "title": "Cloudflare · API token",
           "description": "Оставьте пустым, чтобы сохранить прежнее значение. only if target site actually commissions Cloudflare changes with a permitted site-specific credential; do not duplicate org-wide unrestricted token into each site.",
