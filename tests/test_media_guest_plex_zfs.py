@@ -51,21 +51,35 @@ def test_official_plex_and_agent_setup_persisted():
                  "dh-media-zfs-mount.sh.j2"):
         assert name in installer
 
-def test_plex_libraries_auto_created_without_api_tokens_or_new_task():
+def test_plex_libraries_created_with_verified_readback_not_scanner_exit_code():
     data = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
     labels = [task["name"] for task in data]
-    assert "Inspect existing Plex library paths without changing its database" in labels
-    assert "Create missing Plex libraries using the installed Plex scanner" in labels
-    assert "Scan only newly created Plex libraries" in labels
-    create = next(x for x in data if x["name"].startswith("Create missing Plex libraries"))
-    assert create["ansible.builtin.command"]["argv"][:4] == ["runuser", "-u", "plex", "--"]
-    assert len(create["loop"]) == 3
-    assert [x["folder"] for x in create["loop"]] == ["movies", "tvshows", "music"]
-    assert "not in media_existing_plex_paths.stdout_lines" in create["when"]
+    expected = [
+        "Install Plex library reconciler that checks the actual database",
+        "Inspect Plex library roots using read-only database access",
+        "Require known Plex library status before first-start repair",
+        "Create missing Plex libraries only with confirmed database readback",
+        "Independently verify all three Plex library locations and types",
+        "Refuse successful deployment with any missing Plex library",
+    ]
+    assert all(x in labels for x in expected)
+    assert [labels.index(x) for x in expected] == sorted(labels.index(x) for x in expected)
+    create = next(x for x in data if x["name"] == expected[3])
+    assert create["become_user"] == "plex"
+    assert create["when"] == "media_plex_libraries_before.stdout == 'PLEX_LIBRARIES=NEEDS_UPDATE'"
+    assert "PLEX_LIBRARY_CREATED=" in create["changed_when"]
+    verify = next(x for x in data if x["name"] == expected[-1])
+    assert "media_plex_libraries_after.stdout == 'PLEX_LIBRARIES=READY'" in verify["ansible.builtin.assert"]["that"]
+    source = (ROOT / "roles/media_guest_setup/files/dh-plex-libraries.py").read_text()
+    for required in ("mode=ro", "PRAGMA query_only", "section_locations",
+                     "PLEX_LIBRARY_CREATION_NOT_CONFIRMED", "PLEX_LIBRARY_TYPE_CONFLICT",
+                     "PLEX_LIBRARIES=READY"):
+        assert required in source
     code = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
     assert "firmware-intel-graphics" in code
     assert "intel-media-va-driver" in code
     assert "vainfo" in code
+
 
 def test_media_smb_discovery_requires_authenticated_two_way_access():
     tasks = yaml.safe_load((ROOT / "roles/media_guest_setup/tasks/main.yml").read_text())
