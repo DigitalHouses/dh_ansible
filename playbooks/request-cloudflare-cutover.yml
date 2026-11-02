@@ -1,5 +1,7 @@
 ---
 # Native Ansible reconciliation. Tasks 05/06 commission Cloudflare/PVE identities.
+# Existing multi-route site Tunnel must remain untouched; PVE uses its own Tunnel.
+# The package is installed BEFORE tunnel creation; Healthy is required AFTER start, BEFORE DNS.
 # No per-task root watcher, connector token in CLI argv, or implicit legacy cutover.
 - name: Cloudflare PVE | preflight and API provisioning
   hosts: site_runner
@@ -729,6 +731,52 @@
         fail_msg: CF_INGRESS_READBACK_FAILED
       no_log: true
 
+
+    - name: Confirm PVE origin responds over verified HTTPS before DNS publication
+      ansible.builtin.uri:
+        url: "{{ cf_origin }}/api2/json/version"
+        method: GET
+        ca_path: /etc/cloudflared/dh-pve-ca.pem
+        validate_certs: true
+        status_code: 200
+        timeout: 12
+      register: cf_origin_verified
+      delegate_to: cf_pve_target
+      changed_when: false
+
+    - name: Require PVE origin API and TLS validation succeeded
+      ansible.builtin.assert:
+        that:
+          - cf_origin_verified.status == 200
+          - cf_origin_verified.json.data.version | default('') | length > 0
+        fail_msg: CF_PVE_TLS_OR_ORIGIN_NOT_READY
+
+    - name: Reinspect exact DNS just before any replacement
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ cf_host }}&per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+      register: cf_dns_pre_publish
+      changed_when: false
+      no_log: true
+
+    - name: Refuse concurrent DNS changes or an unowned replacement
+      ansible.builtin.assert:
+        that:
+          - cf_dns_pre_publish.json.success
+          - cf_dns_pre_publish.json.result | length == cf_dns_old.json.result | length
+          - >-
+            cf_dns_old.json.result | length == 0 or (
+              cf_dns_pre_publish.json.result[0].id == cf_dns_old.json.result[0].id
+              and cf_dns_pre_publish.json.result[0].content == cf_dns_old.json.result[0].content
+              and cf_dns_pre_publish.json.result[0].type == 'CNAME'
+              and cf_dns_pre_publish.json.result[0].proxied == true
+            )
+        fail_msg: CF_DNS_CONCURRENT_CHANGE_OR_FOREIGN_OWNER
+      no_log: true
+
     - name: Create only absent DNS record after Access and healthy connector
       ansible.builtin.uri:
         url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
@@ -746,6 +794,28 @@
         validate_certs: true
         timeout: 20
       when: cf_dns_old.json.result | length == 0
+      no_log: true
+
+
+    - name: Redirect only the former shared PVE CNAME after dedicated Tunnel is healthy
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records/{{ cf_dns_old.json.result[0].id }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        body_format: json
+        body:
+          type: CNAME
+          name: "{{ cf_host }}"
+          content: "{{ cf_tunnel_id }}.cfargotunnel.com"
+          proxied: true
+          ttl: 1
+        status_code: 200
+        validate_certs: true
+        timeout: 20
+      when: >-
+        cf_dns_old.json.result | length == 1
+        and cf_dns_old.json.result[0].content != cf_tunnel_id ~ '.cfargotunnel.com'
       no_log: true
 
     - name: Read back published DNS
@@ -799,11 +869,12 @@
           result: PASS
           site: "{{ site.id }}"
           pve: "{{ pve_observed.ipv4 }}"
-          tunnel: "{{ site.id }}"
+          tunnel: "{{ cf_tunnel_name }}"
           connector: HEALTHY
           origin_tls_configuration: VERIFIED
           dns: VERIFIED
           access_unauthenticated: CHALLENGE_VERIFIED
           post_auth_browser: REQUIRED
+          shared_tunnel_untouched: true
           legacy_deleted: false
           url: "https://{{ cf_host }}"
