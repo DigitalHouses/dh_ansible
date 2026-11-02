@@ -16,6 +16,9 @@ import subprocess
 import sys
 
 
+NTFS_ERASE_MARKER = Path("/etc/digitalhouses/.dh-initial-ntfs-erase.json")
+
+
 class Blocked(Exception):
     pass
 
@@ -248,7 +251,7 @@ def verify_one_time_ntfs_erase(data, physical):
                              approval["reserved_partuuid"]) is not None,
             "ONE_TIME_NTFS_PARTUUID_INVALID")
     children = physical_partitions(physical)
-    marker = Path("/etc/digitalhouses/.dh-initial-ntfs-erase.json")
+    marker = NTFS_ERASE_MARKER
     marker_value = {
         "schema": 1, "scope": "first_create_only",
         "serial": spec["serial"], "wwn": spec["wwn"],
