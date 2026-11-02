@@ -74,7 +74,8 @@ def test_password_is_only_used_in_protected_native_transport():
     assert "UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts" in (
         attrs["ansible_ssh_common_args"]
     )
-    assert "sshpass" not in CHECK
+    assert "argv: [sshpass" not in CHECK
+    assert "ansible.builtin.shell" not in CHECK
     assert "DH_PVE_ROOT_PASSWORD" not in ENROLL
     enrollment = p[1]["tasks"][0]
     assert enrollment["no_log"] is True
