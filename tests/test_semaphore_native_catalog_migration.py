@@ -54,6 +54,35 @@ class FakeTemplates:
         raise AssertionError("Unexpected API request: " + method + " " + path)
 
 
+class NormalizingTemplateAPI(FakeTemplates):
+    """Simulate the Semaphore API normalizing Survey fields after a PUT."""
+
+    def request(self, method, path, body=None):
+        result = super().request(method, path, body)
+        if method == "PUT" and path == "/project/7/templates/41":
+            # API may return null or omitted values on subsequent GET.
+            self.current["survey_vars"] = [
+                {
+                    **{key: val for key, val in v.items() if key != "values"},
+                    "values": None,
+                    "default": None,
+                    "default_value": "",
+                }
+                for v in self.current["survey_vars"]
+            ]
+        return result
+
+
+class TamperingTemplateAPI(NormalizingTemplateAPI):
+    """Simulate an unsafe nonempty injected survey default post-commit."""
+
+    def request(self, method, path, body=None):
+        result = super().request(method, path, body)
+        if method == "PUT" and path == "/project/7/templates/41":
+            self.current["survey_vars"][0]["default"] = "injected-secret"
+        return result
+
+
 def desired_from(fake):
     desired = dict(fake.current)
     desired["name"] = TASK05["title"]
@@ -100,6 +129,43 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         self.assertEqual(len(api.writes), 1)
         sync(api, PATH, desired, apply=True)
         self.assertEqual(len(api.writes), 1)
+
+    def test_normalized_api_post_write_proves_six_fields_and_keeps_history(self):
+        api = NormalizingTemplateAPI()
+        desired = desired_from(api)
+        api.current["name"] = TASK05["title"]
+        api.current["playbook"] = TASK05["playbook"]
+        api.current["survey_vars"] = [
+            {**f, "values": None, "default": None}
+            for f in TASK05["survey_vars"]
+            if f["name"] != "DH_INPUT_MQTT_BROKER_HOST"
+        ]
+        sync = SEEDER["sync_existing_template"]
+        sync(api, PATH, desired, apply=True)
+        self.assertEqual(len(api.writes), 1)
+        self.assertEqual(len(api.current["survey_vars"]), 6)
+        self.assertEqual(api.current["id"], 41)
+        self.assertEqual(api.current["task_id"], 123456)
+        self.assertTrue(SEEDER["equivalent_task05_survey"](
+            TASK05["title"], api.current["survey_vars"], desired["survey_vars"]
+        ))
+        # Repeat stays read-only: no second PUT and no history loss.
+        sync(api, PATH, desired, apply=True)
+        self.assertEqual(len(api.writes), 1)
+
+    def test_normalized_api_post_write_rejects_hidden_prefilled_value(self):
+        api = TamperingTemplateAPI()
+        desired = desired_from(api)
+        api.current["name"] = TASK05["title"]
+        api.current["playbook"] = TASK05["playbook"]
+        api.current["survey_vars"] = [
+            f for f in TASK05["survey_vars"]
+            if f["name"] != "DH_INPUT_MQTT_BROKER_HOST"
+        ]
+        with self.assertRaisesRegex(SEEDER["Blocked"], "could not be verified"):
+            SEEDER["sync_existing_template"](api, PATH, desired, apply=True)
+        self.assertEqual(api.current["id"], 41)
+        self.assertEqual(api.current["task_id"], 123456)
 
     def test_five_field_survey_drift_blocks_mqtt_host_append(self):
         api = FakeTemplates()

@@ -733,8 +733,23 @@ def sync_existing_template(api, path, desired, *, apply=False):
     payload.update({k: desired[k] for k in allowed_change})
     api.request("PUT", prefix + "/" + str(template_id), payload)
     verify = api.request("GET", prefix + "/" + str(template_id))
-    if verify.get("id") != template_id or any(
-            verify.get(k) != desired[k] for k in allowed_change):
+    # Semaphore 2.20 may normalize an empty survey default/value as null or
+    # omit the field entirely on read-back. The PUT is already committed, so
+    # comparing raw dicts would wrongly report a failed migration even when
+    # the managed Survey was successfully upgraded from 5 to 6 fields.
+    # Accept ONLY the same tightly reviewed empty-value normalization rules
+    # as the read-only path. Do not accept a five-field legacy Survey here:
+    # post-write verification must prove ALL six fields exist.
+    def verified_after_write(field):
+        actual, expected = verify.get(field), desired[field]
+        if field == "survey_vars":
+            return (actual == expected
+                    or equivalent_task05_survey(title, actual, expected)
+                    or equivalent_secret_survey(title, actual, expected))
+        return actual == expected
+
+    if verify.get("id") != template_id or not all(
+            verified_after_write(field) for field in allowed_change):
         raise Blocked("Catalog template update could not be verified")
     print("CATALOG_UPDATED=" + title, flush=True)
 
