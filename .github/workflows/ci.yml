@@ -40,7 +40,8 @@ jobs:
             tests/test_pve_legacy_ca_credential_runtime.py \
             tests/test_task06_pve_native_enrollment.py \
             tests/test_task05_mqtt_broker_endpoint.py \
-            tests/test_task06_external_credentials.py
+            tests/test_task06_external_credentials.py \
+            tests/test_cloudflare_read_scope.py
       - name: Validate Task 05/06 Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
