@@ -1,3 +1,11 @@
+## Проверка MQTT и Cloudflare в №06 (новый сценарий)
+
+После успешной №05 (сохранила MQTT broker host, username, password и Cloudflare API token) запускается штатная №06, без дополнительных отдельных номеров. Проверка MQTT: прямое **MQTT 3.1.1 CONNECT** из site-runner к указанному брокеру TCP/1883; CONNACK=0 означает `READY`, 4/5 — `AUTH_FAILED`, timeout/connection refused — `UNREACHABLE`. Никаких PUBLISH/SUBSCRIBE. Указанный пароль передаётся через stdin команды Ansible с `no_log`; в журнал выводится только безопасный статус. Если хотя бы одно из трёх полей MQTT заполнено, но не вся тройка — `INCOMPLETE`, и общий `overall=BLOCKED`. При всех пустых — `NOT_CONFIGURED` (опционально для PVE).
+
+Проверка Cloudflare: `GET https://api.cloudflare.com/client/v4/user/tokens/verify` с `Authorization: Bearer`, `validate_certs=true`, `no_log=true`; при ответе `success=true, result.status=active` — `READY`, при отказе — `AUTH_FAILED`, при disabled/expired — `TOKEN_INACTIVE`, при техническом сбое — `API_UNAVAILABLE`. Эта проверка **не подтверждает полномочия на создание/изменение тоннелей и Access**. Cloudflare-токен отсутствует → `NOT_CONFIGURED` без блокировки. GitHub token в №06 по-прежнему не проверяется до реализации №07.
+
+Это диагностическая операция: она не пишет в MQTT и не меняет Cloudflare/PVE (кроме утверждённого первоначального SSH onboarding PVE, если он реально необходим). Проверка паролей без их вывода. Стандартный MQTT/1883 использует существующее соединение без TLS в LAN; для удалённых брокеров нужен отдельный защищённый TLS-профиль. 
+
 ## MQTT broker address · штатная Task 05 (02.11.2026)
 
 Для каждого объекта необходимо указать не только логин/пароль, но и **IP-адрес или DNS-имя MQTT-брокера**. В шестипольной форме №05 это `DH_INPUT_MQTT_BROKER_HOST` (обычное text), сохраняемое как `DH_MQTT_BROKER_HOST` в native Semaphore Variable Group `Empty` (nonsecret env). Схему `mqtt://` и порт в значение не добавлять; до отдельной параметризации используется стандартный TCP port 1883. Нет глобального адреса, разные дома используют разные брокеры. Пустое значение сохраняет ранее заданный endpoint. Ненадёжные форматы (с URL, пробелами и двумя точками подряд) отклоняются до API-записи.

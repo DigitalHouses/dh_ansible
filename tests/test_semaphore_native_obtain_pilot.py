@@ -71,7 +71,7 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertIn("/api2/json/nodes", verifier)
         self.assertIn("ssl.create_default_context", verifier)
         self.assertIn("ctx.verify_flags &= ~ssl.VERIFY_X509_STRICT", verifier)
-        self.assertNotIn("api_token", CHECK.lower())
+        self.assertNotIn("DH_PVE_API_TOKEN", CHECK)
 
     def test_partial_keep_and_safe_write_contract(self):
         self.assertIn("rejectattr('value', 'equalto', '')", OBTAIN)
@@ -92,7 +92,8 @@ class NativeCredentialContract(unittest.TestCase):
                       if t["title"] == "06-Проверить credentials объекта")
         self.assertEqual(task06["playbook"], "playbooks/check-site-credentials.yml")
         self.assertNotIn("survey_vars", task06)
-        self.assertIn("NOT_APPLICABLE_UNTIL_AGENT_COMMISSIONING", CHECK)
+        self.assertIn("scripts/mqtt-credential-check.py", CHECK)
+        self.assertIn("api.cloudflare.com/client/v4/user/tokens/verify", CHECK)
         self.assertIn("PVE_TRUST_NOT_COMMISSIONED", CHECK)
         self.assertIn("AUTH_FAILED", CHECK)
         self.assertIn("UNREACHABLE", CHECK)
