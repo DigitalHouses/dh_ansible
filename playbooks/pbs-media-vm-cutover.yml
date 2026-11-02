@@ -204,7 +204,7 @@
         argv: [qm, status, '2233']
       register: pbs_stopped
       changed_when: false
-      until: pbs_stopped.stdout == 'status: stopped'
+      until: "pbs_stopped.stdout == 'status: stopped'"
       retries: 40
       delay: 3
     - name: Remove SATA PCI controller from stopped standalone PBS VM
