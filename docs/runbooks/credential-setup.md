@@ -1,3 +1,9 @@
+## MQTT broker address · штатная Task 05 (02.11.2026)
+
+Для каждого объекта необходимо указать не только логин/пароль, но и **IP-адрес или DNS-имя MQTT-брокера**. В шестипольной форме №05 это `DH_INPUT_MQTT_BROKER_HOST` (обычное text), сохраняемое как `DH_MQTT_BROKER_HOST` в native Semaphore Variable Group `Empty` (nonsecret env). Схему `mqtt://` и порт в значение не добавлять; до отдельной параметризации используется стандартный TCP port 1883. Нет глобального адреса, разные дома используют разные брокеры. Пустое значение сохраняет ранее заданный endpoint. Ненадёжные форматы (с URL, пробелами и двумя точками подряд) отклоняются до API-записи.
+
+Существующая Task 05 имеет пять полей. При первом запуске обновлённой **№00** root-owned каталогизатор обновляется через обычную Semaphore+Ansible операцию, после чего каталог выполняет строго разрешённую миграцию 5 → 6 полей, **не меняя template ID/историю запусков/Secret Values**. После этого можно ввести MQTT host, username/password и другие нужные credentials через №05. Проверка MQTT/GitHub/Cloudflare API в №06 ещё не реализована; №06 сейчас подтверждает только Proxmox API/SSH. Никакой ручной retrofit, PVE Shell или Fresh Bootstrap для этого обновления не нужен.
+
 > **LIVE PASS · 02.11.2026:** чистый Bootstrap создал PVE public trust, затем Semaphore №00 и №05 прошли; №06 через pinned TLS проверила `root@pam`, впервые авторизовала публичный SSH-ключ Ansible на PVE и доказала noninteractive SSH root + `qm list`. `pve=READY`, `pve_ssh=READY`, `overall=READY`. Не требуется №08 или ручной PVE host-root commissioning. Повтор №06 (запуск #4) успешно прошёл: создание ключа и password SSH enrollment пропущены, API/SSH `READY`; `changed=1` обусловлен только внутренним `add_host`, не изменениями на PVE. [Фактический отчёт](../acceptance/semaphore-beta-fresh-2026-11-02.md). Нижние PENDING/legacy инструкции — исторические, не применять к действующему CT.
 
 ## Целевой поток №06 — API + SSH commissioning (PR #112)
