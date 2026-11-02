@@ -73,6 +73,11 @@
       "view": "01 · Подготовка"
     },
     {
+      "title": "07-Создать приватный репозиторий объекта",
+      "playbook": "playbooks/provision-site-repository.yml",
+      "view": "01 · Подготовка"
+    },
+    {
       "title": "10-Создание туннеля CF до PVE",
       "playbook": "playbooks/request-cloudflare-cutover.yml",
       "view": "01 · Подготовка"
