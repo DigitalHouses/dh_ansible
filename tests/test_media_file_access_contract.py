@@ -76,7 +76,9 @@ def test_portal_and_discovery_are_declared_without_secrets():
     # The root-only CLI command contains the word "password", but no credential value.
     assert "password=" not in page.lower()
     assert "secret=" not in page.lower()
-    assert 'value="/usr/local/sbin/dh-media-password-show"' in page
+    assert 'id="pve-root-cli"' in page
+    assert 'qm guest exec {{ media_vm.vmid }} -- cat /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ site.owner_slug }}.txt' in page
+    assert 'readonly' in page
     assert ":32400/web" in page
 
 
