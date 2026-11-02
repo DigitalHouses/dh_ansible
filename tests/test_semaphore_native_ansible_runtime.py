@@ -101,7 +101,7 @@ def test_task05_real_ansible_verifies_saved_secret_names():
 
 def test_task05_real_ansible_validates_broker_host_before_api_call():
     check = find_task(
-        "Validate the supplied broker IPv4/DNS endpoint without leaking any credentials"
+        "Validate the supplied broker IPv4/DNS endpoint"
     )
     assert check["no_log"] is True
     run_ansible({
