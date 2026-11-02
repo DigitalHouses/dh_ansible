@@ -1,209 +1,341 @@
 ---
-# Semaphore single-button phase: audit first, then provision if approved in Fleet.\n# No modifications of old guests, backup jobs or host disks.
-- name: Audit and plan media-server Debian QEMU VM and PCI ownership
+# Task 80 — native Ansible after Tiny Bootstrap, not the legacy root worker.
+# The ONLY destructive disk action is a one-time, exact site-approved NTFS
+# conversion, re-verified first on PVE and again from inside the media VM.
+- name: Media 80 | Verify private site inventory and prepare commissioned PVE
   hosts: site_runner
   gather_facts: false
   become: false
-
+  vars:
+    media_github_api: "https://api.github.com/repos/DigitalHouses/site-{{ site.id }}"
+    media_github_headers:
+      Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: "2022-11-28"
   pre_tasks:
-    - name: Require exactly two independent engineer actions from Semaphore survey
+    - name: Require independent VM and physical-disk actions
       ansible.builtin.assert:
         that:
           - media_vm_action is defined
-          - media_vm_action in ['create', 'recreate', 'keep']
+          - media_vm_action in ['create', 'keep', 'recreate']
           - media_raw_disk_action is defined
           - media_raw_disk_action in ['import', 'erase']
-        fail_msg: "MEDIA_ACTIONS_REQUIRED: select both VM and Raw Disk actions in task 80 Run dialog."
+        fail_msg: MEDIA_ACTIONS_REQUIRED
 
-    - name: Load canonical site identity
+    - name: Load commissioned site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
 
-    - name: Reconcile approved PVE and media configuration from private Fleet
-      ansible.builtin.include_role:
-        name: site_inventory_prepare
-      vars:
-        site_inventory_required_files:
-          - pve.yml
-          - media_vm.yml
-
-    - name: Load canonical PVE identity
+    - name: Read observed PVE IP and pinned TLS identity
       ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/pve.yml"
+        file: "{{ inventory_dir }}/pve-runtime.yml"
 
-    - name: Load desired media server VM state
-      ansible.builtin.include_vars:
-        file: "{{ inventory_dir }}/media_vm.yml"
-
-    - name: Validate Fleet-provided media identities before PVE worker
-      ansible.builtin.import_tasks: media-accounts-preflight.yml
-    - name: Validate canonical storage inventory
+    - name: Require correct local site and preexisting native credentials
       ansible.builtin.assert:
         that:
-          - media_vm.storage.pool_name is match('^[a-z][a-z0-9_-]{1,62}$')
-          - media_raw_disk_action != 'erase' or media_vm.storage.pool_name == site.owner_slug ~ '-pool'
-          - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
-          - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
-          - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
-          - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
-          - media_raw_disk_action != 'erase' or media_vm.storage.destructive_without_backup | default(false) | bool
-          - media_vm.storage.layout.datasets is sequence
-          - media_vm.storage.layout.directories is sequence
-        fail_msg: MEDIA_STORAGE_INVENTORY_INVALID
-
-    - name: Enforce site-local runner
-      ansible.builtin.assert:
-        that:
-          - ansible_play_hosts_all | length == 1
           - inventory_hostname == 'runner'
+          - ansible_play_hosts_all | length == 1
           - (ansible_connection | default('')) == 'local'
           - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_observed.source == 'host_root_vmbr0'
+          - pve_observed.ipv4 is match('^[0-9]+(\\.[0-9]+){3}$')
+          - pve_observed.node | length > 0
+          - DH_GITHUB_PROVISION_TOKEN is defined
+          - DH_GITHUB_PROVISION_TOKEN | default('') | length > 20
+          - DH_MQTT_PASSWORD is defined
+          - DH_MQTT_PASSWORD | default('') | length > 0
+          - lookup('ansible.builtin.env', 'DH_MQTT_USERNAME') | length > 0
+        fail_msg: MEDIA_NATIVE_SITE_IDENTITY_OR_CREDENTIALS_NOT_READY
+      no_log: true
 
+    - name: Verify reusable administrative file-management rights on runner
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
 
   tasks:
-    - name: Require commissioned fixed-purpose PVE audit worker
-      ansible.builtin.command:
-        argv: [systemctl, is-active, dh-pve-access-audit.path]
-      register: media_pve_audit_watcher
+    - name: Read exact private GitHub site repository metadata
+      ansible.builtin.uri:
+        url: "{{ media_github_api }}"
+        method: GET
+        headers: "{{ media_github_headers }}"
+        validate_certs: true
+        status_code: 200
+        timeout: 25
+      register: media_site_repo
+      no_log: true
       changed_when: false
-      failed_when: false
 
-    - name: Reject unavailable PVE audit privilege boundary
+    - name: Refuse foreign or public site configuration
       ansible.builtin.assert:
         that:
-          - media_pve_audit_watcher.stdout == 'active'
-        fail_msg: "MEDIA_PVE_AUDIT_NOT_COMMISSIONED: root worker absent."
+          - media_site_repo.json.private == true
+          - media_site_repo.json.owner.login == 'DigitalHouses'
+          - media_site_repo.json.name == 'site-' ~ site.id
+          - media_site_repo.json.default_branch == 'main'
+          - not media_site_repo.json.archived
+        fail_msg: MEDIA_SITE_REPOSITORY_IDENTITY_MISMATCH
+      no_log: true
 
-    - name: Create unique PCI plan request ID
-      ansible.builtin.command:
-        argv: [cat, /proc/sys/kernel/random/uuid]
-      register: media_plan_nonce
+    - name: Read private site identity marker
+      ansible.builtin.uri:
+        url: "{{ media_github_api }}/contents/.digitalhouses/site.json?ref=main"
+        method: GET
+        headers: "{{ media_github_headers }}"
+        validate_certs: true
+        status_code: 200
+        timeout: 20
+      register: media_site_marker
       changed_when: false
+      no_log: true
 
-    - name: Request fixed-purpose read-only media PCI plan
-      ansible.builtin.copy:
-        dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_PLAN_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_plan_nonce.stdout }}\n"
-        mode: '0600'
-      changed_when: false
-
-    - name: Await exact request identity from protected worker
-      ansible.builtin.command:
-        argv: [cat, /run/dh-pve-access-audit.status]
-      register: media_plan_worker_status
-      changed_when: false
-      failed_when: false
-      retries: 120
-      delay: 3
-      until: >-
-        media_plan_worker_status.stdout in [
-          'PASS:' ~ media_plan_nonce.stdout,
-          'FAILED:' ~ media_plan_nonce.stdout
-        ]
-
-    - name: Fail when PVE audit did not complete
+    - name: Validate private repository site marker
       ansible.builtin.assert:
         that:
-          - media_plan_worker_status.stdout == 'PASS:' ~ media_plan_nonce.stdout
-        fail_msg: "MEDIA_PVE_PLAN_FAILED: inspect root-only dh-pve-access-audit log."
+          - (media_site_marker.json.content | b64decode | from_json).schema == 1
+          - (media_site_marker.json.content | b64decode | from_json).site_id == site.id
+          - (media_site_marker.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
+        fail_msg: MEDIA_SITE_MARKER_MISMATCH
+      no_log: true
 
-    - name: Read sanitized PCI plan produced by privileged audit
-      ansible.builtin.slurp:
-        src: /run/dh-pve-media-plan.json
-      register: media_plan_report
+    - name: Download only this site's media VM declaration
+      ansible.builtin.uri:
+        url: "{{ media_github_api }}/contents/inventories/{{ site.id }}/media_vm.yml?ref=main"
+        method: GET
+        headers: "{{ media_github_headers }}"
+        validate_certs: true
+        status_code: 200
+        timeout: 20
+      register: media_site_file
       changed_when: false
+      no_log: true
 
-    - name: Parse authorized media plan
+    - name: Require small canonical YAML with a verifiable SHA
+      ansible.builtin.assert:
+        that:
+          - media_site_file.json.encoding == 'base64'
+          - media_site_file.json.size | int < 32768
+          - media_site_file.json.sha is match('^[0-9a-f]{40}$')
+          - media_site_file.json.path == 'inventories/' ~ site.id ~ '/media_vm.yml'
+        fail_msg: MEDIA_SITE_FILE_INVALID
+      no_log: true
+
+    - name: Parse approved media VM declaration (nonsecret)
       ansible.builtin.set_fact:
-        media_plan_summary: "{{ media_plan_report.content | b64decode | from_json }}"
-      changed_when: false
+        media_vm: "{{ (media_site_file.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
 
-    - name: Verify plan provenance and exact target identity
+    - name: Require specific declared VM, hardware, pool and network boundaries
       ansible.builtin.assert:
         that:
-          - media_plan_summary.nonce == media_plan_nonce.stdout
-          - media_plan_summary.site == site.id
-          - media_plan_summary.name == media_vm.name
-          - media_plan_summary.vmid | int == media_vm.vmid | int
-          - media_plan_summary.result == 'PLAN_ONLY'
-          - media_plan_summary.requested_vm_action == media_vm_action
-          - media_plan_summary.requested_disk_action == media_raw_disk_action
-          - media_plan_summary.warnings is sequence
-          - media_plan_summary.warnings is not string
-        fail_msg: "MEDIA_PVE_PLAN_PROVENANCE_MISMATCH: stale or foreign worker result."
+          - media_vm.name == 'mediaserver-' ~ site.owner_slug
+          - media_vm.vmid | int >= 2200
+          - media_vm.vmid | int <= 2254
+          - media_vm.vmid | int == 2000 + (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int)
+          - media_vm.network.bridge == 'vmbr0'
+          - media_vm.network.static_ipv4_verified | bool
+          - media_vm.storage.pool_name == site.owner_slug ~ '-pool'
+          - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
+          - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
+          - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
+          - media_vm.storage.disk.size_bytes | int > 100000000000
+          - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
+          - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
+          - media_vm.resources.cores | int == 2
+          - media_vm.resources.memory_mb | int == 4096
+          - media_vm.resources.ballooning == false
+          - media_vm.approvals.provision == true
+          - media_vm.approvals.gpu_cutover == true
+          - media_vm.approvals.sata_cutover == true
+          - media_vm.storage.one_time_ntfs_erase.approved == true
+          - media_vm.storage.one_time_ntfs_erase.scope == 'first_create_only'
+          - media_vm.storage.one_time_ntfs_erase.wwn == media_vm.storage.disk.wwn
+          - media_vm.storage.one_time_ntfs_erase.serial == media_vm.storage.disk.serial
+          - media_vm.storage.one_time_ntfs_erase.size_bytes == media_vm.storage.disk.size_bytes
+          - media_vm.storage.one_time_ntfs_erase.partition_partuuid == media_vm.storage.disk.observed_partuuid
+          - media_vm.storage.one_time_ntfs_erase.partition_label == media_vm.storage.disk.observed_label
+          - media_vm.storage.destructive_without_backup == true
+          - media_vm.backup_export.pve_host == pve_observed.ipv4
+          - media_vm_action != 'recreate'
+          - media_vm_action != 'create' or media_raw_disk_action == 'erase'
+          - media_vm_action != 'keep' or (media_raw_disk_action == 'erase' or media_vm.storage.import_pool_guid is defined)
+        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
 
-    - name: Show audited current hardware and blockers
-      ansible.builtin.debug:
-        msg: "{{ media_plan_summary }}"
+    - name: Validate media file and backup account contracts
+      ansible.builtin.import_tasks: media-accounts-preflight.yml
+      vars:
+        pve:
+          host: "{{ pve_observed.ipv4 }}"
+          node: "{{ pve_observed.node }}"
 
-    - name: Provision only when canonical Fleet authorizes media server
+    - name: Verify PVE host SSH key and commissioned private key exist
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - /var/lib/semaphore/.ssh/dh_pve_known_hosts
+        - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+      register: media_ssh_credentials
+      changed_when: false
+
+    - name: Require managed SSH trust before PVE actions
       ansible.builtin.assert:
         that:
-          - media_plan_summary.blockers is sequence
-          - media_plan_summary.blockers is not string
-          - media_plan_summary.blockers | length == 0
-          - (media_plan_summary.gpu_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
-          - (media_plan_summary.sata_owners | map(attribute='vmid') | list | difference([media_vm.vmid | int])) | length == 0
-          - media_vm.approvals.gpu_cutover | bool
-          - media_vm.approvals.sata_cutover | bool
-        fail_msg: "MEDIA_DEPLOY_BLOCKED_BY_PREFLIGHT: resolve all plan blockers before any writes"
-      when: media_vm.approvals.provision | default(false) | bool
+          - media_ssh_credentials.results | map(attribute='stat.isreg', default=false) | select('equalto', true) | list | length == 2
+          - media_ssh_credentials.results | map(attribute='stat.mode', default='') | select('equalto', '0600') | list | length == 2
+        fail_msg: MEDIA_PVE_SSH_TRUST_MISSING
 
-    - name: Create deployment request ID
-      ansible.builtin.command:
-        argv: [cat, /proc/sys/kernel/random/uuid]
-      register: media_deploy_nonce
-      changed_when: false
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Read immutable Semaphore checkout commit
-      ansible.builtin.command:
-        argv: [git, -C, "{{ playbook_dir }}/..", rev-parse, HEAD]
-      register: media_checkout_sha
-      changed_when: false
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Require a complete pinned repository identity before VM writes
-      ansible.builtin.assert:
-        that:
-          - media_checkout_sha.stdout is match('^[0-9a-f]{40}$')
-        fail_msg: MEDIA_DEPLOY_REPOSITORY_PIN_MISSING
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Submit fixed-purpose media deploy to existing PVE root worker
+    - name: Materialize only approved media metadata on the runner
       ansible.builtin.copy:
-        dest: /var/lib/semaphore/dh-pve-access-audit.request
-        content: "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}:{{ media_deploy_nonce.stdout }}:{{ media_checkout_sha.stdout }}\n"
-        mode: '0600'
+        dest: "{{ inventory_dir }}/media_vm.yml"
+        content: "{{ {'media_vm': media_vm} | to_nice_yaml(indent=2) }}"
+        owner: root
+        group: semaphore
+        mode: '0640'
+      become: true
+      no_log: true
+
+    - name: Materialize observed PVE identity, never legacy Fleet IP
+      ansible.builtin.copy:
+        dest: "{{ inventory_dir }}/pve.yml"
+        content: "{{ {'pve': {'host': pve_observed.ipv4, 'node': pve_observed.node, 'port': 8006, 'tls': {'sha256_fingerprint': pve_observed.tls_sha256_fingerprint}}} | to_nice_yaml(indent=2) }}"
+        owner: root
+        group: semaphore
+        mode: '0640'
+      become: true
+      no_log: true
+
+    - name: Register exactly the commissioned PVE root SSH target
+      ansible.builtin.add_host:
+        name: media_pve
+        groups: dh_media_native_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        media_vm: "{{ media_vm }}"
+        media_vm_action: "{{ media_vm_action }}"
+        media_raw_disk_action: "{{ media_raw_disk_action }}"
       changed_when: false
-      when: media_vm.approvals.provision | default(false) | bool
+      no_log: true
 
-    - name: Await media VM provisioning on PVE
-      ansible.builtin.command:
-        argv: [cat, /run/dh-pve-access-audit.status]
-      register: media_deploy_worker
-      changed_when: false
-      failed_when: false
-      retries: 240
-      delay: 5
-      until: >-
-        media_deploy_worker.stdout in [
-          'PASS:' ~ media_deploy_nonce.stdout,
-          'FAILED:' ~ media_deploy_nonce.stdout
-        ]
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Require successful VM deployment
-      ansible.builtin.assert:
-        that:
-          - media_deploy_worker.stdout == 'PASS:' ~ media_deploy_nonce.stdout
-        fail_msg: "MEDIA_DEPLOY_FAILED: inspect dh-pve-access-audit root-worker log."
-      when: media_vm.approvals.provision | default(false) | bool
-
-    - name: Report media VM provisioning status
+    - name: Publish sanitized native deployment plan
       ansible.builtin.debug:
         msg:
+          result: MEDIA_NATIVE_PREPARED
+          site: "{{ site.id }}"
+          pve: "{{ pve_observed.ipv4 }}"
           vmid: "{{ media_vm.vmid }}"
-          name: "{{ media_vm.name }}"
-          ipv4: "{{ media_vm.network.ipv4 }}"
-          result: "{{ 'DEPLOYED' if media_vm.approvals.provision | default(false) | bool else 'AUDIT_ONLY' }}"
+          vm_action: "{{ media_vm_action }}"
+          disk_action: "{{ media_raw_disk_action }}"
+          disk_wwn: "{{ media_vm.storage.disk.wwn }}"
+          site_inventory_git_blob: "{{ media_site_file.json.sha }}"
+          no_legacy_worker: true
+
+- name: Media 80 | Native PVE preflight and declared VM creation
+  hosts: dh_media_native_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Require native commissioned root access to the actual PVE host
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+
+    - name: Verify PVE/CT/hardware ownership before any VM or disk writes
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/../scripts/dh-media-pve-preflight.py
+        --site {{ site.id }}
+        --vm-action {{ media_vm_action }}
+        --disk-action {{ media_raw_disk_action }}
+      register: media_pve_preflight
+      changed_when: false
+
+    - name: Require completed independent hardware and VM preflight
+      ansible.builtin.assert:
+        that:
+          - "'MEDIA_PVE_PREFLIGHT=PASS' in media_pve_preflight.stdout"
+        fail_msg: MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED
+
+    - name: Provision only the declared PVE media VM by native Ansible SSH
+      ansible.builtin.script: >-
+        {{ playbook_dir }}/../bootstrap/dh-pve-media-deploy.py
+        --site {{ site.id }}
+        --vm-action {{ media_vm_action }}
+        --raw-disk-action {{ media_raw_disk_action }} --apply
+      register: media_vm_provision
+      changed_when: >-
+        'VM_CREATED=YES' in media_vm_provision.stdout
+        or 'VM_RECREATE=' in media_vm_provision.stdout
+
+    - name: Confirm exact managed VM running before touching guest data disk
+      ansible.builtin.command:
+        argv: [qm, status, "{{ media_vm.vmid }}"]
+      register: media_qm_running
+      changed_when: false
+
+    - name: Refuse to configure an absent, stopped, or foreign VM
+      ansible.builtin.assert:
+        that:
+          - media_qm_running.stdout == 'status: running'
+        fail_msg: MEDIA_VM_NOT_RUNNING_AFTER_NATIVE_PROVISION
+
+- name: Media 80 | Configure approved Debian media apps and one-time ZFS
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Register newly commissioned Debian media VM using pinned runner SSH
+      ansible.builtin.add_host:
+        name: media_server
+        groups: dh_media_native_guest
+        ansible_host: "{{ media_vm.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_connection: ssh
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes
+          -o StrictHostKeyChecking=accept-new
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+        media_owner_slug: "{{ site.owner_slug }}"
+        site: "{{ site }}"
+        media_vm_action: "{{ media_vm_action }}"
+        media_raw_disk_action: "{{ media_raw_disk_action }}"
+        media_vm: >-
+          {{
+            media_vm | combine({
+              'plex_agent': {
+                'mqtt': {
+                  'username': lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'),
+                  'password': DH_MQTT_PASSWORD
+                }
+              }
+            }, recursive=True)
+          }}
+      changed_when: false
+      no_log: true
+
+- name: Media 80 | Apply existing media guest setup role
+  hosts: dh_media_native_guest
+  gather_facts: false
+  become: true
+  pre_tasks:
+    - name: Wait for Debian 13 SSH/cloud-init after PVE VM creation
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        sleep: 6
+        connect_timeout: 8
+        timeout: 540
+      changed_when: false
+  roles:
+    - media_guest_setup

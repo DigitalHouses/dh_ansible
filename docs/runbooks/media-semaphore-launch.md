@@ -12,6 +12,44 @@
 **Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).  
 **Статус:** подтверждённый способ исполнения на пилотном site runner; **не** универсальное разрешение на операции с production.
 
+## Новая №80 · Native Ansible · свежий Jonsbo (02.11.2026)
+
+Старый `dh-pve-access-audit.path` **не устанавливается** Tiny Bootstrap. №80
+переведена на те же реальные root SSH credentials, pinned `known_hosts`
+и `infrastructure_access`, что успешно использовала №10. Код запрашивает
+**только** `media_vm.yml` из частного `site-<site.id>` по native Semaphore
+GitHub provisioning secret; проверяет что GitHub repo PRIVATE и site marker
+совпадает, материализует sanitized site inventory на runner, а PVE endpoint
+берёт **исключительно из локального bootstrap** `pve-runtime.yml`, а не из
+старого общего Fleet. Приватные passwords/token не выводятся в Git или логи.
+
+Живое аппаратное обнаружение на новом Jonsbo и явное утверждение владельца
+охватывают исключительно HDD 4 TB с прежним NTFS. Перед созданием VM/передачей
+PCI выполняется независимый **read-only** preflight на PVE: сравнение serial,
+WWN, размера, GPT partition UUID, NTFS label/type, отсутствие mountpoints,
+привязка к задекларированному SATA controller, отсутствие target VM, и
+противопоставление диску с root filesystem. Префлайт остаётся в public code
+общего назначения, а фактический serial/WWN/partition UUID + одноразовое
+разрешение `first_create_only` находятся в **private site repo**.
+
+При `create + erase` native Ansible создаёт только утверждённую VM
+на NVMe `local-lvm`, не меняя PVE OS и другие VMs/CTs. Сам физический
+data HDD не стирается на PVE: он передаётся в VM через SATA PCI,
+и только гостевой `dh-media-storage` второй раз проверяет identity/NTFS
+PARTUUID/label/отсутствие mount, а затем создаёт `<owner>-pool`. Для
+восстановления прерванного deploy допустим `keep + erase`, но после
+создания canonical ZFS он **никогда повторно не стирается** при действующем
+одноразовом разрешении. После E2E следует зафиксировать новый ZFS GUID в
+private site inventory, убрать approval `destructive_without_backup` и
+следующие штатные запуски делать `keep + import`.
+
+Не выбирать `recreate` в этой первой native реализации: он fail-closed.
+Тестовое подтверждение кода ≠ LIVE PASS. Только журналы фактической
+Semaphore №80 и последующая независимая №81 доказывают полную приёмку.
+№81 в старой версии всё ещё зависит от legacy worker и требует отдельной
+native миграции. Пока user не запускал новую №80, VM и HDD остаются нетронуты.
+
+
 ## Зачем это документировано
 
 28 октября 2026 г. инженерский запуск `playbooks/plan-pve-media-vm.yml` **без создания Task в API Semaphore** был выполнен непосредственно на runner от UNIX-пользователя `semaphore`. Зафиксированы:

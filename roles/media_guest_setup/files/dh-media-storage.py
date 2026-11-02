@@ -16,6 +16,9 @@ import subprocess
 import sys
 
 
+NTFS_ERASE_MARKER = Path("/etc/digitalhouses/.dh-initial-ntfs-erase.json")
+
+
 class Blocked(Exception):
     pass
 
@@ -218,6 +221,98 @@ def verify_prior_managed_partitions(physical):
             "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
 
 
+
+def verify_one_time_ntfs_erase(data, physical):
+    """Permit EXACTLY the site-approved Hitachi-style NTFS layout once.
+
+    An imported ZFS pool is handled before this function and never wiped by
+    this first-create authorization. This is not a general foreign-FS eraser.
+    On an interrupted first wipe the root-only marker permits retry on the
+    same empty serial/WWN/size-pinned disk, never on a new populated volume.
+    """
+    approval = data.get("one_time_ntfs_erase")
+    spec = data["disk"]
+    require(isinstance(approval, dict)
+            and approval.get("approved") is True
+            and approval.get("scope") == "first_create_only"
+            and approval.get("partition_filesystem") == "ntfs"
+            and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", approval.get("partition_label", "")) is not None
+            and approval.get("wwn") == spec["wwn"]
+            and approval.get("serial") == spec["serial"]
+            and approval.get("size_bytes") == spec["size_bytes"]
+            and approval.get("partition_partuuid") == spec.get("observed_partuuid")
+            and approval.get("reserved_partuuid") == spec.get("observed_reserved_partuuid")
+            and approval.get("partition_label") == spec.get("observed_label")
+            and approval.get("partition_filesystem") == spec.get("observed_filesystem"),
+            "ONE_TIME_NTFS_APPROVAL_IDENTITY_MISMATCH")
+    require(re.fullmatch(r"[0-9a-f-]{36}",
+                         approval["partition_partuuid"]) is not None
+            and re.fullmatch(r"[0-9a-f-]{36}",
+                             approval["reserved_partuuid"]) is not None,
+            "ONE_TIME_NTFS_PARTUUID_INVALID")
+    children = physical_partitions(physical)
+    marker = NTFS_ERASE_MARKER
+    marker_value = {
+        "schema": 1, "scope": "first_create_only",
+        "serial": spec["serial"], "wwn": spec["wwn"],
+        "size_bytes": spec["size_bytes"],
+        "partuuid": approval["partition_partuuid"],
+        "reserved_partuuid": approval["reserved_partuuid"],
+    }
+    if not children:
+        # Recovery only for an interrupted initial erase that already passed
+        # BOTH identity and partition checks; no generic blank-disk bypass.
+        require(marker.is_file() and not marker.is_symlink()
+                and marker.stat().st_uid == 0
+                and (marker.stat().st_mode & 0o777) == 0o600,
+                "EMPTY_DISK_NOT_PREVIOUSLY_VERIFIED")
+        require(json.loads(marker.read_text()) == marker_value,
+                "NTFS_RECOVERY_MARKER_IDENTITY_MISMATCH")
+        require(command("/usr/sbin/blkid", "-o", "value", "-s",
+                        "TYPE", physical, allow_failure=True) in (None, ""),
+                "ERASE_RECOVERY_DISK_NOT_EMPTY")
+        return
+
+    require(len(children) == 2
+            and [p["path"] for p in children]
+                == [physical + "1", physical + "2"],
+            "NTFS_APPROVED_PARTITION_TOPOLOGY_MISMATCH")
+    require(children[0].get("partuuid", "").lower()
+                == approval["reserved_partuuid"]
+            and children[1].get("partuuid", "").lower()
+                == approval["partition_partuuid"],
+            "NTFS_APPROVED_PARTUUID_MISMATCH")
+    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
+                    children[0]["path"], allow_failure=True) in (None, "")
+            and command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
+                        children[1]["path"]) == "ntfs"
+            and command("/usr/sbin/blkid", "-o", "value", "-s", "LABEL",
+                        children[1]["path"]) == approval["partition_label"],
+            "NTFS_APPROVED_FILESYSTEM_LABEL_MISMATCH")
+    for path in (physical, children[0]["path"], children[1]["path"]):
+        require(command("/usr/bin/findmnt", "-rn", "--source", path,
+                        allow_failure=True) in (None, ""),
+                "NTFS_DISK_IN_USE_MOUNTED")
+    require(not marker.exists() or (
+                marker.is_file() and not marker.is_symlink()
+                and marker.stat().st_uid == 0
+                and (marker.stat().st_mode & 0o777) == 0o600
+                and json.loads(marker.read_text()) == marker_value),
+            "NTFS_ERASE_RECOVERY_MARKER_CONFLICT")
+    if not marker.exists():
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+        fd = os.open(str(marker), flags, 0o600)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(json.dumps(marker_value, sort_keys=True) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+        except BaseException:
+            marker.unlink(missing_ok=True)
+            raise
+    print("ONE_TIME_NTFS_ERASE_PREFLIGHT=PASS", flush=True)
+
+
 def ensure_create(data, disk, physical, disk_policy="preserve"):
     """Rebuild an empty or exactly identified approved pool (erase only at CLI)."""
     require(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
@@ -226,7 +321,10 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
     target_importable = imported_guid_visible(name) if not target_active else None
     if target_active or target_importable:
         guid, modified = ensure_import(name, disk, physical, data["mode"])
-        if disk_policy == "preserve":
+        if disk_policy == "preserve" or data.get("one_time_ntfs_erase") is not None:
+            # The site approval allows only FIRST conversion of a verified
+            # NTFS disk. Once the canonical ZFS pool exists, never erase it
+            # on a retry, even if the Semaphore survey still says 'erase'.
             print("POOL=ALREADY_CANONICAL", flush=True)
             return guid, modified
         require(data.get("destructive_without_backup") is True,
@@ -294,12 +392,19 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
                 command("/usr/sbin/zpool", "destroy", legacy["name"])
                 print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
             else:
-                # Never interpret arbitrary partitions as erase approval.
-                children = physical_partitions(physical)
-                require(not children, "UNKNOWN_EXISTING_PARTITIONS")
-                require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
-                        "UNKNOWN_EXISTING_SIGNATURE")
-                print("DATA_DISK=EMPTY", flush=True)
+                # A foreign NTFS disk is only accepted through an EXACT
+                # site-scoped, one-time approval; all other formats still block.
+                if data.get("one_time_ntfs_erase") is not None:
+                    require(disk_policy == "erase"
+                            and data.get("destructive_without_backup") is True,
+                            "NTFS_ERASE_ACTION_OR_PERMISSION_MISSING")
+                    verify_one_time_ntfs_erase(data, physical)
+                else:
+                    children = physical_partitions(physical)
+                    require(not children, "UNKNOWN_EXISTING_PARTITIONS")
+                    require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
+                            "UNKNOWN_EXISTING_SIGNATURE")
+                    print("DATA_DISK=EMPTY", flush=True)
     # The physical disk was previously identified from serial+WWN+size.
     command("/usr/sbin/wipefs", "--all", physical)
     command("/usr/sbin/sgdisk", "--zap-all", physical)
