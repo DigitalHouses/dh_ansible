@@ -285,7 +285,7 @@
     - name: Refuse to configure an absent, stopped, or foreign VM
       ansible.builtin.assert:
         that:
-          - media_qm_running.stdout == 'status: running'
+          - "media_qm_running.stdout == 'status: running'"
         fail_msg: MEDIA_VM_NOT_RUNNING_AFTER_NATIVE_PROVISION
 
 - name: Media 80 | Configure approved Debian media apps and one-time ZFS
