@@ -99,28 +99,45 @@ Ticket, пароль, API token и request body не выводятся в Task 
 
 1. Проверить private repo, владельца, маркер `.digitalhouses/site.json`
    и inventory. При несовпадении прекратить работу до изменения секретов.
-2. Через HTTPS API собственного проекта Semaphore получить или однократно
-   создать **native Key Store SSH credential** с `generate_ssh_key=true`.
-   Semaphore сам генерирует SSH keypair, сохраняет приватную часть в своей
-   зашифрованной БД, а API предоставляет только публичную часть `plain.public_key`.
-   Не генерировать и не сохранять приватные ключи в файловой системе runner.
-3. Через GitHub REST API привязать именно этот публичный ключ к приватному
-   site-repo как **deploy key с `read_only=true`**. Повторная №07 проверяет
-   ключ и не создаёт дубликаты; при drift — `BLOCKED`, без замены ключей.
-4. Через штатный Semaphore `POST /project/{id}/repositories` зарегистрировать
+2. **Совместимость GitHub с октября 2026 года:** GitHub с 14.10.2026
+   принимает новые RSA SSH keys только от **3072 бит**. Генератор
+   Semaphore 2.20 использует RSA 2048, поэтому его
+   `generate_ssh_key=true` больше не подходит для нового GitHub deploy
+   key. Live №07 Task #22 остановилась на GitHub `HTTP 422`.
+   Подтверждение: GitHub Changelog от 22.09.2026
+   https://github.blog/changelog/2026-09-22-security-improvements-for-ssh/
+   и Semaphore `util/encryption.go` (`rsa.GenerateKey(..., 2048)`).
+3. Под контролем Ansible `no_log` через стандартную библиотеку
+   `cryptography` (установленную с Ansible) создать **Ed25519** keypair
+   в памяти процесса; не сохранять приватный ключ в файл, не передавать
+   через CLI argv. Нативным HTTPS API Semaphore `POST /keys` импортировать
+   приватную часть в **шифрованный Key Store** только этого site.
+   Несекретную публичную часть записать в подтверждённый приватный
+   site-repo как `.digitalhouses/semaphore-deploy-ed25519.pub`, чтобы
+   повтор №07 мог безопасно проверить тот же ключ без выдачи private
+   через API. Ключ RSA-2048 предыдущей неудачной попытки
+   **не удалять и не перезаписывать автоматически**.
+4. Через GitHub REST API привязать Ed25519 публичный ключ к приватному
+   site-repo как deploy key с `read_only=true`. Повторная №07 сверяет
+   ключ и не создаёт дубликаты; при drift — `BLOCKED`, без замены.
+5. Через штатный Semaphore `POST /project/{id}/repositories` зарегистрировать
    `git@github.com:DigitalHouses/site-<site_id>.git`, ветку `main`, и
    привязать сохранённую identity из Key Store. Существующие привязки не
    перезаписываются.
-5. Только после readback GitHub + Semaphore — состояние
+6. Только после readback GitHub + Semaphore — состояние
    `REGISTERED_CLONE_NOT_VERIFIED`. **Это не доказательство фактического
    Git clone**: следующий отдельный acceptance должен выполнить чтение
    репозитория средствами Semaphore и проверить SSH host-key trust.
 
 Provisioning PAT, введённый в №05, используется лишь на этапе регистрации
 GitHub deploy key и не помещается в Semaphore repository credentials.
-**Не отзывать его до завершения live clone acceptance.** Дальнейшее
-отключение/отзыв PAT и поддержка повторной №07 без него — отдельный
-обязательный пункт перед окончательным выпуском bootstrap onboarding.
+**Не отзывать PAT после установки deploy key!** Согласно документации
+GitHub Deploy Keys, удаление PAT, использованного для создания deploy key,
+**удаляет и этот deploy key**. Не выдавать прежнее предложение «сразу
+отозвать PAT» за безопасный шаг. Нужен отдельно согласованный переход
+на долговечную GitHub App identity или иное штатное решение, прежде чем
+отзывать этот PAT. Повседневное чтение самого репозитория уже выполняется
+через Key Store SSH identity, без использования PAT.
 
 Сама публикация playbook/тестов не равна live приемке. Статус новой
 возможности считать `PENDING` до успешного запуска через Semaphore.
