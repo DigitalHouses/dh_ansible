@@ -129,7 +129,7 @@
           - "'description: DigitalHouses managed PBS guest v1' in pbs_existing_config.stdout_lines"
           - "'hostpci0:' not in pbs_existing_config.stdout"
           - "'hostpci1:' not in pbs_existing_config.stdout"
-          - "'scsi0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-' in pbs_existing_config.stdout"
+          - "('scsi0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-' in pbs_existing_config.stdout) or ('unused0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-' in pbs_existing_config.stdout)"
         fail_msg: PBS_FOREIGN_VMID_OCCUPIED
       when: pbs_existing_vm.stat.exists
     - name: Require local-lvm storage online
@@ -248,7 +248,7 @@
     - name: Require expected local-lvm volume identity
       ansible.builtin.assert:
         that:
-          - pbs_unused_line is match('^unused0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-[0-9]+.*$')
+          - "('unused0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-') in pbs_unused_line"
         fail_msg: PBS_IMPORT_VOLUME_NOT_OWNED_BY_VM
       when: "'scsi0:' not in pbs_after_import.stdout"
     - name: Attach only verified unassigned VM OS volume
@@ -260,12 +260,17 @@
           - --scsi0
           - "{{ pbs_unused_line | regex_replace('^unused0: ', '') | regex_replace(',.*$', '') }},discard=on,iothread=1"
       when: "'scsi0:' not in pbs_after_import.stdout"
-    - name: Expand managed boot volume to approved size if newly created
+    - name: Read attached VM boot volume and settings
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_disk_attached
+      changed_when: false
+    - name: Expand only managed boot volume when below approved target size
       ansible.builtin.command:
         argv: [qm, resize, "{{ pbs.vmid }}", scsi0, "{{ pbs.resources.disk_gb }}G"]
-      when: not pbs_existing_vm.stat.exists
-    - name: Reconcile only newly-created VM cloud-init settings
-      when: not pbs_existing_vm.stat.exists
+      when: "('size=' ~ (pbs.resources.disk_gb | string) ~ 'G') not in pbs_disk_attached.stdout"
+    - name: Reconcile missing initial cloud-init configuration
+      when: "'ide2:' not in pbs_disk_attached.stdout"
       block:
         - name: Add cloud-init volume
           ansible.builtin.command:
