@@ -54,7 +54,8 @@ def test_hardware_preflight_is_in_front_of_deployment():
                      "NTFS_RESERVED_PARTITION_DRIFT",
                      "NTFS_DATA_PARTITION_DRIFT",
                      "DISK_NOT_ON_APPROVED_SATA_CONTROLLER",
-                     "TARGET_VMID_OCCUPIED", "NATIVE_RECREATE_NOT_APPROVED"):
+                     "TARGET_VMID_OCCUPIED", "MANAGED_RECREATE_VERIFIED",
+                     "MEDIA_ERASE_SOURCE_POOL_GUID_MISMATCH"):
         assert required in source
     assert all(cmd not in source for cmd in ('"wipefs"', '"sgdisk"', '"destroy"', '"mkfs"', '"dd"'))
 
