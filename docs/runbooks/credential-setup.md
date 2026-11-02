@@ -1,3 +1,5 @@
+> **Решение владельца после повторного Fresh Bootstrap, 02.11.2026:** commissioning PVE root SSH/TLS разрешён **только через Semaphore + Ansible**, без самостоятельной команды `commission-pve-runner.py` на PVE. На **текущем** заново установленном CT1231 №00 и №05 выполнились успешно, но №06 не может подтвердить PVE до появления доверенного CA/SSH identity; прежнее `READY` относится к удалённому предыдущему CT1231. Детали реализации — [issue #111](https://github.com/DigitalHouses/dh_ansible/issues/111). Пока нет нативной задачи и trusted seed, дальнейшие проверки PVE BLOCKED. Не предлагать ручной Shell PVE как штатное решение.
+
 # Semaphore 2.20 Beta — получение и проверка credentials объекта (№05/06)
 
 ## Live acceptance · 02.11.2026 · serzhan-home
