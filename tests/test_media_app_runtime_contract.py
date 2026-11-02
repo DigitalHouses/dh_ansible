@@ -95,7 +95,8 @@ def test_encrypted_fleet_mqtt_runtime_worker_roundtrip():
     encrypted = vault.encrypt(plain, secret=VaultSecret(master.encode()))
     payload = json.dumps({"master": master,
                           "cipher": base64.b64encode(encrypted).decode()})
-    cmd = ["/opt/ansible/venv/bin/python", "-c", worker]
+    import sys
+    cmd = [sys.executable, "-c", worker]
     proc = subprocess.run(cmd, input=payload, capture_output=True,
                           text=True, timeout=10)
     assert proc.returncode == 0
