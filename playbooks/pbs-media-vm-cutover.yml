@@ -175,7 +175,7 @@
       ansible.builtin.assert:
         that:
           - "'backup/vm/2232/2026-11-02T15:05:51Z' in media_vm_backup.stdout"
-      fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_BACKUP_MISSING
+        fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_BACKUP_MISSING
     - name: Verify local LVM-thin rollback snapshot exists
       ansible.builtin.command:
         argv: [qm, listsnapshot, '2232']
