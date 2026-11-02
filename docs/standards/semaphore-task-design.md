@@ -1,4 +1,4 @@
-> **Актуализация для №10, 02.11.2026:** таблица ниже о «root-worker обязателен» отражает legacy и НЕ отменяет [ADR-0020](../decisions/0020-infrastructure-privilege-and-software-installation.md). После №06 PVE root SSH commissioned; №10 переключена на нативные Ansible + Cloudflare API, без `dh-cloudflare-switch.path` (см. [runbook №10](../cloudflare-cutover-semaphore.md)). Не копировать старый worker-паттерн. Live E2E pending.
+> **Актуализация для №10, 02.11.2026:** таблица ниже о «root-worker обязателен» отражает legacy и НЕ отменяет [ADR-0020](../decisions/0020-infrastructure-privilege-and-software-installation.md). После №06 PVE root SSH commissioned; №10 (PR #124 merged) переключена на нативные Ansible + Cloudflare API, без `dh-cloudflare-switch.path` (см. [runbook №10](../cloudflare-cutover-semaphore.md)). Не копировать старый worker-паттерн. Live E2E pending.
 
 # Стандарт проектирования задач Semaphore · DigitalHouses / Ansible-2
 
