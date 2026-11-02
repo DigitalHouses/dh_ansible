@@ -31,7 +31,7 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
         manual = self.registry["manual"]
         self.assertEqual(
             {x["id"] for x in manual},
-            {"github_provision_token", "mqtt_username", "mqtt_password",
+            {"github_provision_token", "mqtt_broker_host", "mqtt_username", "mqtt_password",
              "pve_root_password", "cloudflare_api_token"})
         self.assertTrue(all(x["store"] in {
             "variable_group_secret", "variable_group_nonsecret",
@@ -51,7 +51,7 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
         manual = {x["id"]: x for x in self.registry["manual"]}
         agents = ("digitalhouses_plex_agent", "digitalhouses_pve_agent")
         for a in agents:
-            for f in ("mqtt_username", "mqtt_password"):
+            for f in ("mqtt_broker_host", "mqtt_username", "mqtt_password"):
                 self.assertIn(a, manual[f]["consumer"])
         self.assertFalse(any("plex" in x["id"] or "pve_agent" in x["id"]
                              for x in self.registry["manual"]))
