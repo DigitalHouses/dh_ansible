@@ -46,6 +46,8 @@
           -o ConnectTimeout=10
         pbs: "{{ pbs }}"
         media_vm: "{{ media_vm }}"
+        site: "{{ site }}"
+        pve_observed: "{{ pve_observed }}"
       changed_when: false
     - name: Register current standalone PBS guest
       ansible.builtin.add_host:
@@ -61,6 +63,7 @@
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
           -o ConnectTimeout=10
         pbs: "{{ pbs }}"
+        site: "{{ site }}"
       changed_when: false
     - name: Register existing Media guest with its offline-pinned SSH host key
       ansible.builtin.add_host:
@@ -77,6 +80,7 @@
           -o ConnectTimeout=10
         pbs: "{{ pbs }}"
         media_vm: "{{ media_vm }}"
+        site: "{{ site }}"
       changed_when: false
 
 - name: PBS Media VM pilot | Gracefully export the existing ZFS pool from standalone PBS
