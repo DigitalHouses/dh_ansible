@@ -61,6 +61,30 @@ def test_task10_native_ansible_contract():
         assert required in code
 
 
+def test_task10_origin_matches_actual_fresh_bootstrap_pve_runtime():
+    """Fresh bootstrap seeds ipv4/node/fingerprint/CA, not api_hostname."""
+    code = REQUEST.read_text()
+    bootstrap = (ROOT / "bootstrap/commission-pve-runner.py").read_text()
+    assert "  ipv4: {ip}" in bootstrap
+    assert "  source: host_root_vmbr0" in bootstrap
+    assert "  node: {node}" in bootstrap
+    assert "  tls_sha256_fingerprint: '{fingerprint}'" in bootstrap
+    assert "api_hostname" not in code
+    assert "originServerName:" not in code
+    plays = yaml.safe_load(code)
+    root = plays[0]
+    names = [t["name"] for t in root["pre_tasks"]]
+    assert "Read observed PVE endpoint" in names
+    assert "Require pinned PVE SSH and origin CA from Task 06/bootstrap" in names
+    configure = next(t for t in root["tasks"] if t["name"] ==
+                     "Resolve canonical Tunnel UUID and expected TLS ingress")
+    origin = configure["ansible.builtin.set_fact"]["cf_expected_rules"][0]["originRequest"]
+    assert origin["caPool"] == "/etc/cloudflared/dh-pve-ca.pem"
+    assert origin["noTLSVerify"] is False
+    assert set(origin) == {"caPool", "noTLSVerify"}
+    assert 'https://{{ pve_observed.ipv4 }}:8006' in code
+    assert "cf_ca_b64" in code
+
 def test_task10_guards_existing_resources_and_publication_order():
     play = yaml.safe_load(REQUEST.read_text())
     preflight = [t["name"] for t in play[0]["tasks"]]
