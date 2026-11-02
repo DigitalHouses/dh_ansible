@@ -1,0 +1,199 @@
+---
+# PBS PCI A/B pilot: mount imported existing pool ancestry, then create only
+# a BRAND NEW dedicated ZFS child dataset. Never touch the media dataset or
+# pre-existing NFS baseline. Initial PBS datastore creation/benchmark is separate.
+- name: PBS PCI datastore | Verify site and register PVE and PBS
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Read site PBS inventory
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Load observed PVE address
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require exact site and preservation contract
+      ansible.builtin.assert:
+        that:
+          - site.id == 'serzhan-home'
+          - pbs.vmid | int == 2233
+          - pbs.name == 'pbs-serzhan'
+          - pbs.network.ipv4.split('/')[0] == '192.168.11.233'
+          - pbs.pilot.source_ctid | int == 1231
+          - pbs.safety.never_touch_media_disk | bool
+          - pbs.safety.never_touch_other_guests | bool
+        fail_msg: PBS_PCI_PREP_WRONG_SITE
+    - name: Register PVE
+      ansible.builtin.add_host:
+        name: pci_pve
+        groups: dh_pci_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+        pbs: "{{ pbs }}"
+      changed_when: false
+    - name: Register PBS
+      ansible.builtin.add_host:
+        name: pci_pbs
+        groups: dh_pci_pbs
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+        pbs: "{{ pbs }}"
+      changed_when: false
+
+- name: PBS PCI datastore | Require exclusive PCI and media shutdown
+  hosts: dh_pci_pve
+  gather_facts: false
+  tasks:
+    - name: Media status
+      ansible.builtin.command:
+        argv: [qm, status, '2232']
+      changed_when: false
+      register: media_status
+    - name: PBS status
+      ansible.builtin.command:
+        argv: [qm, status, '2233']
+      changed_when: false
+      register: pbs_status
+    - name: Find PCI controller's sole VM owner
+      ansible.builtin.command:
+        argv: [grep, -RlF, '0000:2b:00.0', /etc/pve/qemu-server]
+      changed_when: false
+      register: pci_owner
+    - name: Fail closed unless controller exclusively belongs to PBS
+      ansible.builtin.assert:
+        that:
+          - media_status.stdout == 'status: stopped'
+          - pbs_status.stdout == 'status: running'
+          - pci_owner.stdout_lines == ['/etc/pve/qemu-server/2233.conf']
+        fail_msg: PBS_PCI_PREP_CONTROLLER_OWNERSHIP_FAILED
+
+- name: PBS PCI datastore | Create bounded new dataset without altering old ones
+  hosts: dh_pci_pbs
+  gather_facts: false
+  become: true
+  vars:
+    pool: serzhan-pool
+    pci_dataset: serzhan-pool/backups/pbs-pci-pilot
+    pci_mount: /serzhan-pool/backups/pbs-pci-pilot
+  tasks:
+    - name: Verify guest root privilege
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Check ZFS pool health
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, health, "{{ pool }}"]
+      register: pool_health
+      changed_when: false
+    - name: Inspect existing ZFS data hierarchy
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name, -r, "{{ pool }}"]
+      register: datasets_before
+      changed_when: false
+    - name: Require old media and NFS baseline intact
+      ansible.builtin.assert:
+        that:
+          - pool_health.stdout == 'ONLINE'
+          - pool ~ '/media' in datasets_before.stdout_lines
+          - pool ~ '/backups/pbs-pilot' in datasets_before.stdout_lines
+          - pci_dataset not in datasets_before.stdout_lines
+        fail_msg: PBS_PCI_PREP_EXISTING_DATA_OR_DUPLICATE_DATASET
+    - name: Verify permanent Hitachi disk identity from pool
+      ansible.builtin.command:
+        argv: [zpool, status, -P, "{{ pool }}"]
+      register: pool_status
+      changed_when: false
+    - name: Confirm expected WWN is the only vdev
+      ansible.builtin.assert:
+        that:
+          - "'wwn-0x5000cca22bc6ef0d-part1' in pool_status.stdout"
+          - "'errors: No known data errors' in pool_status.stdout"
+        fail_msg: PBS_PCI_PREP_WRONG_DISK
+    - name: Check exact configured parent mountpoints
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, mountpoint, "{{ item }}"]
+      loop: [serzhan-pool, serzhan-pool/backups]
+      register: mountpoints
+      changed_when: false
+    - name: Refuse unexpected parent ZFS mounts
+      ansible.builtin.assert:
+        that:
+          - mountpoints.results[0].stdout == '/serzhan-pool'
+          - mountpoints.results[1].stdout == '/serzhan-pool/backups'
+        fail_msg: PBS_PCI_PREP_PARENT_MOUNT_DRIFT
+    - name: Mount only ZFS pool root (no media or old NFS datasets)
+      ansible.builtin.command:
+        argv: [zfs, mount, serzhan-pool]
+      register: root_mount
+      changed_when: root_mount.rc == 0
+    - name: Mount only backups parent (no old NFS dataset)
+      ansible.builtin.command:
+        argv: [zfs, mount, serzhan-pool/backups]
+      register: parent_mount
+      changed_when: parent_mount.rc == 0
+    - name: Create new 128 GiB-refquota ZFS dataset for controlled PCI benchmark
+      ansible.builtin.command:
+        argv:
+          - zfs
+          - create
+          - -o
+          - atime=on
+          - -o
+          - compression=lz4
+          - -o
+          - refquota=128G
+          - "{{ pci_dataset }}"
+    - name: Set only new datastore directory ownership to PBS backup user
+      ansible.builtin.file:
+        path: "{{ pci_mount }}"
+        owner: '34'
+        group: '34'
+        mode: '0750'
+        state: directory
+    - name: Verify new exact mountpoint filesystem is ZFS
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pci_mount }}"]
+      register: new_mount
+      changed_when: false
+    - name: Verify new ZFS properties
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, atime, "{{ pci_dataset }}"]
+      register: new_atime
+      changed_when: false
+    - name: Require new dataset mounted and atime enabled
+      ansible.builtin.assert:
+        that:
+          - new_mount.stdout == pci_dataset
+          - new_atime.stdout == 'on'
+        fail_msg: PBS_PCI_PREP_NEW_DATASET_INVALID
+    - name: Confirm existing media and NFS baseline datasets remain unmounted
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, mounted, "{{ item }}"]
+      loop: [serzhan-pool/media, serzhan-pool/backups/pbs-pilot]
+      register: existing_mounted
+      changed_when: false
+    - name: Require preservation of unmounted existing media and backups
+      ansible.builtin.assert:
+        that:
+          - existing_mounted.results[0].stdout == 'no'
+          - existing_mounted.results[1].stdout == 'no'
+        fail_msg: PBS_PCI_PREP_ORIGINAL_DATA_MOUNT_CHANGED
+    - name: Report isolated new benchmark dataset
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PCI_EMPTY_DATASET_READY
+          datastore: pbs-pci-pilot
+          dataset: "{{ pci_dataset }}"
+          refquota: 128G
+          media_data_untouched: true
+          nfs_baseline_untouched: true
