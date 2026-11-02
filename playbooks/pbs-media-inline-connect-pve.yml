@@ -224,14 +224,16 @@
           - --disable
           - '1'
       changed_when: true
-    - name: Persist generated token only in native protected PVE storage secret
-      ansible.builtin.copy:
-        dest: "/etc/pve/priv/storage/{{ store }}.pw"
-        content: "{{ hostvars['inline_connect_media'].token_secret }}\n"
-        owner: root
-        mode: '0600'
-        unsafe_writes: true  # pmxcfs does not permit atomic rename into /etc/pve/priv
+    # /etc/pve is pmxcfs: its FUSE filesystem rejects atomic rename used
+    # by ansible.copy. Write directly to the protected path on a fresh ID,
+    # with the token transmitted only over SSH stdin, never as a CLI argument.
+    - name: Persist generated token via pmxcfs-compatible protected stdin write
+      ansible.builtin.shell:
+        cmd: "umask 077; cat > /etc/pve/priv/storage/{{ store }}.pw"
+        stdin: "{{ hostvars['inline_connect_media'].token_secret }}"
+        stdin_add_newline: false
       no_log: true
+      changed_when: true
     - name: Verify PVE protected storage secret exists and has correct permissions
       ansible.builtin.stat:
         path: "/etc/pve/priv/storage/{{ store }}.pw"
