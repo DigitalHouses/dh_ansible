@@ -44,6 +44,8 @@ jobs:
             tests/test_cloudflare_read_scope.py \
             tests/test_cloudflare_cutover_contract.py \
             tests/test_runner_remote_commander_request.py \
+            tests/test_media_plex_libraries_readback.py \
+            tests/test_media_guest_plex_zfs.py \
             tests/test_media_one_time_ntfs_erase.py \
             tests/test_media80_native_jonsbo_contract.py \
             tests/test_task07_site_repo.py
