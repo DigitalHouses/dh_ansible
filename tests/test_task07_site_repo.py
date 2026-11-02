@@ -272,4 +272,35 @@ def test_site_repo_bound_only_to_correct_local_semaphore_project_and_key():
     assert any("ssh_key_id" in x for x in verify["ansible.builtin.assert"]["that"])
     assert any("git_url" in x for x in verify["ansible.builtin.assert"]["that"])
     assert any("project_id" in x for x in verify["ansible.builtin.assert"]["that"])
-    assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "REGISTERED_CLONE_NOT_VERIFIED"
+    assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "VERIFIED_NATIVE_SSH_CLONE"
+
+
+def test_task07_uses_native_semaphore_git_ls_remote_and_clone_before_success():
+    ts = yaml.safe_load(RO.read_text())
+    branches = next(x for x in ts if x["name"].startswith("Probe private site SSH remote branches"))
+    clone = next(x for x in ts if x["name"].startswith("Probe actual private site SSH checkout"))
+    for operation, suffix in (
+        (branches, "/branches"),
+        (clone, "/playbooks?branch=main&app=ansible"),
+    ):
+        api = operation["ansible.builtin.uri"]
+        assert api["method"] == "GET"
+        assert api["url"].endswith(suffix)
+        assert "dh_site_registered_semaphore_repos[0].id" in api["url"]
+        assert "dh_site_semaphore_token.content" in api["headers"]["Authorization"]
+        assert api["ca_path"] == "/etc/semaphore/tls.crt"
+        assert operation["no_log"] is True
+        assert operation["failed_when"] is False
+        assert operation["changed_when"] is False
+
+    remote_check = next(x for x in ts if x["name"].startswith("Require authenticated SSH ls-remote"))
+    assert "'main' in dh_site_native_branches.json" in remote_check["ansible.builtin.assert"]["that"]
+    clone_check = next(x for x in ts if x["name"].startswith("Require successful Semaphore Git CloneOrPull"))
+    assert any("dh_site_native_clone.status" in x for x in clone_check["ansible.builtin.assert"]["that"])
+    assert ts.index(remote_check) > ts.index(branches)
+    assert ts.index(clone_check) > ts.index(clone)
+    assert ts.index(ts[-1]) > ts.index(clone_check)
+    assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "VERIFIED_NATIVE_SSH_CLONE"
+    # GitHub source and private site files are left untouched on every repeat.
+    assert "method: DELETE" not in RO.read_text()
+    assert "GIT_SSH_COMMAND" not in RO.read_text()
