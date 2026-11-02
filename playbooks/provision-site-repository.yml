@@ -59,15 +59,16 @@
       ansible.builtin.uri:
         url: https://api.github.com/user
         method: GET
-        status_code: 200
+        status_code: [200, 401, 403]
       register: dh_git_actor
       changed_when: false
       no_log: true
     - name: Refuse token from another GitHub account
       ansible.builtin.assert:
         that:
-          - dh_git_actor.json.login == dh_git_owner
-          - dh_git_actor.json.type == 'User'
+          - dh_git_actor.status == 200
+          - dh_git_actor.json.login | default('') == dh_git_owner
+          - dh_git_actor.json.type | default('') == 'User'
         fail_msg: GITHUB_PROVISION_ACCOUNT_MISMATCH
 
     - name: Locate the exact site repository
@@ -92,10 +93,19 @@
           has_issues: false
           has_projects: false
           has_wiki: false
-        status_code: 201
+        status_code: [201, 403, 422]
       register: dh_git_created
       when: dh_git_before.status == 404
       no_log: true
+
+    - name: Require successful private repository creation or safe adoption
+      ansible.builtin.assert:
+        that:
+          - dh_git_before.status == 200 or dh_git_created.status | default(0) == 201
+        fail_msg: >-
+          GITHUB_PRIVATE_REPO_CREATION_BLOCKED:
+          check owner login and repository creation/Contents permissions.
+      when: dh_git_before.status == 404
 
     - name: Verify actual repository identity after creation or adoption
       ansible.builtin.uri:
