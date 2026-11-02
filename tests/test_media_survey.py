@@ -129,23 +129,24 @@ class MediaSurveyTest(unittest.TestCase):
         self.assertIn("ansible.builtin.wait_for_connection:", guest)
         self.assertIn("timeout: 420", guest)
 
-    def test_engineer_action_reaches_exact_scoped_worker(self):
-        play = (ROOT / self.media["playbook"]).read_text()
-        worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
-        guest = (ROOT / "playbooks/setup-pve-media-guest.yml").read_text()
-        assert "media_vm_action in ['create', 'recreate', 'keep']" in play
-        assert "media_raw_disk_action in ['import', 'erase']" in play
-        assert "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}" in play
-        assert "MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
-        assert "--vm-action" in worker
-        assert "--raw-disk-action" in worker
-        assert "media_vm_action=$VM_ACTION" in worker
-        assert "media_raw_disk_action=$RAW_DISK_ACTION" in worker
-        assert "media_vm.yml" in guest
+    def test_engineer_action_reaches_native_pve_with_hardware_preflight(self):
+        import yaml
+        plays = yaml.safe_load((ROOT / self.media["playbook"]).read_text())
+        pre = plays[0]["pre_tasks"][0]["ansible.builtin.assert"]["that"]
+        assert "media_vm_action in ['create', 'keep', 'recreate']" in pre
+        assert "media_raw_disk_action in ['import', 'erase']" in pre
+        pve = plays[1]["tasks"]
+        names = [task["name"] for task in pve]
+        safe = names.index("Require completed independent hardware and VM preflight")
+        apply = names.index("Provision only the declared PVE media VM by native Ansible SSH")
+        assert safe < apply
+        assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in str(pve[safe])
+        assert "--vm-action {{ media_vm_action }}" in str(pve[apply])
+        assert "--raw-disk-action {{ media_raw_disk_action }}" in str(pve[apply])
+        assert pve[apply]["ansible.builtin.script"].endswith("--apply")
+        assert "MEDIA_DEPLOY_" not in str(pve[apply])
         for legacy in ("media_storage_action", "media_vm_policy", "media_disk_policy"):
-            assert legacy not in play
-            assert legacy not in worker
-            assert legacy not in (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
+            assert legacy not in str(plays)
 
 
 if __name__ == "__main__":
