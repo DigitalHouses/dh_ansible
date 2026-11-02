@@ -85,6 +85,37 @@ def test_task10_origin_matches_actual_fresh_bootstrap_pve_runtime():
     assert 'https://{{ pve_observed.ipv4 }}:8006' in code
     assert "cf_ca_b64" in code
 
+
+def test_existing_tunnel_drift_reports_only_structural_evidence_and_stops_writes():
+    plays = yaml.safe_load(REQUEST.read_text())
+    tasks = plays[0]["tasks"]
+    names = [task["name"] for task in tasks]
+    report = "Report safe ingress drift diagnostics before fail-closed blocking"
+    blocked = "Block any pre-existing foreign ingress rules"
+    apply = "Configure only empty canonical ingress with strict PVE TLS"
+    assert names.index("Read any existing tunnel ingress before reconciling") < names.index(report)
+    assert names.index(report) < names.index(blocked) < names.index(apply)
+    diag = next(task for task in tasks if task["name"] == report)
+    assert diag["ansible.builtin.debug"]["msg"]["diagnostic"] == "{{ cf_ingress_safe_diagnostic }}"
+    assert diag["ansible.builtin.debug"]["msg"]["changed"] is False
+    assert "cf_old_rules" in str(diag["when"])
+    assert "no_log" not in diag or diag["no_log"] is False
+    fact = next(task for task in tasks if task["name"] == "Classify ingress shape with only site-relative results")
+    assert fact["no_log"] is True
+    fields = fact["ansible.builtin.set_fact"]["cf_ingress_safe_diagnostic"]
+    assert "exact_pve_hostname" in fields
+    assert "exact_pve_origin" in fields
+    assert "expected_origin_ca" in fields
+    assert "explicit_tls_verification" in fields
+    assert "legacy_origin_name_override" in fields
+    assert "additional_route_count" in fields
+    assert all("cf_first" in str(value) or "cf_old_rules" in str(value) or "cf_fallback" in str(value)
+               for value in fields.values())
+    # Even with a diagnostic, unknown pre-existing ingress remains immutable.
+    assert "CF_EXISTING_INGRESS_NOT_OWNED" in str(tasks[names.index(blocked)])
+    assert tasks[names.index(blocked)]["no_log"] is True
+    assert "cf_ingress_safe_diagnostic" not in str(tasks[names.index(apply)])
+
 def test_task10_guards_existing_resources_and_publication_order():
     play = yaml.safe_load(REQUEST.read_text())
     preflight = [t["name"] for t in play[0]["tasks"]]
