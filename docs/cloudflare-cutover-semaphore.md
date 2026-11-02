@@ -24,6 +24,31 @@ Live Task #27 обнаружила существующий общий Tunnel `<
 
 **Важное отличие:** `systemctl active` доказывает работу локального процесса, а `healthy` от Cloudflare подтверждает подключения к edge. Ни одно из них само по себе не доказывает успешный вход в PVE через Access.
 
+## LIVE Task #31 · 02.11.2026 — финальная проверка Proxmox API
+
+Подтверждены: установка `cloudflared 2026.10.7` на PVE, запуск
+`cloudflared.service` (`active/enabled`), отдельный
+`<site.id>-pve` Tunnel в состоянии **Healthy** и readback ожидаемого
+ingress c `caPool` и строгим TLS. Существующий общий site Tunnel
+не изменялся. На этапе read-only origin check PVE ответил
+`401 No ticket` по адресу `/api2/json/version`; это нормальная защита
+этого API endpoint, а не ошибка сертификата или `cloudflared`.
+
+Отдельная диагностика с pinned PVE CA подтвердила:
+`/` → HTTP 200, `/api2/json/version` → HTTP 401,
+`/api2/json/access/domains` → HTTP 200 с JSON `data` (список);
+`ssl_verify_result=0` во всех случаях.
+
+Исправление: для проверки Proxmox API до публикации DNS теперь
+используется не требующий ticket read-only
+`/api2/json/access/domains`. Строгая проверка TLS, `ca_path`,
+HTTP 200, структура JSON и заголовок `pve-api-daemon` обязательны.
+Не подставлять PVE root password, ticket или `validate_certs: false`.
+
+После PR/merge остаётся проверить DNS cutover, Cloudflare Access
+challenge и вход в PVE через браузер. До их завершения задача №10
+**не является LIVE PASS**.
+
 ## Выполнение и приёмка
 
 После проверки PR/merge — один запуск **`10-Создание туннеля CF до PVE`** в Semaphore. При ошибке прислать полный task log (без секретов). Не удалять общий Tunnel и не чистить его маршруты. После PASS открыть адрес в браузере, авторизоваться в Access и убедиться, что действительно показана новая PVE на фактическом IP.
