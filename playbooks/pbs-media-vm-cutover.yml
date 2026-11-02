@@ -105,14 +105,38 @@
           - "'errors: No known data errors' in old_pool_status.stdout"
           - "'state: ONLINE' in old_pool_status.stdout"
         fail_msg: PBS_MEDIA_VM_CUTOVER_OLD_POOL_NOT_HEALTHY
-    - name: Require PBS services are running before graceful shutdown
+    - name: Check whether the exact pool is currently imported
       ansible.builtin.command:
-        argv: [systemctl, is-active, "{{ item }}"]
-      loop:
-        - proxmox-backup.service
-        - proxmox-backup-proxy.service
-      register: old_pbs_services
+        argv: [zpool, list, -H, -o, name]
+      register: old_pools_before
       changed_when: false
+      failed_when: false
+    - name: Verify the imported pool identity before export
+      ansible.builtin.command:
+        argv: [zpool, status, -P, serzhan-pool]
+      register: old_pool_status
+      changed_when: false
+      when: "'serzhan-pool' in old_pools_before.stdout_lines"
+    - name: Require exact Hitachi vdev and clean pool when imported
+      ansible.builtin.assert:
+        that:
+          - "'wwn-0x5000cca22bc6ef0d-part1' in old_pool_status.stdout"
+          - "'errors: No known data errors' in old_pool_status.stdout"
+          - "'state: ONLINE' in old_pool_status.stdout"
+      when: "'serzhan-pool' in old_pools_before.stdout_lines"
+    - name: If already exported, inspect the importable pool without importing it
+      ansible.builtin.command:
+        argv: [zpool, import]
+      register: old_pool_candidates_before
+      changed_when: false
+      when: "'serzhan-pool' not in old_pools_before.stdout_lines"
+    - name: Require already-exported pool has exact GUID and Hitachi WWN
+      ansible.builtin.assert:
+        that:
+          - "'pool: serzhan-pool' in old_pool_candidates_before.stdout"
+          - "'id: 16024059374292373886' in old_pool_candidates_before.stdout"
+          - "'wwn-0x5000cca22bc6ef0d' in old_pool_candidates_before.stdout"
+      when: "'serzhan-pool' not in old_pools_before.stdout_lines"
     - name: Stop PBS daemons before exporting their datastore filesystem
       ansible.builtin.systemd:
         name: "{{ item }}"
@@ -120,9 +144,10 @@
       loop:
         - proxmox-backup-proxy.service
         - proxmox-backup.service
-    - name: Export existing pool cleanly; never force export
+    - name: Export existing pool cleanly only if it is still imported
       ansible.builtin.command:
         argv: [zpool, export, serzhan-pool]
+      when: "'serzhan-pool' in old_pools_before.stdout_lines"
     - name: Confirm pool is no longer imported in old PBS guest
       ansible.builtin.command:
         argv: [zpool, list, -H, -o, name]
@@ -133,7 +158,17 @@
       ansible.builtin.assert:
         that:
           - "'serzhan-pool' not in old_pools_after_export.stdout_lines"
-        fail_msg: PBS_MEDIA_VM_CUTOVER_POOL_EXPORT_FAILED
+    - name: Confirm the exported pool is still visible for a normal import
+      ansible.builtin.command:
+        argv: [zpool, import]
+      register: old_pool_candidates_after_export
+      changed_when: false
+    - name: Require exported pool retains the exact identity
+      ansible.builtin.assert:
+        that:
+          - "'pool: serzhan-pool' in old_pool_candidates_after_export.stdout"
+          - "'id: 16024059374292373886' in old_pool_candidates_after_export.stdout"
+          - "'wwn-0x5000cca22bc6ef0d' in old_pool_candidates_after_export.stdout"
 
 - name: PBS Media VM pilot | Transfer PCI ownership and boot existing Media VM
   hosts: dh_pbs_media_cutover_pve
@@ -170,16 +205,6 @@
       ansible.builtin.command:
         argv: [grep, -Fx, 'hostpci0: 0000:2f:00.0,pcie=1', /etc/pve/qemu-server/2232.conf]
       changed_when: false
-    - name: Verify old PBS VM backup exists on PCI datastore
-      ansible.builtin.command:
-        argv: [pvesm, list, pbs-pci-pilot, --vmid, '2232']
-      register: media_vm_backup
-      changed_when: false
-    - name: Require backup archive and local rollback snapshot
-      ansible.builtin.assert:
-        that:
-          - "'backup/vm/2232/2026-11-02T15:05:51Z' in media_vm_backup.stdout"
-        fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_BACKUP_MISSING
     - name: Verify local LVM-thin rollback snapshot exists
       ansible.builtin.command:
         argv: [qm, listsnapshot, '2232']
@@ -316,6 +341,15 @@
           - "item.stdout == 'yes'"
         fail_msg: PBS_MEDIA_VM_CUTOVER_DATASET_NOT_MOUNTED
       loop: "{{ media_datasets.results }}"
+    - name: Verify the pre-install Media VM backup remains on the original PCI datastore
+      ansible.builtin.stat:
+        path: /serzhan-pool/backups/pbs-pci-pilot/vm/2232/2026-11-02T15:05:51Z
+      register: original_media_vm_backup
+    - name: Require the rollback backup archive directory is intact
+      ansible.builtin.assert:
+        that:
+          - "original_media_vm_backup.stat.isdir | default(false)"
+        fail_msg: PBS_MEDIA_VM_CUTOVER_ROLLBACK_ARCHIVE_MISSING
     - name: Verify Debian ZFS DKMS remains installed
       ansible.builtin.command:
         argv: [dpkg-query, -W, zfs-dkms, zfsutils-linux]
