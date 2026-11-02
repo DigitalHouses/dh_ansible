@@ -1,98 +1,687 @@
 ---
-# Operator-initiated one-shot cutover. No PVE credentials or CF API token
-# are exposed to Semaphore; the root watcher takes only a fixed nonce.
-- name: Reconcile canonical Cloudflare connector on this PVE
+# Native Ansible reconciliation. Tasks 05/06 commission Cloudflare/PVE identities.
+# No per-task root watcher, connector token in CLI argv, or implicit legacy cutover.
+- name: Cloudflare PVE | preflight and API provisioning
   hosts: site_runner
   gather_facts: false
   become: false
+  vars:
+    cf_api: https://api.cloudflare.com/client/v4
+    cf_zone: digitalhouses.vip
   pre_tasks:
-    - name: Load canonical site identity
+    - name: Read local site identity
       ansible.builtin.include_vars:
         file: "{{ inventory_dir }}/group_vars/all.yml"
 
-    - name: Require the one local site runner
+    - name: Read observed PVE endpoint
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve-runtime.yml"
+
+    - name: Validate current site, observed PVE and token
       ansible.builtin.assert:
         that:
           - ansible_play_hosts_all | length == 1
           - inventory_hostname == 'runner'
           - (ansible_connection | default('')) == 'local'
+          - site.id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_observed.source == 'host_root_vmbr0'
+          - pve_observed.ipv4 is match('^[0-9]+(\.[0-9]+){3}$')
+          - pve_observed.api_hostname | length > 0
+          - pve_observed.node | length > 0
+          - DH_CLOUDFLARE_API_TOKEN is defined
+          - (DH_CLOUDFLARE_API_TOKEN | default('') | length) > 20
+        fail_msg: CF_SITE_PVE_OR_TOKEN_NOT_COMMISSIONED
+      no_log: true
 
-    - name: Read runner hostname
+    - name: Verify actual runner identity
       ansible.builtin.command:
         argv: [hostname]
-      register: cloudflare_cutover_host
       changed_when: false
+      register: cf_runner_name
 
-    - name: Verify runner identity
+    - name: Require matching site runner
+      ansible.builtin.assert:
+        that: cf_runner_name.stdout == 'ansible-' ~ site.id
+
+    - name: Require pinned PVE SSH and origin CA from Task 06/bootstrap
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        follow: false
+      loop:
+        - "{{ inventory_dir }}/pve-root-ca.pem"
+        - /var/lib/semaphore/.ssh/dh_pve_known_hosts
+        - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+      register: cf_trust
+
+    - name: Check pinned trust file ownership and format
       ansible.builtin.assert:
         that:
-          - cloudflare_cutover_host.stdout == 'ansible-' ~ site.id
+          - cf_trust.results | map(attribute='stat.isreg', default=false) | select('equalto', true) | list | length == 3
+          - cf_trust.results | map(attribute='stat.islnk', default=false) | select('equalto', true) | list | length == 0
+          - cf_trust.results[1].stat.pw_name == 'semaphore'
+          - cf_trust.results[1].stat.mode == '0600'
+          - cf_trust.results[2].stat.pw_name == 'semaphore'
+          - cf_trust.results[2].stat.mode == '0600'
+        fail_msg: CF_PINNED_PVE_SSH_NOT_READY
 
-    - name: Check fixed-purpose root watcher is active
+    - name: Verify PVE root SSH without making host changes
       ansible.builtin.command:
-        argv: [systemctl, is-active, dh-cloudflare-switch.path]
-      register: cloudflare_watcher
-      changed_when: false
-
-    - name: Require approved cutover worker
-      ansible.builtin.assert:
-        that: [cloudflare_watcher.stdout == 'active']
-        fail_msg: "Cloudflare cutover worker not commissioned on this site. No infrastructure changes made."
-
-  tasks:
-    - name: Explain exactly what this operation does
-      ansible.builtin.debug:
-        msg:
-          action: RECONCILE_CLOUDFLARED_ON_PVE
-          site: "{{ site.id }}"
-          destination_tunnel: "{{ site.id }}"
-          destination_host: "dh-{{ site.id }}-pve.digitalhouses.vip"
-          effect: "Install cloudflared when absent; otherwise reconcile the existing systemd service and verify tunnel health"
-          api_dns_ingress_writes: NONE
-          delete_legacy_tunnel: false
-          service_restart: ONLY_WHEN_CHANGED
-          post_auth_browser_check: MANUAL
-
-    - name: Generate a single-use request ID
-      ansible.builtin.command:
-        argv: [cat, /proc/sys/kernel/random/uuid]
-      register: cloudflare_cutover_nonce
-      changed_when: false
-
-    - name: Send fixed-purpose request to root worker
-      ansible.builtin.copy:
-        dest: /var/lib/semaphore/dh-cloudflare-switch.request
-        content: "SWITCH:{{ cloudflare_cutover_nonce.stdout }}\n"
-        mode: '0600'
-
-    - name: Await this exact cutover result
-      ansible.builtin.command:
-        argv: [cat, /run/dh-cloudflare-switch.status]
-      register: cloudflare_cutover_status
+        argv:
+          - ssh
+          - -T
+          - -o
+          - BatchMode=yes
+          - -o
+          - IdentitiesOnly=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          - -o
+          - ConnectTimeout=8
+          - -i
+          - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+          - "root@{{ pve_observed.ipv4 }}"
+          - /usr/bin/test
+          - -e
+          - /etc/pve/user.cfg
       changed_when: false
       failed_when: false
-      retries: 340
-      delay: 3
-      until: >-
-        cloudflare_cutover_status.stdout in [
-          cloudflare_cutover_nonce.stdout ~ '|PASS',
-          cloudflare_cutover_nonce.stdout ~ '|FAILED'
-        ]
+      register: cf_ssh_probe
+      no_log: true
 
-    - name: Require success from isolated host cutover
+    - name: Require working native Ansible host access
+      ansible.builtin.assert:
+        that: cf_ssh_probe.rc == 0
+        fail_msg: CF_PVE_SSH_UNAVAILABLE_CHECK_TASK06
+
+    - name: Read PVE CA for TLS verification on connector host
+      ansible.builtin.slurp:
+        src: "{{ inventory_dir }}/pve-root-ca.pem"
+      register: cf_pve_ca
+      no_log: true
+
+    - name: Establish site-scoped resource names
+      ansible.builtin.set_fact:
+        cf_host: "dh-{{ site.id }}-pve.{{ cf_zone }}"
+        cf_origin: "https://{{ pve_observed.ipv4 }}:8006"
+
+  tasks:
+    - name: Resolve verified zone and owning account
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones?name={{ cf_zone }}&per_page=50"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_zone_response
+      no_log: true
+      changed_when: false
+
+    - name: Reject ambiguous zones or unknown Cloudflare scope
       ansible.builtin.assert:
         that:
-          - cloudflare_cutover_status.stdout == cloudflare_cutover_nonce.stdout ~ '|PASS'
-        fail_msg: "Cloudflare cutover failed. Check root-only commissioning/worker logs; legacy rollback may have been attempted."
+          - cf_zone_response.json.success
+          - cf_zone_response.json.result | length == 1
+          - cf_zone_response.json.result[0].name == cf_zone
+          - cf_zone_response.json.result[0].status == 'active'
+          - cf_zone_response.json.result[0].account.id is match('^[a-f0-9]{32}$')
+        fail_msg: CF_ZONE_SCOPE_NOT_CONFIRMED
+      no_log: true
 
-    - name: Report verified remote API health
+    - name: Remember public zone and account IDs
+      ansible.builtin.set_fact:
+        cf_zone_id: "{{ cf_zone_response.json.result[0].id }}"
+        cf_account_id: "{{ cf_zone_response.json.result[0].account.id }}"
+
+    - name: Inspect existing Cloudflare Access apps
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps?per_page=1000"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_apps
+      changed_when: false
+      no_log: true
+
+    - name: Select an existing exact or zone-wildcard Access application
+      ansible.builtin.set_fact:
+        cf_protecting_apps: >-
+          {{
+            cf_apps.json.result
+            | selectattr('type', 'equalto', 'self_hosted')
+            | selectattr('domain', 'in', [cf_host, '*.' ~ cf_zone])
+            | list
+          }}
+      no_log: true
+
+    - name: Refuse publication without one covering Access app
+      ansible.builtin.assert:
+        that:
+          - cf_apps.json.success
+          - cf_apps.json.result_info.total_pages | default(1) | int == 1
+          - cf_protecting_apps | length == 1
+        fail_msg: CF_ACCESS_APPLICATION_MISSING_OR_AMBIGUOUS
+      no_log: true
+
+    - name: Inspect policies on that Access app
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/access/apps/{{ cf_protecting_apps[0].id }}/policies?per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_policies
+      no_log: true
+      changed_when: false
+
+    - name: Refuse bypass, everyone or empty user allowlists
+      ansible.builtin.assert:
+        that:
+          - cf_policies.json.success
+          - cf_policies.json.result_info.total_pages | default(1) | int == 1
+          - cf_policies.json.result | selectattr('decision', 'equalto', 'bypass') | list | length == 0
+          - cf_policies.json.result | selectattr('decision', 'equalto', 'allow') | list | length > 0
+          - >-
+            cf_policies.json.result | selectattr('decision', 'equalto', 'allow')
+            | map(attribute='include') | flatten
+            | selectattr('email', 'defined') | list | length > 0
+          - >-
+            cf_policies.json.result | map(attribute='include') | flatten
+            | selectattr('everyone', 'defined') | list | length == 0
+        fail_msg: CF_ACCESS_ALLOWLIST_NOT_PROVEN
+      no_log: true
+
+    - name: Inspect exact DNS hostname before any tunnel creation
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ cf_host }}&per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_dns_old
+      changed_when: false
+      no_log: true
+
+    - name: List nondeleted tunnels with the site name
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ site.id }}&is_deleted=false&per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_tunnels
+      no_log: true
+      changed_when: false
+
+    - name: Restrict candidate list to the exact site
+      ansible.builtin.set_fact:
+        cf_existing: "{{ cf_tunnels.json.result | selectattr('name', 'equalto', site.id) | list }}"
+      no_log: true
+
+    - name: Protect all foreign tunnel and DNS resources
+      ansible.builtin.assert:
+        that:
+          - cf_dns_old.json.success
+          - cf_dns_old.json.result_info.total_pages | default(1) | int == 1
+          - cf_dns_old.json.result | length <= 1
+          - cf_tunnels.json.success
+          - cf_tunnels.json.result_info.total_pages | default(1) | int == 1
+          - cf_existing | length <= 1
+          - cf_existing | length == 0 or cf_existing[0].config_src == 'cloudflare'
+          - cf_dns_old.json.result | length == 0 or cf_existing | length == 1
+          - >-
+            cf_dns_old.json.result | length == 0 or (
+              cf_dns_old.json.result[0].type == 'CNAME'
+              and cf_dns_old.json.result[0].proxied == true
+              and cf_dns_old.json.result[0].content == cf_existing[0].id ~ '.cfargotunnel.com'
+            )
+        fail_msg: CF_EXISTING_TUNNEL_OR_DNS_COLLISION
+      no_log: true
+
+    - name: Register the already-commissioned root SSH target
+      ansible.builtin.add_host:
+        name: cf_pve_target
+        groups: cf_pve_target_group
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        cf_ca_b64: "{{ cf_pve_ca.content }}"
+        cf_expected_node: "{{ pve_observed.node }}"
+      no_log: true
+      changed_when: false
+
+    - name: Create an absent remotely managed tunnel (no legacy deletion)
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        body_format: json
+        body:
+          name: "{{ site.id }}"
+          config_src: cloudflare
+        status_code: 200
+        validate_certs: true
+        timeout: 25
+      register: cf_new_tunnel
+      when: cf_existing | length == 0
+      no_log: true
+
+    - name: Resolve canonical Tunnel UUID and expected TLS ingress
+      ansible.builtin.set_fact:
+        cf_tunnel_id: "{{ cf_existing[0].id if cf_existing | length == 1 else cf_new_tunnel.json.result.id }}"
+        cf_expected_rules:
+          - hostname: "{{ cf_host }}"
+            service: "{{ cf_origin }}"
+            originRequest:
+              originServerName: "{{ pve_observed.api_hostname }}"
+              caPool: /etc/cloudflared/dh-pve-ca.pem
+              noTLSVerify: false
+          - service: http_status:404
+      no_log: true
+
+    - name: Read any existing tunnel ingress before reconciling
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: [200, 404]
+        validate_certs: true
+        timeout: 20
+      register: cf_config_before
+      changed_when: false
+      no_log: true
+
+    - name: Determine whether ingress is empty or already canonical
+      ansible.builtin.set_fact:
+        cf_old_rules: "{{ cf_config_before.json.result.config.ingress | default([]) }}"
+      no_log: true
+
+    - name: Block any pre-existing foreign ingress rules
+      ansible.builtin.assert:
+        that:
+          - >-
+            cf_old_rules | length == 0
+            or (cf_old_rules | length == 1
+                and cf_old_rules[0].service == 'http_status:404'
+                and cf_old_rules[0].hostname is not defined)
+            or (
+              cf_old_rules | length == 2
+              and cf_old_rules[0].hostname == cf_host
+              and cf_old_rules[0].service == cf_origin
+              and cf_old_rules[0].originRequest.originServerName == pve_observed.api_hostname
+              and cf_old_rules[0].originRequest.caPool == '/etc/cloudflared/dh-pve-ca.pem'
+              and cf_old_rules[0].originRequest.noTLSVerify == false
+              and cf_old_rules[1].service == 'http_status:404'
+              and cf_old_rules[1].hostname is not defined
+            )
+        fail_msg: CF_EXISTING_INGRESS_NOT_OWNED
+      no_log: true
+
+    - name: Configure only empty canonical ingress with strict PVE TLS
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        body_format: json
+        body:
+          config:
+            ingress: "{{ cf_expected_rules }}"
+        status_code: 200
+        validate_certs: true
+        timeout: 25
+      when: cf_old_rules | length < 2
+      no_log: true
+
+    - name: Retrieve connector token without exposing it as an argv argument
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/token"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+        timeout: 20
+      register: cf_token_response
+      changed_when: false
+      no_log: true
+
+    - name: Require a usable connector token
+      ansible.builtin.assert:
+        that:
+          - cf_token_response.json.success
+          - cf_token_response.json.result is string
+          - cf_token_response.json.result | length > 80
+        fail_msg: CF_CONNECTOR_TOKEN_PERMISSION_MISSING
+      no_log: true
+
+    - name: Pass token in Ansible host memory, never in Git or the shell
+      ansible.builtin.add_host:
+        name: cf_pve_target
+        cf_connector_token: "{{ cf_token_response.json.result }}"
+      no_log: true
+      changed_when: false
+
+- name: Cloudflare PVE | native Linux package and systemd management
+  hosts: cf_pve_target_group
+  gather_facts: false
+  become: false
+  vars:
+    cf_service_unit: |
+      [Unit]
+      Description=DigitalHouses canonical Cloudflare Tunnel for PVE
+      Wants=network-online.target
+      After=network-online.target
+      [Service]
+      Type=simple
+      User=root
+      ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/dh-pve-token
+      Restart=on-failure
+      RestartSec=5s
+      [Install]
+      WantedBy=multi-user.target
+  tasks:
+    - name: Read PVE hostname
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: cf_pve_node
+      changed_when: false
+
+    - name: Require the expected commissioned node
+      ansible.builtin.assert:
+        that: cf_pve_node.stdout == cf_expected_node
+        fail_msg: CF_PVE_NODE_MISMATCH
+
+    - name: Check current cloudflared systemd unit ownership
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, FragmentPath, --value, cloudflared.service]
+      register: cf_service_location
+      changed_when: false
+      failed_when: false
+
+    - name: Never replace an unrelated or legacy connector service
+      ansible.builtin.assert:
+        that: cf_service_location.stdout | trim in ['', '/etc/systemd/system/cloudflared.service']
+        fail_msg: CF_LEGACY_SERVICE_CONFLICT
+
+    - name: Inspect systemd unit on disk
+      ansible.builtin.stat:
+        path: /etc/systemd/system/cloudflared.service
+        follow: false
+      register: cf_existing_unit
+
+    - name: Read existing unit only for strict own-service adoption
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/cloudflared.service
+      register: cf_existing_unit_bytes
+      when: cf_existing_unit.stat.exists
+      no_log: true
+
+    - name: Fail closed if an unknown unit already occupies the name
+      ansible.builtin.assert:
+        that:
+          - not cf_existing_unit.stat.exists or (
+              cf_existing_unit.stat.isreg
+              and not cf_existing_unit.stat.islnk
+              and cf_existing_unit_bytes.content | b64decode == cf_service_unit
+            )
+        fail_msg: CF_EXISTING_CLOUDFLARED_NOT_MANAGED
+
+    - name: Detect official package installation
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, cloudflared]
+      register: cf_pkg_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect pre-existing sources if package is missing
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -R
+          - -l
+          - pkg.cloudflare.com/cloudflared
+          - /etc/apt/sources.list
+          - /etc/apt/sources.list.d
+      register: cf_existing_sources
+      changed_when: false
+      failed_when: false
+      when: cf_pkg_installed.rc != 0
+
+    - name: Avoid conflicting Cloudflare Signed-By sources
+      ansible.builtin.assert:
+        that: >-
+          cf_pkg_installed.rc == 0 or (
+            cf_existing_sources.stdout_lines | default([])
+            | difference(['/etc/apt/sources.list.d/dh-cloudflared.list']) | length == 0
+          )
+        fail_msg: CF_APT_SOURCE_CONFLICT
+
+    - name: Install official package signing key if needed
+      ansible.builtin.get_url:
+        url: https://pkg.cloudflare.com/cloudflare-main.gpg
+        dest: /usr/share/keyrings/dh-cloudflare-main.gpg
+        owner: root
+        group: root
+        mode: '0644'
+      when: cf_pkg_installed.rc != 0
+
+    - name: Add only one signed Cloudflare package source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/dh-cloudflared.list
+        content: "deb [signed-by=/usr/share/keyrings/dh-cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
+        owner: root
+        group: root
+        mode: '0644'
+      when: cf_pkg_installed.rc != 0
+
+    - name: Install cloudflared via native apt
+      ansible.builtin.apt:
+        name: cloudflared
+        state: present
+        update_cache: true
+      when: cf_pkg_installed.rc != 0
+
+    - name: Check installed cloudflared version
+      ansible.builtin.command:
+        argv: [cloudflared, --version]
+      register: cf_installed_version
+      changed_when: false
+
+    - name: Require token-file feature (not token in service command)
+      ansible.builtin.assert:
+        that:
+          - cf_installed_version.stdout is search('version [0-9]{4}\.[0-9]+\.[0-9]+')
+          - >-
+            (cf_installed_version.stdout | regex_search('[0-9]{4}\.[0-9]+\.[0-9]+'))
+            is version('2025.4.0', '>=')
+        fail_msg: CF_CLOUDFLARED_TOKEN_FILE_UNSUPPORTED
+
+    - name: Ensure restricted cloudflared config directory
+      ansible.builtin.file:
+        path: /etc/cloudflared
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+
+    - name: Install origin CA from PVE bootstrap
+      ansible.builtin.copy:
+        dest: /etc/cloudflared/dh-pve-ca.pem
+        content: "{{ cf_ca_b64 | b64decode }}"
+        owner: root
+        group: root
+        mode: '0644'
+      register: cf_ca_changed
+
+    - name: Install connector token with root-only permissions
+      ansible.builtin.copy:
+        dest: /etc/cloudflared/dh-pve-token
+        content: "{{ cf_connector_token ~ '\n' }}"
+        owner: root
+        group: root
+        mode: '0600'
+      register: cf_token_changed
+      no_log: true
+
+    - name: Install the canonical Cloudflare service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/cloudflared.service
+        content: "{{ cf_service_unit }}"
+        owner: root
+        group: root
+        mode: '0644'
+      register: cf_unit_changed
+
+    - name: Start or restart only after a configuration change
+      ansible.builtin.systemd_service:
+        name: cloudflared.service
+        enabled: true
+        daemon_reload: "{{ cf_unit_changed.changed }}"
+        state: "{{ 'restarted' if (cf_unit_changed.changed or cf_token_changed.changed or cf_ca_changed.changed) else 'started' }}"
+
+    - name: Verify live systemd state
+      ansible.builtin.command:
+        argv: [systemctl, is-active, cloudflared.service]
+      register: cf_active
+      changed_when: false
+      failed_when: cf_active.stdout != 'active'
+
+- name: Cloudflare PVE | API health and guarded DNS publication
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  vars:
+    cf_api: https://api.cloudflare.com/client/v4
+  tasks:
+    - name: Require actual healthy Tunnel on Cloudflare edge
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+        timeout: 20
+      register: cf_health
+      until: cf_health.json.success | default(false) and cf_health.json.result.status == 'healthy'
+      retries: 24
+      delay: 5
+      no_log: true
+      changed_when: false
+
+    - name: Independently verify final strict-TLS ingress
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_tunnel_id }}/configurations"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+      register: cf_ingress_final
+      changed_when: false
+      no_log: true
+
+    - name: Require exact PVE hostname, origin and trusted CA
+      ansible.builtin.assert:
+        that:
+          - cf_ingress_final.json.result.config.ingress | length == 2
+          - cf_ingress_final.json.result.config.ingress[0].hostname == cf_host
+          - cf_ingress_final.json.result.config.ingress[0].service == cf_origin
+          - cf_ingress_final.json.result.config.ingress[0].originRequest.originServerName == pve_observed.api_hostname
+          - cf_ingress_final.json.result.config.ingress[0].originRequest.caPool == '/etc/cloudflared/dh-pve-ca.pem'
+          - cf_ingress_final.json.result.config.ingress[0].originRequest.noTLSVerify == false
+          - cf_ingress_final.json.result.config.ingress[1].service == 'http_status:404'
+        fail_msg: CF_INGRESS_READBACK_FAILED
+      no_log: true
+
+    - name: Create only absent DNS record after Access and healthy connector
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records"
+        method: POST
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        body_format: json
+        body:
+          type: CNAME
+          name: "{{ cf_host }}"
+          content: "{{ cf_tunnel_id }}.cfargotunnel.com"
+          proxied: true
+          ttl: 1
+        status_code: 200
+        validate_certs: true
+        timeout: 20
+      when: cf_dns_old.json.result | length == 0
+      no_log: true
+
+    - name: Read back published DNS
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/zones/{{ cf_zone_id }}/dns_records?name={{ cf_host }}&per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+      register: cf_dns_final
+      changed_when: false
+      no_log: true
+
+    - name: Demand exact canonical CNAME with proxy enabled
+      ansible.builtin.assert:
+        that:
+          - cf_dns_final.json.result | length == 1
+          - cf_dns_final.json.result[0].type == 'CNAME'
+          - cf_dns_final.json.result[0].proxied == true
+          - cf_dns_final.json.result[0].content == cf_tunnel_id ~ '.cfargotunnel.com'
+        fail_msg: CF_DNS_READBACK_FAILED
+      no_log: true
+
+    - name: Confirm public edge challenges an unauthenticated browser
+      ansible.builtin.uri:
+        url: "https://{{ cf_host }}/"
+        method: GET
+        follow_redirects: none
+        validate_certs: true
+        status_code: [200, 301, 302, 303, 307, 308, 401, 403, 404, 502, 503, 530]
+        timeout: 12
+      register: cf_edge
+      changed_when: false
+      failed_when: false
+      until: >-
+        cf_edge.status | default(0) | int in [301, 302, 303, 307, 308]
+        and '/cdn-cgi/access/login' in (cf_edge.location | default(''))
+      retries: 15
+      delay: 4
+
+    - name: Never report success if Access was bypassed
+      ansible.builtin.assert:
+        that:
+          - cf_edge.status | default(0) | int in [301, 302, 303, 307, 308]
+          - "'/cdn-cgi/access/login' in (cf_edge.location | default(''))"
+        fail_msg: CF_ACCESS_CHALLENGE_NOT_VERIFIED
+
+    - name: Report accurate readback (user login still requires browser)
       ansible.builtin.debug:
         msg:
           result: PASS
-          cloudflare_tunnel: "{{ site.id }}"
-          cloudflared_service: HEALTHY
-          remote_tunnel_health_api: PASS
-          old_tunnel_deleted: false
-          new_pve_hostname: "dh-{{ site.id }}-pve.digitalhouses.vip"
-          browser_post_auth_check: REQUIRED
+          site: "{{ site.id }}"
+          pve: "{{ pve_observed.ipv4 }}"
+          tunnel: "{{ site.id }}"
+          connector: HEALTHY
+          origin_tls_configuration: VERIFIED
+          dns: VERIFIED
+          access_unauthenticated: CHALLENGE_VERIFIED
+          post_auth_browser: REQUIRED
+          legacy_deleted: false
+          url: "https://{{ cf_host }}"
