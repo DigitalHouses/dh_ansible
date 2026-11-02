@@ -1,3 +1,5 @@
+> **LIVE ACCEPTANCE 02.11.2026:** после PR #117 Semaphore Task №06, запуск #10, на `serzhan-home`: `pve=READY`, `pve_ssh=READY`, `mqtt=READY` (реальный MQTT CONNECT/CONNACK), `cloudflare=READY` (активность токена), `overall=READY`, без ошибок. GitHub provisioning пока не применяется; Cloudflare scope `NOT_VERIFIED`. Не требуется повторять №00/№05 или вводить credentials заново. [Отчёт приёмки](../acceptance/semaphore-beta-fresh-2026-11-02.md).
+
 ## Проверка MQTT и Cloudflare в №06 (новый сценарий)
 
 После успешной №05 (сохранила MQTT broker host, username, password и Cloudflare API token) запускается штатная №06, без дополнительных отдельных номеров. Проверка MQTT: прямое **MQTT 3.1.1 CONNECT** из site-runner к указанному брокеру TCP/1883; CONNACK=0 означает `READY`, 4/5 — `AUTH_FAILED`, timeout/connection refused — `UNREACHABLE`. Никаких PUBLISH/SUBSCRIBE. Указанный пароль передаётся через stdin команды Ansible с `no_log`; в журнал выводится только безопасный статус. Если хотя бы одно из трёх полей MQTT заполнено, но не вся тройка — `INCOMPLETE`, и общий `overall=BLOCKED`. При всех пустых — `NOT_CONFIGURED` (опционально для PVE).
