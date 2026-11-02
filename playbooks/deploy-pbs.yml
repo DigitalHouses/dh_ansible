@@ -5,10 +5,13 @@
   hosts: site_runner
   gather_facts: false
   become: false
-  vars_files:
-    - "{{ inventory_dir }}/pbs.yml"
-    - "{{ inventory_dir }}/pve-runtime.yml"
   tasks:
+    - name: Load observed PVE runtime from site inventory
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Load site PBS pilot declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
     - name: Require exact site identity and non-destructive pilot scope
       ansible.builtin.assert:
         that:
