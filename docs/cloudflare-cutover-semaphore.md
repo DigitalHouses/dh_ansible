@@ -1,6 +1,6 @@
 # Semaphore №10 — Cloudflare Tunnel до Proxmox VE
 
-**Дата:** 02.11.2026. **Статус:** новая реализация в main после PR #124; до живого запуска нельзя объявлять LIVE PASS.
+**Дата:** 02.11.2026. **Статус:** после PR #124 первый live запуск Task #25 не прошёл preflight (несуществующее `pve_observed.api_hostname`, `changed=0`). Исправление совместимости внесено отдельным PR; до реального E2E нельзя объявлять LIVE PASS.
 
 ## Что меняется
 
@@ -42,7 +42,7 @@ API, выставляется **только** canonical ingress + 404 fallback.
 существующем site-туннеле выполняется readback/adopt; чужие маршруты
 не перезаписываются. Из Cloudflare API берётся connector token и Ansible
 записывает его на PVE с root:root 0600, **не в CLI argv**, не в Git.
-Origin использует PVE CA и `originServerName`, `noTLSVerify=false`.
+Origin использует PVE CA (`caPool`) и `noTLSVerify=false`. Проверка имени сертификата выполняется по фактическому IPv4 в HTTPS origin URL; этот IPv4 уже валидировался №06 через pinned PVE CA и TLS fingerprint. В свежем `pve-runtime.yml` нет `api_hostname`, поэтому №10 не требует такого поля.
 
 На PVE Ansible устанавливает `cloudflared` из подписанного официального
 APT-репозитория только при отсутствии пакета; установку и `systemd`
