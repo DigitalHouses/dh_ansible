@@ -144,6 +144,26 @@
           - pbs_old_nfs_after.rc != 0
         fail_msg: PBS_ZFS_NFS_STILL_ATTACHED_NO_REBOOT
       when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Confirm the Debian PBS Enterprise source is the expected trial-only file
+      ansible.builtin.slurp:
+        src: /etc/apt/sources.list.d/pbs-enterprise.sources
+      register: pbs_enterprise_source
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Refuse altering any unexpected Enterprise repository
+      ansible.builtin.assert:
+        that:
+          - "'URIs: https://enterprise.proxmox.com/debian/pbs' in (pbs_enterprise_source.content | b64decode)"
+          - "'Components: pbs-enterprise' in (pbs_enterprise_source.content | b64decode)"
+        fail_msg: PBS_APT_FOREIGN_ENTERPRISE_SOURCE
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Disable only the unused PBS Enterprise repository (no subscription)
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/pbs-enterprise.sources
+        regexp: '^Enabled:'
+        line: 'Enabled: no'
+        insertafter: EOF
+        backup: true
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
     - name: Install the official full PBS meta-package (includes ZFS kernel)
       ansible.builtin.apt:
         name: proxmox-backup
