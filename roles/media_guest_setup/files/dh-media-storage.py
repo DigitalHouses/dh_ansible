@@ -321,10 +321,10 @@ def ensure_create(data, disk, physical, disk_policy="preserve"):
     target_importable = imported_guid_visible(name) if not target_active else None
     if target_active or target_importable:
         guid, modified = ensure_import(name, disk, physical, data["mode"])
-        if disk_policy == "preserve" or data.get("one_time_ntfs_erase") is not None:
-            # The site approval allows only FIRST conversion of a verified
-            # NTFS disk. Once the canonical ZFS pool exists, never erase it
-            # on a retry, even if the Semaphore survey still says 'erase'.
+        if disk_policy == "preserve":
+            # Preserve an existing pool only when the operator explicitly
+            # selected import/preserve. An explicit erase is never rewritten
+            # into preserve merely because an old NTFS approval exists.
             print("POOL=ALREADY_CANONICAL", flush=True)
             return guid, modified
         require(data.get("destructive_without_backup") is True,

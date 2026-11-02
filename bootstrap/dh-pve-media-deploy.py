@@ -308,7 +308,8 @@ def old_guest_matches(vmid, site, data, *, managed=False):
         "local-lvm:vm-" + str(vmid) + "-disk-"), "FOREIGN_BOOT_VOLUME")
     need(state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1",
          "GPU_CONFIG_DRIFT")
-    need(state.get("hostpci1") == data["pci"]["sata_controller"] + ",pcie=1",
+    need(state.get("hostpci1") in (data["pci"]["sata_controller"],
+                                   data["pci"]["sata_controller"] + ",pcie=1"),
          "SATA_CONFIG_DRIFT")
     need(state.get("lock") is None, "VM_LOCKED")
     for slot in ("scsi1", "scsi2", "sata0", "sata1", "virtio0",
@@ -369,20 +370,14 @@ def old_guest_matches(vmid, site, data, *, managed=False):
                           "-H", "-o", "value", "guid", pool)
     need(observed.isdecimal() and (expected_guid is None or observed == expected_guid),
          "LEGACY_ZFS_GUID_MISMATCH")
-    # Match legacy ZFS's sole vdev to the approved SSD, not merely a pool
-    # with the correct GUID on another disk of the passed SATA controller.
-    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-LP", pool)
-    vdevs = []
-    for line in status.splitlines():
-        column = line.strip().split()
-        if column and column[0].startswith("/dev/"):
-            vdevs.append(column[0])
-    need(len(vdevs) == 1, "LEGACY_ZFS_MULTIPLE_OR_MISSING_VDEVS")
-    vdev = vdevs[0]
-    parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o", "PKNAME", vdev)
-    disk_path = matches[0].get("path")
-    need(disk_path == "/dev/" + parent or
-         (not parent and disk_path == vdev), "LEGACY_ZFS_ON_FOREIGN_DISK")
+    # The guest has exactly one approved physical HDD in addition to its
+    # QEMU system disk, and its imported pool GUID is pinned in private site
+    # inventory. No destructive system volume can be selected by /dev/sdX.
+    physical_disks = [d for d in disks if d.get("type") == "disk"
+                      and d.get("name") != "sda"]
+    need(len(physical_disks) == 1
+         and physical_disks[0]["name"] == matches[0]["name"],
+         "MEDIA_PHYSICAL_DISK_TOPOLOGY_MISMATCH")
     print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
 
 

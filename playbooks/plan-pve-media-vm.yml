@@ -157,8 +157,8 @@
           - media_vm.storage.one_time_ntfs_erase.partition_label == media_vm.storage.disk.observed_label
           - media_vm.storage.destructive_without_backup == true
           - media_vm.backup_export.pve_host == pve_observed.ipv4
-          - media_vm_action != 'recreate'
           - media_vm_action != 'create' or media_raw_disk_action == 'erase'
+          - media_vm_action != 'recreate' or media_raw_disk_action != 'erase' or (media_vm.storage.import_pool_guid is defined and (media_vm.storage.import_pool_guid is match('^[0-9]+$')))
           - media_vm_action != 'keep' or (media_raw_disk_action == 'erase' or media_vm.storage.import_pool_guid is defined)
         fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
 
