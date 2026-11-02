@@ -384,7 +384,7 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     # underlying disk. Unknown or multi-vdev topologies fail closed.
     status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-P", pool)
     vdevs = re.findall(
-        r"(?m)^\\s+(/dev/\\S+)\\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\\b",
+        r"(?m)^\s+(/dev/\S+)\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b",
         status,
     )
     need(len(vdevs) == 1, "LEGACY_ZFS_VDEV_COUNT_INVALID")
