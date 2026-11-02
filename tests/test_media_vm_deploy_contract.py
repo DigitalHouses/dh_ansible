@@ -22,18 +22,20 @@ def test_python_and_declarative_task_syntax():
     assert yaml.safe_load(PLAY.read_text())[0]["hosts"] == "site_runner"
 
 
-def test_deploy_reuses_existing_worker_no_extra_template():
+def test_deploy_uses_single_native_80_template_without_one_off_worker():
     import json
-    worker = WORKER.read_text()
-    play = PLAY.read_text()
+    import yaml
+    plays = yaml.safe_load(PLAY.read_text())
     tasks = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())["tasks"]
-    assert len([x for x in tasks if x["title"].startswith("80-Медиасервер")]) == 1
-    assert "MEDIA_DEPLOY_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
-    assert "MEDIA_DEPLOY_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}" in play
-    assert "dh-pve-access-audit.request" in play
-    assert "dh-pve-media-deploy" in worker
-    assert "--apply" in worker
-    assert "MEDIA_PLAN" in worker
+    media = [x for x in tasks if x["title"].startswith("80-Медиасервер")]
+    assert len(media) == 1
+    assert media[0]["playbook"] == "playbooks/plan-pve-media-vm.yml"
+    assert len(plays) == 4
+    assert plays[1]["hosts"] == "dh_media_native_pve"
+    assert "infrastructure_access" in str(plays[1]["tasks"])
+    assert "scripts/dh-media-pve-preflight.py" in str(plays[1]["tasks"])
+    assert "bootstrap/dh-pve-media-deploy.py" in str(plays[1]["tasks"])
+    assert "dh-pve-access-audit.request" not in PLAY.read_text()
 
 
 def test_image_download_and_host_compatibility():
@@ -69,13 +71,16 @@ def test_metadata_validation_before_any_download(monkeypatch):
     data, _ = m.site_data("demo-home")
     assert data == {}
 
-def test_media_vm_ownership_after_first_success_is_idempotent():
-    import yaml
-    text = PLAY.read_text()
-    assert "difference([media_vm.vmid | int])" in text
-    role = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
-    assert "rejectattr('vmid', 'equalto', media_vm.vmid | int)" in role
-    assert "80-Медиасервер · Развёртывание" in (ROOT / "catalog/semaphore-tasks.json").read_text()
+def test_media_vm_keep_preserves_existing_guest_without_recreation():
+    source = (ROOT / "bootstrap/dh-pve-media-deploy.py").read_text()
+    scope = source[source.index("def reconcile_media_vm_lifecycle"):source.index(
+        'need(qm("status", vmid)', source.index("def reconcile_media_vm_lifecycle"))]
+    assert 'if vm_action == "keep":' in scope
+    assert 'print("MEDIA_VM=EXISTS_PRESERVED"' in scope
+    assert "old_guest_matches(vmid, site, data, managed=True)" in scope
+    assert 'qm("destroy"' not in scope
+    assert "80-Медиасервер · Развёртывание" in (
+        ROOT / "catalog/semaphore-tasks.json").read_text()
 
 
 def test_first_boot_debian_apt_refresh_precedes_zfs_package_install():
@@ -197,23 +202,21 @@ def test_native_filestash_state_follows_binary_directory_and_is_writable():
     assert "restarted" in start_task["ansible.builtin.systemd_service"]["state"]
 
 
-def test_media_deploy_cannot_ignore_read_only_plan_blockers():
+def test_media_native_apply_cannot_bypass_site_and_hardware_preflight():
     import yaml
-    source = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
-    assert len(source) == 1
-    steps = source[0]["tasks"]
-    gate = next(step for step in steps if step.get("name") ==
-                "Provision only when canonical Fleet authorizes media server")
-    submit = next(index for index, step in enumerate(steps)
-                  if step.get("name") ==
-                  "Submit fixed-purpose media deploy to existing PVE root worker")
-    gate_index = steps.index(gate)
-    assert gate_index < submit, "The blocker gate must precede the root-worker request"
-    conditions = gate["ansible.builtin.assert"]["that"]
-    assert "media_plan_summary.blockers | length == 0" in conditions
-    assert "media_plan_summary.blockers is not string" in conditions
-    assert "MEDIA_DEPLOY_BLOCKED_BY_PREFLIGHT" in gate["ansible.builtin.assert"]["fail_msg"]
-    # Our existing Fleet explicitly has not verified DHCP exclusion. This
-    # prevents deployment even if hardware and PVE ownership are healthy.
-    safety = (ROOT / "roles/pve_media_vm_plan/tasks/main.yml").read_text()
-    assert "STATIC_IP_NOT_VERIFIED" in safety
+    plays = yaml.safe_load(PLAY.read_text())
+    assert len(plays) == 4
+    inputs = plays[0]["pre_tasks"][0]["ansible.builtin.assert"]["that"]
+    assert "media_vm_action in ['create', 'keep', 'recreate']" in inputs
+    assert "media_raw_disk_action in ['import', 'erase']" in inputs
+    first = plays[0]["tasks"]
+    names = [step["name"] for step in first]
+    assert names.index("Refuse foreign or public site configuration") < names.index(
+        "Require specific declared VM, hardware, pool and network boundaries")
+    assert "media_vm.network.static_ipv4_verified | bool" in str(first)
+    steps = plays[1]["tasks"]
+    names = [step["name"] for step in steps]
+    verify = names.index("Require completed independent hardware and VM preflight")
+    apply = names.index("Provision only the declared PVE media VM by native Ansible SSH")
+    assert verify < apply
+    assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in str(steps[verify])
