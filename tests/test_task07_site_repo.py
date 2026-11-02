@@ -71,17 +71,52 @@ def test_existing_repo_must_be_private_and_recognized_before_adoption():
     checks = privacy["ansible.builtin.assert"]["that"]
     assert any("private == true" in c for c in checks)
     assert any("full_name ==" in c for c in checks)
-    existing = task(play, "Never adopt an unrelated or unmarked site repository")
-    assert existing["when"] == "dh_git_before.status == 200"
+    existing = task(play, "Never adopt an unrelated or mismatched site marker")
+    assert existing["when"] == ["dh_git_before.status == 200", "dh_git_marker_before.status == 200"]
     checks = existing["ansible.builtin.assert"]["that"]
     assert any("site.id" in str(c) and "site_id" in str(c) for c in checks)
     assert any("purpose" in str(c) for c in checks)
 
 
+def test_unmarked_repository_recovery_requires_exact_pristine_auto_init():
+    play = yaml.safe_load(P.read_text())[0]
+    conditions = ["dh_git_before.status == 200", "dh_git_marker_before.status == 404"]
+    for prefix, fragment in [
+        ("Inspect initial commit", "/commits?"),
+        ("Inspect full tree", "/git/trees/"),
+        ("Verify initial README", "/contents/README.md"),
+    ]:
+        t = task(play, prefix)
+        assert t["when"] == conditions
+        assert t["no_log"] is True
+        assert fragment in t["ansible.builtin.uri"]["url"]
+        assert t["ansible.builtin.uri"]["method"] == "GET"
+
+    strict = task(play, "Reject unmarked repository unless")
+    assert strict["when"] == conditions
+    checks = "\n".join(strict["ansible.builtin.assert"]["that"])
+    for expected in (
+        "default_branch == 'main'",
+        "truncated",
+        "tree | length",
+        "README.md",
+        "commits.json | length",
+        "Initial commit",
+        "parents | length",
+        "author.login",
+        "DigitalHouses private Ansible inventory",
+    ):
+        assert expected in checks
+    assert strict["no_log"] is True
+    assert task(play, "Approve recovery of a pristine initial repository")["when"] == conditions
+    assert play["tasks"].index(strict) < play["tasks"].index(task(play, "Initialize identity marker"))
+    assert "dh_git_pristine_recovery" in str(task(play, "Initialize identity marker")["when"])
+
+
 def test_new_marker_and_inventory_have_no_secret_values():
     play = yaml.safe_load(P.read_text())[0]
-    marker = task(play, "Initialize identity marker only for new repository")
-    inventory = task(play, "Initialize nonsecret site inventory only for new repository")
+    marker = task(play, "Initialize identity marker after fresh creation")
+    inventory = task(play, "Initialize nonsecret site inventory after fresh creation")
     assert marker["ansible.builtin.uri"]["method"] == "PUT"
     assert inventory["ansible.builtin.uri"]["method"] == "PUT"
     assert marker["no_log"] is True
@@ -89,7 +124,8 @@ def test_new_marker_and_inventory_have_no_secret_values():
     assert "DH_GITHUB_PROVISION_TOKEN" not in str(marker["ansible.builtin.uri"]["body"])
     assert "DH_GITHUB_PROVISION_TOKEN" not in str(inventory["ansible.builtin.uri"]["body"])
     assert "dh_git_before.status == 404" in str(marker["when"])
-    assert inventory["when"] == "dh_git_before.status == 404"
+    assert "dh_git_pristine_recovery" in str(marker["when"])
+    assert "dh_git_pristine_recovery" in str(inventory["when"])
     for unwanted in ("DH_MQTT_PASSWORD", "DH_PVE_ROOT_PASSWORD", "DH_CLOUDFLARE_API_TOKEN"):
         assert unwanted not in P.read_text()
 
