@@ -40,17 +40,22 @@ class NativeCredentialContract(unittest.TestCase):
         self.assertNotIn("semaphore-obtain-credentials.py", OBTAIN)
         self.assertNotIn("--extra-vars", OBTAIN)
 
-    def test_approved_five_optional_survey_fields_are_unchanged_for_pinned_seeder(self):
+    def test_approved_six_optional_survey_fields_are_preserved_for_catalog(self):
         task05 = next(t for t in CATALOG["tasks"]
                       if t["title"] == "05-Ввести credentials объекта")
         fields = REGISTRY["manual"]
-        self.assertEqual(len(fields), 5)
+        self.assertEqual(len(fields), 6)
         self.assertEqual([x["name"] for x in task05["survey_vars"]],
                          [f["survey_env"] for f in fields])
         self.assertTrue(all(not x["required"] and x["target"] == "env"
                             and x["values"] == [] for x in task05["survey_vars"]))
         self.assertIn('variable.get("target") != "env"', SEEDER)
         self.assertIn('dh_secret_group_name: Empty', OBTAIN)
+        self.assertIn('DH_MQTT_BROKER_HOST', OBTAIN)
+        self.assertIn('DH_INPUT_MQTT_BROKER_HOST', OBTAIN)
+        broker = next(f for f in task05['survey_vars'] if f['name'] == 'DH_INPUT_MQTT_BROKER_HOST')
+        self.assertEqual(broker['type'], 'text')
+        self.assertFalse(broker['required'])
 
     def test_pve_root_only_once_using_native_var_secret(self):
         field = next(x for x in REGISTRY["manual"]
