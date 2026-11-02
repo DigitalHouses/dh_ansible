@@ -11,7 +11,7 @@
 | 00 | Semaphore project на runner | catalog metadata manage | Local API token **root-only**, действующий fixed catalog worker | Только catalog, не установка ПО |
 | 05 | GitHub → локальная папка Semaphore | private Git read / credentials bootstrap | GitHub Device Flow пользователя `semaphore`, без `become` | OAuth + checkout |
 | 06 | PVE root@pam API + SSH commissioning | `credential_verify`, `host_manage` (только добавление site public key в root authorized_keys) | Сохранённый пароль PVE root из Semaphore native Variable Group; публичный TLS/SSH trust seed из PVE Bootstrap; native Ansible password SSH | Первичное подключение и последующие проверки, без отдельной №08 |
-| 10 | PVE host и Cloudflare | `software_manage`, `service_manage`, external API | Отдельный PVE/admin + Cloudflare principal, **не** root внутри runner; действующий legacy fixed worker | План/apply с защитой Cloudflare |
+| 10 | PVE host и Cloudflare | `software_manage`, `service_manage`, external API | **Нативный** commissioned PVE root SSH (№06) + Cloudflare scoped API token (№05), без task-specific worker | Access/TLS/DNS guards → native apply → API readback; live E2E pending |
 | 20 | Runner | `read` | Обычный `semaphore` | Smoke |
 | 30 | Runner | `read` + site-data reconcile | Локальный `semaphore`, native sudo только при materialize | Inventory `runner.yml` из приватного Fleet |
 | 40 | Runner LXC | `software_manage`, `service_manage` | **Локальный `semaphore` + `sudo NOPASSWD: ALL` внутри runner**, обычный Ansible `become` | В Git реализовано; CT1231 retrofit/Online E2E ещё не принят |
@@ -47,7 +47,7 @@
 | 20 | Безопасный smoke; отдельной привилегии не требует. |
 | 30 | Теперь автоматически берёт `runner.yml` из локального Fleet через общую роль. Требуется локальный sudo и live acceptance. |
 | 40 | Нативный install через `become`. Требуется retrofit CT1231, запуск и Online/pairing acceptance. |
-| 10 | По-прежнему требует legacy `dh-cloudflare-switch.path`, которого нет в Fresh Bootstrap. Централизация CF — **отдельная будущая работа**, без передачи глобальных токенов домам. |
+| 10 | Новая реализация в PR: native PVE SSH + Cloudflare API; legacy `dh-cloudflare-switch.path` не требуется. Access и конфликты блокируют до write. Cloudflare write scope и real E2E ещё не проверены. |
 | 50 | Требует legacy `dh-pve-access-audit.path`; после Fresh Bootstrap worker отсутствует. |
 | 60 | `netalertx.yml` теперь загружается из Fleet, но установка всё ещё требует legacy `dh-netalertx-deploy.path` и PVE capabilities. |
 | 70 | `haos.yml` теперь загружается из Fleet, но apply требует legacy `dh-haos-mtls.path` и Cloudflare privileges. |
