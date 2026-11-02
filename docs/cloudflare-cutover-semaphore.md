@@ -56,7 +56,7 @@ HTTP 200, структура JSON и заголовок `pve-api-daemon` обя�
 
 - существующий отдельный Tunnel `serzhan-home-pve` найден и подтверждён
   `HEALTHY`; создание Tunnel и запись ingress пропущены как ненужные;
-- TLS origin `192.168.11.6:8006`, PVE API и строгий CA readback — PASS;
+- TLS origin `<observed-PVE-IP>:8006`, PVE API и строгий CA readback — PASS;
 - пакет и systemd unit `cloudflared` уже установлен/active, restart не потребовался;
 - DNS PVE CNAME найден правильным; Access policy/redirect — VERIFIED;
 - `shared_tunnel_untouched=true`, `legacy_deleted=false`, старый общий
