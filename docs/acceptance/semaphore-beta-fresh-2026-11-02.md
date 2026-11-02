@@ -1,5 +1,17 @@
 # Semaphore 2.20 Beta — чистый Bootstrap, 02.11.2026
 
+## E2E №06 · MQTT + Cloudflare + PVE — LIVE PASS, 02.11.2026
+
+**Источник:** журнал владельца `1(20261102-015145).txt`, Semaphore Task **#10**, `serzhan-home`, Git source `164d511` (включая [PR #117](https://github.com/DigitalHouses/dh_ansible/pull/117)).
+
+- **PVE API** `root@pam=READY`; **PVE root SSH** `READY`, повторное создание SSH-ключа и password enrollment пропущены.
+- **MQTT** `READY`: Ansible получила hostname/login из нативного Semaphore Environment (`env`), пароль из `type=var`, выполнила MQTT 3.1.1 CONNECT/CONNACK через read-only checker. `Authenticate to the configured MQTT broker without publishing: ok`; `mqtt=READY`.
+- **Cloudflare** `READY`: `GET /client/v4/user/tokens/verify` — токен активен. `cloudflare_token_scope=NOT_VERIFIED`; права на конкретные Tunnel/Access не подтверждены.
+- **GitHub provisioning token**: `NOT_APPLICABLE_UNTIL_TASK_07` — не вводился, не проверялся.
+- **Итог:** `overall=READY`; `password_or_ticket_logged=false`, `runner: ok=26 changed=1 failed=0 unreachable=0 skipped=3`, `dh_pve_verified_key: ok=7 changed=0 failed=0 unreachable=0`. Изменение runner обусловлено `add_host` (операция в памяти Ansible), а не записью на PVE. Ожидаемое `no hosts matched` означает отсутствие необходимости повторного SSH enrollment.
+
+**Принято:** сохранение (№05) и проверка (№06) PVE/MQTT/Cloudflare credentials для этого объекта. **Не принято:** Cloudflare permission scopes, GitHub Task07, любые downstream развертывания.
+
 ## Fresh E2E приёмка 02.11.2026 — Task 06 API + SSH (LIVE + IDEMPOTENCY PASS)
 
 **Объект:** `serzhan-home`. **Источник:** полный журнал владельца `1(20261102-004624).txt` (Semaphore Task #1, #2, #3). Это самостоятельная живая проверка после удаления и чистой установки CT1231; её не следует смешивать с ранее принятой №06 на предыдущем уничтоженном CT.
