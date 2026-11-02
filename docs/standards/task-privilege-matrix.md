@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- |
 | 00 | Semaphore project на runner | catalog metadata manage | Local API token **root-only**, действующий fixed catalog worker | Только catalog, не установка ПО |
 | 05 | GitHub → локальная папка Semaphore | private Git read / credentials bootstrap | GitHub Device Flow пользователя `semaphore`, без `become` | OAuth + checkout |
-| 06 | Локальная credential store runner | Vault credential verify/store | Одно скрытое значение, `semaphore`, без `become` | Не создаёт sudo |
+| 06 | PVE root@pam API + SSH commissioning | `credential_verify`, `host_manage` (только добавление site public key в root authorized_keys) | Сохранённый пароль PVE root из Semaphore native Variable Group; публичный TLS/SSH trust seed из PVE Bootstrap; native Ansible password SSH | Первичное подключение и последующие проверки, без отдельной №08 |
 | 10 | PVE host и Cloudflare | `software_manage`, `service_manage`, external API | Отдельный PVE/admin + Cloudflare principal, **не** root внутри runner; действующий legacy fixed worker | План/apply с защитой Cloudflare |
 | 20 | Runner | `read` | Обычный `semaphore` | Smoke |
 | 30 | Runner | `read` + site-data reconcile | Локальный `semaphore`, native sudo только при materialize | Inventory `runner.yml` из приватного Fleet |
@@ -21,6 +21,8 @@
 | 80 | PVE + Media VM + raw disk | `host_manage`, `software_manage`, `service_manage`, `filesystem_manage`, `destructive` | PVE admin + guest admin + approvals для VM/disk, текущий protected worker | Особые явные VM/disk choices |
 | 81 | PVE + Media VM | `read` | Read-only probe через действующий protected worker | Acceptance; не установка |
 | 90 | PVE host | `host_manage`, `filesystem_manage` | PVE admin + site-scoped permissions, текущий protected worker | Добавление NFS storage без изменения backup jobs |
+
+**Для нового Fresh Bootstrap:** №06 в одном задании проверяет PVE TLS/API и устанавливает/проверяет ключевой SSH-доступ Ansible. Результат `overall=READY` возможен только после SSH root проверки по привязанному host key. Сценарий [PR #112](https://github.com/DigitalHouses/dh_ansible/pull/112) ещё не принят на реальном чистом CT; текущая старая установка не содержит публичного PVE trust seed. Оставшиеся таблицы ниже описывают исторический legacy профиль и не заменяют новую политику. Не создаётся №08.
 
 ## Обязательное правило для каждой следующей задачи
 
