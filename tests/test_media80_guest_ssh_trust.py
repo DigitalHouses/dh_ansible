@@ -91,3 +91,40 @@ def test_no_permissive_guest_ssh_hostkey_policy():
     assert "ssh-keyscan" not in source.split(
         "Atomically pin the newly recreated guest key"
     )[1].split("Register newly commissioned Debian media VM")[0]
+
+
+def test_keyscan_banners_and_duplicate_keys_are_not_conflicting_host_keys():
+    """Keyscan emits comment banners; they cannot be counted as host keys."""
+    import re
+
+    plays = yaml.safe_load(PLAY.read_text())
+    runner = plays[2]["tasks"]
+    names = [t["name"] for t in runner]
+    extract_index = names.index(
+        "Extract exact guest ED25519 records ignoring scanner banners and duplicates"
+    )
+    verify_index = names.index(
+        "Verify SSH network identity equals the key read from authenticated QGA"
+    )
+    assert extract_index < verify_index
+    extractor = runner[extract_index]["ansible.builtin.set_fact"]["media_ssh_scanned_host_keys"]
+    assert "select('match'" in extractor
+    assert "regex_escape" in extractor
+    assert "ssh-ed25519 " in extractor
+    assert "| unique" in extractor
+    verified = runner[verify_index]["ansible.builtin.assert"]["that"]
+    assert "media_ssh_scanned_host_keys ==" in str(verified)
+    assert "stdout_lines | length == 1" not in str(verified)
+
+    ip = "192.168.11.232"
+    good = ip + " ssh-ed25519 AAAA"
+    banner = "# 192.168.11.232:22 SSH-2.0-OpenSSH_9.2"
+    records = [banner, good, good]
+    def exact_keys(records):
+        return list(dict.fromkeys(
+            s for s in records if re.match(r"^" + re.escape(ip) + r" ssh-ed25519 ", s)
+        ))
+
+    assert exact_keys(records) == [good]
+    assert exact_keys([banner, good, ip + " ssh-ed25519 BBBB"]) != [good]
+    assert exact_keys([banner]) != [good]
