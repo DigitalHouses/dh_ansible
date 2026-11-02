@@ -15,7 +15,7 @@
 - фактическую PVE identity из bootstrap `pve-runtime.yml`, CA `pve-root-ca.pem`, локальную `site.id`.
 
 Никаких новых Survey-полей и повторного ввода credentials. На
-`serzhan-home` текущий PVE — **192.168.11.6**, не старый адрес Fleet.
+`serzhan-home` текущий PVE — **<observed-PVE-IP>**, не старый адрес Fleet.
 Дом определяется site identity, а не жёстко заданным IP в общем коде.
 
 ## Границы безопасности
