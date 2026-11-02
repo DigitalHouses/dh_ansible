@@ -241,11 +241,67 @@ def ensure_application(app: str):
     print("PROWLARR_APP_" + app.upper() + "=CREATED", flush=True)
 
 
+
+
+def ensure_import_naming(app: str):
+    """Use canonical existing filename templates on FUTURE Arr imports only.
+
+    Never rename/move any existing file, or invoke a mass-rename command.
+    Preserve all existing naming templates and settings from the app's API.
+    """
+    require(app in ("radarr", "sonarr"), "NAMING_APPLICATION_UNKNOWN")
+    current = api(app, "config/naming")
+    require(isinstance(current, dict) and
+            isinstance(current.get("id"), int) and current["id"] > 0,
+            "NAMING_CONFIG_INVALID_" + app)
+    setting = "renameMovies" if app == "radarr" else "renameEpisodes"
+    standard = "standardMovieFormat" if app == "radarr" else "standardEpisodeFormat"
+    require(isinstance(current.get(setting), bool)
+            and isinstance(current.get(standard), str)
+            and bool(current[standard].strip()),
+            "NAMING_CONFIG_FIELDS_INVALID_" + app)
+    template = current[standard]
+    if app == "radarr":
+        require(("{Movie Title}" in template or "{Movie CleanTitle}" in template)
+                and "{Release Year}" in template,
+                "NAMING_MOVIE_TEMPLATE_NOT_PLEX_COMPATIBLE")
+    else:
+        require("{season:00}" in template and "{episode:00}" in template,
+                "NAMING_EPISODE_TEMPLATE_NOT_PLEX_COMPATIBLE")
+    if not current[setting]:
+        updated = dict(current)
+        updated[setting] = True
+        # PUT retains every user-owned naming field. We update ONLY the enable
+        # switch and NEVER request existing-file renames.
+        api(app, "config/naming/" + str(current["id"]),
+            method="PUT", data=updated)
+        print("IMPORT_NAMING_" + app.upper() + "=ENABLED", flush=True)
+    else:
+        print("IMPORT_NAMING_" + app.upper() + "=UNCHANGED", flush=True)
+    actual = api(app, "config/naming")
+    require(isinstance(actual, dict)
+            and actual.get("id") == current["id"]
+            and actual.get(setting) is True
+            and actual.get(standard) == template
+            and all(actual.get(k) == v for k, v in current.items()
+                    if k not in (setting, "name")),
+            "NAMING_SETTINGS_POSTCHECK_DRIFT_" + app)
+
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--downloads", required=True)
     parser.add_argument("--library-root", required=True)
+    parser.add_argument("--naming-only", action="store_true",
+                        help="Reconcile future-import naming only; no media files touched")
     args = parser.parse_args()
+    require(os.geteuid() == 0, "ROOT_GUEST_ONLY")
+    if args.naming_only:
+        for app in ("radarr", "sonarr"):
+            ensure_import_naming(app)
+        print("MEDIA_IMPORT_NAMING=PASS", flush=True)
+        return
     root = Path(args.downloads)
     library = Path(args.library_root)
     require(library.is_dir() and not library.is_symlink(), "ZFS_MEDIA_LIBRARY_MISSING")
@@ -266,6 +322,10 @@ def main():
         ensure_root(app, str(library / folder))
     for app in ("radarr", "sonarr", "prowlarr"):
         ensure_client(app)
+    # Plex's native filesystem notifications discover imported files; Arr
+    # canonical import names let Plex Movie/Series match and fetch posters.
+    for app in ("radarr", "sonarr"):
+        ensure_import_naming(app)
     for app in ("radarr", "sonarr"):
         ensure_application(app)
     for app in ("radarr", "sonarr"):
