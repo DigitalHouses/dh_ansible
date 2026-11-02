@@ -149,18 +149,86 @@
       register: dh_git_marker_before
       changed_when: false
       no_log: true
-    - name: Never adopt an unrelated or unmarked site repository
+    - name: Never adopt an unrelated or mismatched site marker
       ansible.builtin.assert:
         that:
-          - dh_git_marker_before.status == 200
           - (dh_git_marker_before.json.content | b64decode | from_json).schema == 1
           - (dh_git_marker_before.json.content | b64decode | from_json).site_id == site.id
           - (dh_git_marker_before.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
         fail_msg: GITHUB_EXISTING_REPOSITORY_MARKER_MISMATCH
-      when: dh_git_before.status == 200
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 200
       no_log: true
 
-    - name: Initialize identity marker only for new repository
+    # GitHub may successfully create the private repository and initialize its
+    # README, then Task 07 may fail before installing the identity marker.
+    # Recover only a strictly pristine, GitHub-autoinitialized repository:
+    # same owner/private/site name, exactly one initial commit and README.
+    # Any other unmarked repository stays immutable and is rejected.
+    - name: Inspect initial commit of an existing unmarked site repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/commits?sha={{ dh_git_repo.json.default_branch }}&per_page=2"
+        method: GET
+        status_code: 200
+      register: dh_git_pristine_commits
+      changed_when: false
+      no_log: true
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 404
+
+    - name: Inspect full tree of an existing unmarked site repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/git/trees/{{ dh_git_repo.json.default_branch }}?recursive=1"
+        method: GET
+        status_code: 200
+      register: dh_git_pristine_tree
+      changed_when: false
+      no_log: true
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 404
+
+    - name: Verify initial README of an existing unmarked site repository
+      ansible.builtin.uri:
+        url: "{{ dh_git_api }}/contents/README.md"
+        method: GET
+        status_code: 200
+      register: dh_git_pristine_readme
+      changed_when: false
+      no_log: true
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 404
+
+    - name: Reject unmarked repository unless it is an untouched Task 07 initialization
+      ansible.builtin.assert:
+        that:
+          - dh_git_repo.json.default_branch == 'main'
+          - not (dh_git_pristine_tree.json.truncated | default(true))
+          - (dh_git_pristine_tree.json.tree | length) == 1
+          - dh_git_pristine_tree.json.tree[0].path == 'README.md'
+          - dh_git_pristine_tree.json.tree[0].type == 'blob'
+          - (dh_git_pristine_commits.json | length) == 1
+          - dh_git_pristine_commits.json[0].commit.message == 'Initial commit'
+          - (dh_git_pristine_commits.json[0].parents | length) == 0
+          - dh_git_pristine_commits.json[0].author.login == dh_git_owner
+          - (dh_git_pristine_readme.json.content | b64decode) == '# ' ~ dh_git_name ~ '\nDigitalHouses private Ansible inventory · ' ~ site.id ~ '\n'
+        fail_msg: GITHUB_UNMARKED_REPOSITORY_NOT_PRISTINE_REFUSE_ADOPTION
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 404
+      no_log: true
+
+    - name: Approve recovery of a pristine initial repository
+      ansible.builtin.set_fact:
+        dh_git_pristine_recovery: true
+      when:
+        - dh_git_before.status == 200
+        - dh_git_marker_before.status == 404
+
+    - name: Initialize identity marker after fresh creation or verified pristine recovery
       ansible.builtin.uri:
         url: "{{ dh_git_api }}/contents/.digitalhouses/site.json"
         method: PUT
@@ -171,10 +239,10 @@
           content: "{{ dh_git_marker | to_nice_json | b64encode }}"
         status_code: 201
       when:
-        - dh_git_before.status == 404
+        - dh_git_before.status == 404 or (dh_git_pristine_recovery | default(false))
         - dh_git_marker_before.status == 404
       no_log: true
-    - name: Initialize nonsecret site inventory only for new repository
+    - name: Initialize nonsecret site inventory after fresh creation or verified pristine recovery
       ansible.builtin.uri:
         url: "{{ dh_git_api }}/contents/inventories/{{ site.id }}/site.yml"
         method: PUT
@@ -184,7 +252,7 @@
           branch: "{{ dh_git_repo.json.default_branch }}"
           content: "{{ {'site': {'id': site.id, 'owner_slug': site.owner_slug, 'type': site.type}} | to_nice_yaml | b64encode }}"
         status_code: 201
-      when: dh_git_before.status == 404
+      when: dh_git_before.status == 404 or (dh_git_pristine_recovery | default(false))
       no_log: true
 
     - name: Read back site repository ownership marker
@@ -224,7 +292,7 @@
           site: "{{ site.id }}"
           repository: "{{ dh_git_owner }}/{{ dh_git_name }}"
           private: true
-          action: "{{ 'CREATED' if dh_git_before.status == 404 else 'ADOPTED' }}"
+          action: "{{ 'CREATED' if dh_git_before.status == 404 else 'RECOVERED' if (dh_git_pristine_recovery | default(false)) else 'ADOPTED' }}"
           marker: VERIFIED
           inventory: VERIFIED
           routine_read_only_access: NOT_COMMISSIONED
