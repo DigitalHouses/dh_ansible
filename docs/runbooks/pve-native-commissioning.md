@@ -1,3 +1,5 @@
+> **LIVE PASS · 02.11.2026 — актуальное состояние:** на новом чистом CT1231 штатный Bootstrap seed of PUBLIC PVE trust, далее Semaphore №00 → №05 → №06 (API `root@pam` и first-time SSH authorized public key) с `pve=READY`, `pve_ssh=READY`, `overall=READY`. Ручной host-root commissioning после Bootstrap **не применялся**. №08 не существует. Второй запуск №06 на идемпотентность ещё ожидается. [Доказательная приёмка](../acceptance/semaphore-beta-fresh-2026-11-02.md). Все нижние инструкции `python3 ... commission-pve-runner.py` относятся только к историческому способу и **не применимы для новых инсталляций**.
+
 ## Новый штатный сценарий — Semaphore Task №06 (PR #112, ещё не live accepted)
 
 Решение владельца: **№06 сама делает PVE commissioning**. Bootstrap получает фактический `vmbr0`/node/TLS CA/leaf fingerprint/SSH host public key напрямую от своего PVE-host-root контекста и переносит **только эти публичные данные** в site inventory. Bootstrap не предоставляет административного SSH-доступа и не вводит пароли. Пользователь через №05 один раз сохраняет root password.
