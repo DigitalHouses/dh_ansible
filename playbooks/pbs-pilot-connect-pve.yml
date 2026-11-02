@@ -179,7 +179,10 @@
     - name: Refuse replacing any PVE storage ID or existing secret
       ansible.builtin.assert:
         that:
-          - "not ((pbs_storage_cfg.content | b64decode) is search('(?m)^\\S+: ' ~ pbs.pilot.datastore ~ '    - name: Create exact PVE PBS pilot storage, initially disabled
+          - "not ((pbs_storage_cfg.content | b64decode) is search('(?m)^\\S+: ' ~ pbs.pilot.datastore ~ '$'))"
+          - not pbs_existing_pve_secret.stat.exists
+        fail_msg: PBS_PVE_STORAGE_ID_OR_SECRET_ALREADY_EXISTS
+    - name: Create exact PVE PBS pilot storage, initially disabled
       ansible.builtin.command:
         argv:
           - pvesm
