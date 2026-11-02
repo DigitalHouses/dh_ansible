@@ -57,6 +57,7 @@
           -o ConnectTimeout=10
         pbs: "{{ pbs }}"
         media_vm: "{{ media_vm }}"
+        site: "{{ site }}"
       changed_when: false
     - name: Register already commissioned Media VM with strictly pinned SSH
       ansible.builtin.add_host:
@@ -134,7 +135,7 @@
       ansible.builtin.include_role:
         name: infrastructure_access
       vars:
-        infrastructure_access_capability: software_install
+        infrastructure_access_capability: software_manage
     - name: Require current Debian VM, distro and kernel identity
       ansible.builtin.assert:
         that:
@@ -155,7 +156,7 @@
     - name: Require exactly the newly recreated healthy pool
       ansible.builtin.assert:
         that:
-          - "pool_state.stdout == 'serzhan-pool\\t40733622006301358\\tONLINE'"
+          - "pool_state.stdout.split() == ['serzhan-pool', '40733622006301358', 'ONLINE']"
         fail_msg: PBS_MEDIA_INLINE_POOL_GUID_DRIFT
     - name: Validate existing Hitachi VDEV and no pool data errors
       ansible.builtin.command:
