@@ -1,0 +1,428 @@
+---
+# 92 | PBS service VM. Native Ansible / pinned PVE SSH, never a root worker.
+# This stage ONLY provisions the guest and installs official PBS packages.
+# Datastores, NFS exports, S3 secrets, PVE backup jobs and root PAM password
+# are separate deliberately gated infrastructure operations.
+- name: PBS 92 | Resolve exact private site declaration
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  vars:
+    pbs_site_api: "https://api.github.com/repos/DigitalHouses/site-{{ site.id }}"
+    pbs_github_headers:
+      Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+      Accept: application/vnd.github+json
+      X-GitHub-Api-Version: "2022-11-28"
+  pre_tasks:
+    - name: Load current site identity
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/group_vars/all.yml"
+    - name: Load observed PVE identity from host-root bootstrap
+      ansible.builtin.include_vars:
+        file: "{{ inventory_dir }}/pve-runtime.yml"
+    - name: Require trusted site and commissioned private Git credential
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - (ansible_connection | default('')) == 'local'
+          - ansible_play_hosts_all | length == 1
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pve_observed.source == 'host_root_vmbr0'
+          - pve_observed.ipv4 is match('^[0-9]+(\\.[0-9]+){3}$')
+          - pve_observed.node | length > 0
+          - DH_GITHUB_PROVISION_TOKEN is defined
+          - DH_GITHUB_PROVISION_TOKEN | default('') | length > 20
+        fail_msg: PBS_SITE_IDENTITY_OR_GITHUB_NOT_COMMISSIONED
+      no_log: true
+  tasks:
+    - name: Verify private site repository ownership
+      ansible.builtin.uri:
+        url: "{{ pbs_site_api }}"
+        headers: "{{ pbs_github_headers }}"
+        method: GET
+        validate_certs: true
+        status_code: 200
+        timeout: 25
+      register: pbs_repo
+      changed_when: false
+      no_log: true
+    - name: Require exact private site repository
+      ansible.builtin.assert:
+        that:
+          - pbs_repo.json.private == true
+          - pbs_repo.json.owner.login == 'DigitalHouses'
+          - pbs_repo.json.name == 'site-' ~ site.id
+          - pbs_repo.json.default_branch == 'main'
+          - not pbs_repo.json.archived
+        fail_msg: PBS_SITE_REPOSITORY_MISMATCH
+      no_log: true
+    - name: Read site identity marker
+      ansible.builtin.uri:
+        url: "{{ pbs_site_api }}/contents/.digitalhouses/site.json?ref=main"
+        headers: "{{ pbs_github_headers }}"
+        method: GET
+        status_code: 200
+        timeout: 20
+      register: pbs_site_marker
+      changed_when: false
+      no_log: true
+    - name: Require exact marker for this home
+      ansible.builtin.assert:
+        that:
+          - (pbs_site_marker.json.content | b64decode | from_json).site_id == site.id
+          - (pbs_site_marker.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
+        fail_msg: PBS_PRIVATE_SITE_MARKER_INVALID
+      no_log: true
+    - name: Read site-specific nonsecret PBS VM declaration
+      ansible.builtin.uri:
+        url: "{{ pbs_site_api }}/contents/inventories/{{ site.id }}/pbs.yml?ref=main"
+        headers: "{{ pbs_github_headers }}"
+        method: GET
+        status_code: 200
+        timeout: 20
+      register: pbs_declaration
+      changed_when: false
+      no_log: true
+    - name: Validate private declaration identity
+      ansible.builtin.assert:
+        that:
+          - pbs_declaration.json.encoding == 'base64'
+          - pbs_declaration.json.size | int < 32768
+          - pbs_declaration.json.path == 'inventories/' ~ site.id ~ '/pbs.yml'
+        fail_msg: PBS_SITE_DECLARATION_INVALID
+    - name: Read approved PBS properties
+      ansible.builtin.set_fact:
+        pbs: "{{ (pbs_declaration.json.content | b64decode | from_yaml).pbs }}"
+      no_log: true
+    - name: Require safe VM-only provisioning contract
+      ansible.builtin.assert:
+        that:
+          - pbs.name == 'pbs-' ~ site.owner_slug
+          - pbs.vmid | int == 2000 + (pbs.network.ipv4.split('/')[0].split('.')[-1] | int)
+          - pbs.vmid | int >= 2200
+          - pbs.vmid | int <= 2254
+          - pbs.network.bridge == 'vmbr0'
+          - pbs.network.ipv4 | ansible.utils.ipaddr('address') is defined
+          - pbs.network.static_ip_outside_dhcp == true
+          - pbs.os.distribution == 'debian'
+          - pbs.os.major_version | int == 13
+          - pbs.resources.cores | int >= 2
+          - pbs.resources.memory_mb | int >= 4096
+          - pbs.resources.disk_gb | int >= 32
+          - pbs.bootstrap.provision_approved == true
+          - pbs.bootstrap.destroy_existing == false
+          - pbs.safety.never_touch_media_disk == true
+          - pbs.safety.never_touch_other_guests == true
+          - pbs.backup.local_datastore == 'not_configured'
+          - pbs.backup.s3_datastore == 'not_configured'
+          - pbs.backup.backup_jobs == 'not_configured'
+        fail_msg: PBS_VM_APPROVAL_OR_NONDESTRUCTIVE_SCOPE_BLOCKED
+    - name: Require working commissioned runner administrator
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Read current site SSH public key
+      ansible.builtin.slurp:
+        src: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519.pub
+      register: pbs_runner_public_key
+      no_log: true
+    - name: Validate site SSH public key
+      ansible.builtin.assert:
+        that:
+          - (pbs_runner_public_key.content | b64decode | trim) is match('^ssh-ed25519 [A-Za-z0-9+/=]+ dh-pve-' ~ site.id ~ '$')
+        fail_msg: PBS_MANAGED_SSH_KEY_MISSING
+      no_log: true
+    - name: Register pinned PVE target
+      ansible.builtin.add_host:
+        name: pbs_pve
+        groups: dh_pbs_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_connection: ssh
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+        pbs_observed_node: "{{ pve_observed.node }}"
+        pbs_observed_ip: "{{ pve_observed.ipv4 }}"
+        pbs_ssh_pubkey: "{{ pbs_runner_public_key.content | b64decode | trim }}"
+      changed_when: false
+      no_log: true
+    - name: Register Debian guest endpoint
+      ansible.builtin.add_host:
+        name: pbs_guest
+        groups: dh_pbs_guest
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+      changed_when: false
+      no_log: true
+
+- name: PBS 92 | Native VM create, never replace or erase
+  hosts: dh_pbs_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Verify root privileges on the commissioned PVE host
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Confirm exact PVE node hostname
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: pbs_pve_hostname
+      changed_when: false
+    - name: Refuse unexpected PVE host or storage
+      ansible.builtin.assert:
+        that:
+          - pbs_pve_hostname.stdout == pbs_observed_node
+          - pbs.vmid | int != 2232
+          - pbs.vmid | int != 2253
+          - pbs.vmid | int != 1231
+        fail_msg: PBS_PVE_NODE_OR_GUEST_COLLISION
+    - name: Inspect exact VM config path without modifying it
+      ansible.builtin.stat:
+        path: "/etc/pve/qemu-server/{{ pbs.vmid }}.conf"
+        follow: false
+      register: pbs_existing_vm
+    - name: Read the existing VM config if VMID occupied
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_existing_config
+      changed_when: false
+      when: pbs_existing_vm.stat.exists
+    - name: Reject foreign VMID instead of adopting by name only
+      ansible.builtin.assert:
+        that:
+          - "'name: ' ~ pbs.name in pbs_existing_config.stdout_lines"
+          - "'description: DigitalHouses managed PBS guest v1' in pbs_existing_config.stdout_lines"
+          - "'hostpci0:' not in pbs_existing_config.stdout"
+          - "'hostpci1:' not in pbs_existing_config.stdout"
+          - "'scsi0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-' in pbs_existing_config.stdout"
+        fail_msg: PBS_FOREIGN_VMID_OCCUPIED
+      when: pbs_existing_vm.stat.exists
+    - name: Require local-lvm storage online
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, local-lvm]
+      register: pbs_local_lvm
+      changed_when: false
+    - name: Require active local-lvm before provisioning
+      ansible.builtin.assert:
+        that: "'active' in pbs_local_lvm.stdout"
+        fail_msg: PBS_LOCAL_LVM_OFFLINE
+    - name: Refuse a responding IP on first VM creation
+      ansible.builtin.command:
+        argv: [ping, -c, '1', -W, '1', "{{ pbs.network.ipv4.split('/')[0] }}"]
+      register: pbs_target_ping
+      changed_when: false
+      failed_when: false
+      when: not pbs_existing_vm.stat.exists
+    - name: Require declared IP does not respond before first creation
+      ansible.builtin.assert:
+        that: pbs_target_ping.rc != 0
+        fail_msg: PBS_IP_ADDRESS_ALREADY_IN_USE
+      when: not pbs_existing_vm.stat.exists
+    - name: Create only the absent managed PBS VM
+      ansible.builtin.command:
+        argv:
+          - qm
+          - create
+          - "{{ pbs.vmid }}"
+          - --name
+          - "{{ pbs.name }}"
+          - --description
+          - DigitalHouses managed PBS guest v1
+          - --ostype
+          - l26
+          - --machine
+          - q35
+          - --memory
+          - "{{ pbs.resources.memory_mb }}"
+          - --balloon
+          - '0'
+          - --cores
+          - "{{ pbs.resources.cores }}"
+          - --cpu
+          - host
+          - --scsihw
+          - virtio-scsi-single
+          - --net0
+          - virtio,bridge=vmbr0
+          - --serial0
+          - socket
+          - --vga
+          - std
+          - --agent
+          - enabled=1
+          - --onboot
+          - '1'
+      when: not pbs_existing_vm.stat.exists
+    - name: Read VM settings after its guarded creation
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_vm_config
+      changed_when: false
+    - name: Fetch official Debian image SHA512 manifest
+      ansible.builtin.uri:
+        url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 40
+      register: pbs_image_manifest
+      changed_when: false
+      when: "'scsi0:' not in pbs_vm_config.stdout"
+    - name: Determine verified expected Debian cloud image SHA512
+      ansible.builtin.set_fact:
+        pbs_expected_sha512: "{{ (pbs_image_manifest.content | regex_findall('(?m)^([0-9a-f]{128})\\s+debian-13-generic-amd64[.]qcow2\\s*$') | first | default('')) }}"
+      when: "'scsi0:' not in pbs_vm_config.stdout"
+    - name: Refuse missing Debian image signing manifest
+      ansible.builtin.assert:
+        that: pbs_expected_sha512 is match('^[0-9a-f]{128}$')
+        fail_msg: PBS_OFFICIAL_DEBIAN_IMAGE_CHECKSUM_MISSING
+      when: "'scsi0:' not in pbs_vm_config.stdout"
+    - name: Prepare trusted image cache
+      ansible.builtin.file:
+        path: /var/cache/digitalhouses/pbs
+        state: directory
+        owner: root
+        group: root
+        mode: '0700'
+      when: "'scsi0:' not in pbs_vm_config.stdout"
+    - name: Download or independently verify Debian 13 cloud image
+      ansible.builtin.get_url:
+        url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+        dest: /var/cache/digitalhouses/pbs/debian-13-generic-amd64.qcow2
+        checksum: "sha512:{{ pbs_expected_sha512 }}"
+        owner: root
+        group: root
+        mode: '0600'
+        timeout: 120
+      when: "'scsi0:' not in pbs_vm_config.stdout"
+    - name: Import only new VM OS volume into local-lvm
+      ansible.builtin.command:
+        argv: [qm, importdisk, "{{ pbs.vmid }}", /var/cache/digitalhouses/pbs/debian-13-generic-amd64.qcow2, local-lvm]
+      when:
+        - "'scsi0:' not in pbs_vm_config.stdout"
+        - "'unused0:' not in pbs_vm_config.stdout"
+    - name: Read imported boot volume
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_after_import
+      changed_when: false
+    - name: Identify the exact PVE-managed unattached boot volume
+      ansible.builtin.set_fact:
+        pbs_unused_line: "{{ pbs_after_import.stdout_lines | select('match', '^unused0: local-lvm:vm-') | list | first | default('') }}"
+      when: "'scsi0:' not in pbs_after_import.stdout"
+    - name: Require expected local-lvm volume identity
+      ansible.builtin.assert:
+        that:
+          - pbs_unused_line is match('^unused0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-[0-9]+.*$')
+        fail_msg: PBS_IMPORT_VOLUME_NOT_OWNED_BY_VM
+      when: "'scsi0:' not in pbs_after_import.stdout"
+    - name: Attach only verified unassigned VM OS volume
+      ansible.builtin.command:
+        argv:
+          - qm
+          - set
+          - "{{ pbs.vmid }}"
+          - --scsi0
+          - "{{ pbs_unused_line | regex_replace('^unused0: ', '') | regex_replace(',.*$', '') }},discard=on,iothread=1"
+      when: "'scsi0:' not in pbs_after_import.stdout"
+    - name: Expand managed boot volume to approved size if newly created
+      ansible.builtin.command:
+        argv: [qm, resize, "{{ pbs.vmid }}", scsi0, "{{ pbs.resources.disk_gb }}G"]
+      when: not pbs_existing_vm.stat.exists
+    - name: Reconcile only newly-created VM cloud-init settings
+      when: not pbs_existing_vm.stat.exists
+      block:
+        - name: Add cloud-init volume
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --ide2, local-lvm:cloudinit]
+        - name: Set guest account
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --ciuser, debian]
+        - name: Set the site-approved static address
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --ipconfig0, "ip={{ pbs.network.ipv4 }},gw={{ pbs.network.gateway }}"]
+        - name: Set LAN DNS
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --nameserver, "{{ pbs.network.gateway }}"]
+        - name: Transfer site public key only to the PVE host
+          ansible.builtin.copy:
+            dest: "/run/dh-pbs-{{ pbs.vmid }}.pub"
+            content: "{{ pbs_ssh_pubkey }}\n"
+            owner: root
+            group: root
+            mode: '0600'
+        - name: Configure guest SSH access from commissioned site runner
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --sshkeys, "/run/dh-pbs-{{ pbs.vmid }}.pub"]
+        - name: Set boot order
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --boot, order=scsi0]
+        - name: Enable accidental-delete protection on PBS guest
+          ansible.builtin.command:
+            argv: [qm, set, "{{ pbs.vmid }}", --protection, '1']
+        - name: Reconcile VM cloud-init drive
+          ansible.builtin.command:
+            argv: [qm, cloudinit, update, "{{ pbs.vmid }}"]
+      always:
+        - name: Remove temporary PVE copy of the public key
+          ansible.builtin.file:
+            path: "/run/dh-pbs-{{ pbs.vmid }}.pub"
+            state: absent
+    - name: Verify exact VM owner marker and its boot disk
+      ansible.builtin.command:
+        argv: [qm, config, "{{ pbs.vmid }}"]
+      register: pbs_final_config
+      changed_when: false
+    - name: Reject provisioned VM if owner marker or OS disk drifts
+      ansible.builtin.assert:
+        that:
+          - "'name: ' ~ pbs.name in pbs_final_config.stdout_lines"
+          - "'description: DigitalHouses managed PBS guest v1' in pbs_final_config.stdout_lines"
+          - "'scsi0: local-lvm:vm-' ~ (pbs.vmid | string) ~ '-disk-' in pbs_final_config.stdout"
+          - "'hostpci0:' not in pbs_final_config.stdout"
+          - "'hostpci1:' not in pbs_final_config.stdout"
+          - "'ipconfig0: ip=' ~ pbs.network.ipv4 in pbs_final_config.stdout"
+        fail_msg: PBS_GUEST_OWNER_OR_CONFIG_DRIFT
+    - name: Read current PBS VM runtime state
+      ansible.builtin.command:
+        argv: [qm, status, "{{ pbs.vmid }}"]
+      register: pbs_vm_state
+      changed_when: false
+    - name: Start new managed PBS guest if stopped
+      ansible.builtin.command:
+        argv: [qm, start, "{{ pbs.vmid }}"]
+      when: pbs_vm_state.stdout == 'status: stopped'
+
+- name: PBS 92 | Install official backup server software
+  hosts: dh_pbs_guest
+  gather_facts: true
+  become: true
+  pre_tasks:
+    - name: Wait for DHCP-free static Debian cloud-init / SSH
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        sleep: 6
+        connect_timeout: 8
+        timeout: 540
+      changed_when: false
+  roles:
+    - pbs_guest
