@@ -38,7 +38,8 @@ jobs:
             tests/test_semaphore_local_site_inventory.py \
             tests/test_semaphore_native_ansible_runtime.py \
             tests/test_pve_legacy_ca_credential_runtime.py \
-            tests/test_task06_pve_native_enrollment.py
+            tests/test_task06_pve_native_enrollment.py \
+            tests/test_task05_mqtt_broker_endpoint.py
       - name: Validate Task 05/06 Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml

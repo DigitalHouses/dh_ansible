@@ -80,6 +80,40 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         sync(api, PATH, target, apply=True)
         self.assertEqual(len(api.writes), 1)
 
+    def test_live_five_field_survey_upgrades_to_six_without_losing_history(self):
+        api = FakeTemplates()
+        desired = desired_from(api)
+        api.current["name"] = TASK05["title"]
+        api.current["playbook"] = TASK05["playbook"]
+        original = [field for field in TASK05["survey_vars"]
+                    if field["name"] != "DH_INPUT_MQTT_BROKER_HOST"]
+        self.assertEqual(len(original), 5)
+        self.assertEqual(len(desired["survey_vars"]), 6)
+        api.current["survey_vars"] = original
+        sync = SEEDER["sync_existing_template"]
+        sync(api, PATH, desired, apply=False)
+        self.assertEqual(api.writes, [])
+        sync(api, PATH, desired, apply=True)
+        self.assertEqual(api.current["survey_vars"], desired["survey_vars"])
+        self.assertEqual(api.current["id"], 41)
+        self.assertEqual(api.current["task_id"], 123456)
+        self.assertEqual(len(api.writes), 1)
+        sync(api, PATH, desired, apply=True)
+        self.assertEqual(len(api.writes), 1)
+
+    def test_five_field_survey_drift_blocks_mqtt_host_append(self):
+        api = FakeTemplates()
+        desired = desired_from(api)
+        api.current["name"] = TASK05["title"]
+        api.current["playbook"] = TASK05["playbook"]
+        original = [field.copy() for field in TASK05["survey_vars"]
+                    if field["name"] != "DH_INPUT_MQTT_BROKER_HOST"]
+        original[2]["type"] = "text"  # password must remain hidden
+        api.current["survey_vars"] = original
+        with self.assertRaisesRegex(SEEDER["Blocked"], "survey"):
+            SEEDER["sync_existing_template"](api, PATH, desired, apply=True)
+        self.assertEqual(api.writes, [])
+
     def test_existing_old_and_new_names_fail_closed(self):
         api = FakeTemplates()
         api.others.append({**api.current, "id": 42,

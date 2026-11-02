@@ -505,6 +505,7 @@ def read_public_catalog():
                         # site-credentials registry is checked by tests.
                         allowed = {
                             "DH_INPUT_GITHUB_PROVISION_TOKEN": "secret",
+                            "DH_INPUT_MQTT_BROKER_HOST": "text",
                             "DH_INPUT_MQTT_USERNAME": "text",
                             "DH_INPUT_MQTT_PASSWORD": "secret",
                             "DH_INPUT_PVE_ROOT_PASSWORD": "secret",
@@ -590,7 +591,7 @@ def equivalent_task05_survey(title, existing, wanted):
     if (title != "05-Ввести credentials объекта"
             or not isinstance(existing, list)
             or not isinstance(wanted, list)
-            or len(existing) != len(wanted) or len(wanted) != 5):
+            or len(existing) != len(wanted) or len(wanted) not in (5, 6)):
         return False
     for actual, desired in zip(existing, wanted):
         if not isinstance(actual, dict) or not isinstance(desired, dict):
@@ -618,6 +619,18 @@ def allowed_survey_upgrade(title, existing, wanted):
         return True
     if equivalent_task05_survey(title, existing, wanted):
         return True
+    # Known append-only site parameter upgrade: insert one nonsecret MQTT
+    # endpoint field next to existing username/password. Protect every
+    # pre-existing field (including title/description/hidden secret types).
+    if (title == "05-Ввести credentials объекта"
+            and isinstance(existing, list)
+            and isinstance(wanted, list) and len(wanted) == 6
+            and len(existing) == 5
+            and [v.get("name") for v in wanted if isinstance(v, dict)].count(
+                "DH_INPUT_MQTT_BROKER_HOST") == 1):
+        old_wanted = [v for v in wanted
+                      if v.get("name") != "DH_INPUT_MQTT_BROKER_HOST"]
+        return equivalent_task05_survey(title, existing, old_wanted)
     if title != "80-Медиасервер · Развёртывание":
         return False
     if [entry.get("name") for entry in wanted] != [

@@ -85,15 +85,32 @@ def test_task05_real_ansible_verifies_saved_secret_names():
         "vars": {
             "dh_after": {"json": {
                 "id": 17, "secrets": [{"name": "DH_PVE_ROOT_PASSWORD"}],
-                "env": '{"DH_MQTT_USERNAME":"dummy-login"}',
+                "env": '{"DH_MQTT_USERNAME":"dummy-login","DH_MQTT_BROKER_HOST":"broker.example.test"}',
             }},
             "dh_groups": [{"id": 17}],
             "dh_secret_operations": [{"name": "DH_PVE_ROOT_PASSWORD"}],
-            "dh_supplied": {"DH_MQTT_USERNAME": "dummy-login"},
+            "dh_supplied": {"DH_MQTT_USERNAME": "dummy-login", "DH_MQTT_BROKER_HOST": "broker.example.test"},
         },
         "tasks": [{
             "name": "Run exact post-write contract predicates",
             "ansible.builtin.assert": metadata["ansible.builtin.assert"],
+            "no_log": True,
+        }],
+    })
+
+
+def test_task05_real_ansible_validates_broker_host_before_api_call():
+    check = find_task(
+        "Validate the supplied broker IPv4/DNS endpoint"
+    )
+    assert check["no_log"] is True
+    run_ansible({
+        "name": "Runtime-evaluate valid site MQTT broker input (dummy only)",
+        "hosts": "localhost", "gather_facts": False,
+        "vars": {"dh_supplied": {"DH_MQTT_BROKER_HOST": "broker.example.test"}},
+        "tasks": [{
+            "name": "Validate broker input",
+            "ansible.builtin.assert": check["ansible.builtin.assert"],
             "no_log": True,
         }],
     })

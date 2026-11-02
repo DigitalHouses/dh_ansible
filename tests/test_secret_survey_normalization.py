@@ -1,6 +1,6 @@
 """Native Task 05 Survey: harmless Semaphore API normalization preserves IDs/history.
 
-Five optional fields are owned by Semaphore. Empty inputs mean KEEP.
+Six optional fields are owned by Semaphore. Empty inputs mean KEEP.
 Secret/text input is never admitted via the old enum-only CLI launcher.
 """
 import importlib.util

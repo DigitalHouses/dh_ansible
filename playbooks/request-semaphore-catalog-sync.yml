@@ -64,6 +64,31 @@
       register: catalog_sync_id
       changed_when: false
       check_mode: false
+    - name: Inspect vetted catalog manager bundled with this public checkout
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../bootstrap/semaphore-project.py"
+        follow: false
+      register: dh_catalog_manager_candidate
+      changed_when: false
+
+    - name: Require safe, regular catalog manager source
+      ansible.builtin.assert:
+        that:
+          - dh_catalog_manager_candidate.stat.isreg | default(false)
+          - not dh_catalog_manager_candidate.stat.islnk | default(false)
+          - dh_catalog_manager_candidate.stat.size | int < 150000
+        fail_msg: CATALOG_MANAGER_SOURCE_UNSAFE
+
+    - name: Bring the root-owned catalog manager up to the reviewed Git release
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/../bootstrap/semaphore-project.py"
+        dest: /opt/digitalhouses/bootstrap/semaphore-project.py
+        owner: root
+        group: root
+        mode: "0644"
+      become: true
+      no_log: true
+
     - name: Ask the fixed root worker to synchronize the catalog
       ansible.builtin.copy:
         dest: /var/lib/semaphore/dh-semaphore-catalog-sync.request
