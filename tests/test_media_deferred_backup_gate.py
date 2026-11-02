@@ -92,18 +92,26 @@ def test_dhcp_verified_requires_explicit_lan_range_and_outside_lease_pool():
     assert pool_last < vm_ip <= 254 and pool_first < pool_last
 
 
-def test_pve_worker_carries_actions_inside_fixed_nonce_scoped_plan_request():
-    survey = (ROOT / "playbooks/plan-pve-media-vm.yml").read_text()
-    worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
-    audit = (ROOT / "playbooks/audit-pve-access.yml").read_text()
-    assert "MEDIA_PLAN_{{ media_vm_action | upper }}_{{ media_raw_disk_action | upper }}" in survey
-    assert "MEDIA_PLAN_(CREATE|RECREATE|KEEP)_(IMPORT|ERASE)" in worker
-    assert 'media_vm_action=$MEDIA_PLAN_VM_ACTION' in worker
-    assert 'media_raw_disk_action=$MEDIA_PLAN_DISK_ACTION' in worker
-    assert "'requested_vm_action': media_vm_action" in audit
-    assert "'requested_disk_action': media_raw_disk_action" in audit
-    assert "media_plan_summary.requested_vm_action == media_vm_action" in survey
-    assert "media_plan_summary.requested_disk_action == media_raw_disk_action" in survey
+def test_task80_carries_survey_actions_through_native_hardware_gate():
+    # Current Task 80 uses commissioned PVE SSH + Ansible become, not a
+    # nonce-scoped one-off root worker.
+    plays = read("playbooks/plan-pve-media-vm.yml")
+    assert len(plays) == 4
+    pre = plays[0]["pre_tasks"][0]["ansible.builtin.assert"]["that"]
+    assert "media_vm_action in ['create', 'keep', 'recreate']" in pre
+    assert "media_raw_disk_action in ['import', 'erase']" in pre
+    steps = plays[1]["tasks"]
+    names = [step["name"] for step in steps]
+    preflight = names.index("Verify PVE/CT/hardware ownership before any VM or disk writes")
+    gate = names.index("Require completed independent hardware and VM preflight")
+    apply = names.index("Provision only the declared PVE media VM by native Ansible SSH")
+    assert preflight < gate < apply
+    assert "scripts/dh-media-pve-preflight.py" in str(steps[preflight])
+    assert "--vm-action {{ media_vm_action }}" in str(steps[preflight])
+    assert "--disk-action {{ media_raw_disk_action }}" in str(steps[preflight])
+    assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in str(steps[gate])
+    assert "--vm-action {{ media_vm_action }}" in str(steps[apply])
+    assert "--raw-disk-action {{ media_raw_disk_action }}" in str(steps[apply])
 
 
 def test_pve_backup_mapping_is_deferred_until_separate_post_acceptance_operation():
