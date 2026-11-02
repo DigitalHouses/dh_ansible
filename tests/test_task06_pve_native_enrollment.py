@@ -117,10 +117,17 @@ def test_readiness_is_only_after_key_based_remote_root_identity():
     assert names.index("Verify expected root privileges and exact live node") < (
         names.index("Report full PVE credential and infrastructure readiness")
     )
-    msg = final["tasks"][-1]["ansible.builtin.debug"]["msg"]
-    assert msg["overall"] == "READY"
+    report = next(t for t in final["tasks"]
+                  if t["name"] == "Report full PVE credential and infrastructure readiness")
+    msg = report["ansible.builtin.debug"]["msg"]
+    assert "dh_mqtt_status" in msg["overall"]
+    assert "dh_cloudflare_status" in msg["overall"]
     assert msg["pve_ssh"]["status"] == "READY"
     assert msg["password_or_ticket_logged"] is False
+    gate = final["tasks"][-1]
+    assert gate["name"] == "Block downstream changes if supplied external credentials are invalid"
+    assert "dh_mqtt_status" in str(gate)
+    assert "dh_cloudflare_status" in str(gate)
 
 
 def test_bootstrap_tiny_contract_and_python_syntax():
