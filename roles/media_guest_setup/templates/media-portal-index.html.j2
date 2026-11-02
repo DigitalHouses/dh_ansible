@@ -126,7 +126,7 @@ footer{margin-top:42px;padding-top:20px;border-top:1px solid #314358;color:#aebe
 Портал работает внутри вашей локальной сети. Он помогает находить приложения, но не заменяет их авторизацию. Если сервис не открывается, обратитесь к администратору DigitalHouses.
 <div class="admin-cli">
   <span>PVE · root:</span>
-  <input id="pve-root-cli" type="text" value="/usr/local/sbin/dh-media-password-show" readonly aria-label="Команда просмотра пароля владельца в root-консоли PVE" spellcheck="false">
+  <input id="pve-root-cli" type="text" value="qm guest exec {{ media_vm.vmid }} -- cat /{{ media_vm.storage.pool_name }}/digitalhouses/credentials/{{ site.owner_slug }}.txt" readonly aria-label="Команда просмотра пароля владельца в root-консоли PVE" spellcheck="false">
   <button type="button" id="pve-root-copy" title="Скопировать команду" aria-label="Скопировать команду для root PVE">
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>
   </button>
