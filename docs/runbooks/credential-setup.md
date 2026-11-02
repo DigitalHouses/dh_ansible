@@ -139,5 +139,26 @@ GitHub Deploy Keys, удаление PAT, использованного для 
 отзывать этот PAT. Повседневное чтение самого репозитория уже выполняется
 через Key Store SSH identity, без использования PAT.
 
-Сама публикация playbook/тестов не равна live приемке. Статус новой
-возможности считать `PENDING` до успешного запуска через Semaphore.
+**№07 Task #23 (02.11.2026, live PASS):** Приватный репозиторий `site-serzhan-home`
+проверен, Key Store SSH identity Ed25519 создана, GitHub deploy key
+`read_only=true` подтверждён, Semaphore repository SSH-url зарегистрирован;
+`action=ADOPTED`, `routine_read_only_access=REGISTERED_CLONE_NOT_VERIFIED`,
+`failed=0`. Публичная часть записана в private site-repo; приватная —
+только в native Semaphore Key Store.
+
+**Следующий этап той же №07:** API Semaphore
+`GET /project/{id}/repositories/{id}/branches` вызывает реальный
+`git ls-remote` через SSH Key Store identity; требует ветку `main`.
+Затем `GET /project/{id}/repositories/{id}/playbooks?branch=main&app=ansible`
+выполняет `CloneOrPull` на стороне Semaphore. Успех обоих вызовов
+(`HTTP 200`, ожидаемый JSON) означает
+`routine_read_only_access=VERIFIED_NATIVE_SSH_CLONE`.
+В site-data repo пока не нужны playbooks, пустой список ожидаем.
+Ошибки не раскрывают приватные ключи, токены или HTTP response body,
+только безопасный код/HTTP status. Возможные блокеры —
+SSH host-key trust и исходящий TCP 22. Не использовать
+`StrictHostKeyChecking=no` для обхода проблем; разрешён только
+штатный pinned trust или конфигурация Semaphore.
+
+Сама публикация playbook/тестов не равна live приёмке нового clone-check:
+он `PENDING` до успешной №07 через Semaphore.
