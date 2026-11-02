@@ -1,0 +1,179 @@
+---
+# Target: ONLY BIOS GRUB in PBS VM2233's own 32 GiB QEMU boot disk.
+# Never touch /dev/sdb (Hitachi 4 TB), PVE disks, PCI or ZFS pools.
+# Does not reboot; the separately gated kernel playbook handles reboot.
+- name: PBS GRUB | Validate private commissioning and register PBS
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load private PBS inventory
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Require commissioned PCI pilot and guest kernel repair
+      ansible.builtin.assert:
+        that:
+          - site.id == 'serzhan-home'
+          - pbs.vmid | int == 2233
+          - pbs.name == 'pbs-serzhan'
+          - pbs.network.ipv4.split('/')[0] == '192.168.11.233'
+          - pbs.pilot.zfs_guest_kernel_approved | default(false) | bool
+          - pbs.safety.never_touch_media_disk | bool
+        fail_msg: PBS_GRUB_WRONG_SITE_OR_NOT_APPROVED
+    - name: Register verified PBS guest
+      ansible.builtin.add_host:
+        name: pbs_grub_guest
+        groups: dh_pbs_grub_guest
+        ansible_host: 192.168.11.233
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+      changed_when: false
+
+- name: PBS GRUB | Repair verified system boot disk without rebooting
+  hosts: dh_pbs_grub_guest
+  gather_facts: false
+  become: true
+  vars:
+    bootdisk: /dev/disk/by-id/scsi-0QEMU_QEMU_HARDDISK_drive-scsi0
+  tasks:
+    - name: Inspect actual guest OS
+      ansible.builtin.setup:
+    - name: Require exact PBS guest
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - ansible_facts['hostname'] == 'pbs-serzhan'
+          - ansible_facts['default_ipv4']['address'] == '192.168.11.233'
+    - name: Verify commissioned privilege level
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: software_manage
+    - name: Detect EFI to prevent BIOS GRUB repair on EFI guest
+      ansible.builtin.stat:
+        path: /sys/firmware/efi
+      register: firmware_efi
+    - name: Discover root block source
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, /]
+      register: rootsrc
+      changed_when: false
+    - name: Resolve boot disk by stable QEMU ID
+      ansible.builtin.command:
+        argv: [readlink, -f, "{{ bootdisk }}"]
+      register: resolved_bootdisk
+      changed_when: false
+    - name: Read exact system disk size
+      ansible.builtin.command:
+        argv: [lsblk, -dn, -b, -o, SIZE, /dev/sda]
+      register: bootsize
+      changed_when: false
+    - name: Read separate Hitachi media disk identity
+      ansible.builtin.command:
+        argv: [lsblk, -dn, -o, MODEL, /dev/sdb]
+      register: mediamodel
+      changed_when: false
+    - name: Read separate Hitachi media disk size
+      ansible.builtin.command:
+        argv: [lsblk, -dn, -b, -o, SIZE, /dev/sdb]
+      register: mediasize
+      changed_when: false
+    - name: Require all safety conditions before GRUB configuration
+      ansible.builtin.assert:
+        that:
+          - not firmware_efi.stat.exists
+          - rootsrc.stdout == '/dev/sda1'
+          - resolved_bootdisk.stdout == '/dev/sda'
+          - bootsize.stdout | trim | int == 34359738368
+          - "'Hitachi' in mediamodel.stdout"
+          - mediasize.stdout | trim | int > 3500000000000
+          - mediasize.stdout | trim | int < 4500000000000
+        fail_msg: PBS_GRUB_DISK_MISMATCH_DO_NOT_WRITE
+    - name: Confirm installed Proxmox kernel
+      ansible.builtin.stat:
+        path: /boot/vmlinuz-7.0.14-26-pve
+      register: kernel_file
+    - name: Confirm existing GRUB configuration
+      ansible.builtin.stat:
+        path: /boot/grub/grub.cfg
+      register: grub_cfg
+    - name: Require existing kernel and GRUB files
+      ansible.builtin.assert:
+        that:
+          - kernel_file.stat.isreg | default(false)
+          - grub_cfg.stat.isreg | default(false)
+    - name: Read GRUB package install status
+      ansible.builtin.command:
+        argv: [dpkg, -s, grub-pc]
+      register: grub_pkg
+      changed_when: false
+    - name: Require installed or half-configured GRUB package
+      ansible.builtin.assert:
+        that:
+          - "grub_pkg.stdout is search('(?m)^Status: install ok (installed|half-configured|unpacked)$')"
+    - name: Read existing Debian GRUB target
+      ansible.builtin.command:
+        argv: [debconf-show, grub-pc]
+      register: grub_selections
+      changed_when: false
+    - name: Preseed BIOS GRUB to verified PBS system disk ONLY
+      ansible.builtin.command:
+        argv: [debconf-set-selections]
+        stdin: |
+          grub-pc grub-pc/install_devices multiselect {{ bootdisk }}
+          grub-pc grub-pc/install_devices_empty boolean false
+      when: "bootdisk not in grub_selections.stdout or 'Status: install ok installed' not in grub_pkg.stdout"
+    - name: Verify GRUB chose the guarded disk
+      ansible.builtin.command:
+        argv: [debconf-show, grub-pc]
+      register: grub_after
+      changed_when: false
+    - name: Refuse wrong GRUB installation device
+      ansible.builtin.assert:
+        that:
+          - "('grub-pc/install_devices: ' ~ bootdisk) in grub_after.stdout"
+          - "'grub-pc/install_devices_empty: false' in grub_after.stdout"
+        fail_msg: PBS_GRUB_BOOT_DISK_NOT_SELECTED
+    - name: Finish only GRUB's incomplete package configuration
+      ansible.builtin.command:
+        argv: [dpkg, --configure, grub-pc]
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      when: "'Status: install ok installed' not in grub_pkg.stdout"
+    - name: Check overall package database consistency
+      ansible.builtin.command:
+        argv: [dpkg, --audit]
+      register: pkg_audit
+      changed_when: false
+    - name: Require no unfinished packages
+      ansible.builtin.assert:
+        that:
+          - pkg_audit.stdout | trim | length == 0
+        fail_msg: PBS_GRUB_DPKG_STILL_INCOMPLETE
+    - name: Require Proxmox kernel in GRUB boot menu
+      ansible.builtin.command:
+        argv: [grep, -F, vmlinuz-7.0.14-26-pve, /boot/grub/grub.cfg]
+      changed_when: false
+    - name: Confirm backup server still active
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8007
+        state: started
+        timeout: 30
+      changed_when: false
+    - name: Report repair completed without rebooting or modifying Hitachi
+      ansible.builtin.debug:
+        msg:
+          result: PBS_GRUB_READY_FOR_GUEST_REBOOT
+          boot_target: "{{ bootdisk }}"
+          hitachi_untouched: true
+          reboot_performed: false

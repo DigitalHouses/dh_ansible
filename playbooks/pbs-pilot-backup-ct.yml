@@ -1,0 +1,144 @@
+---
+# Pilot workload: one source LXC CT1231, no changes to CT config or existing
+# backups. Two successive online snapshots to compare first/repeated run.
+# Select storage via private site data to allow later PCI/local ZFS comparison.
+- name: PBS pilot | Validate site and register observed PVE
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load site PBS pilot declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Load runtime-observed PVE identity
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require approved pilot source and non-destructive scope
+      ansible.builtin.assert:
+        that:
+          - site.id == 'serzhan-home'
+          - pbs.pilot.source_ctid | int == 1231
+          - pbs.pilot.datastore == 'pbs-pilot'
+          - pbs.bootstrap.provision_approved == true
+          - pve_observed.source == 'host_root_vmbr0'
+          - pve_observed.node == 'pve'
+        fail_msg: PBS_PILOT_NOT_APPROVED
+    - name: Register pinned commissioned PVE administrative SSH
+      ansible.builtin.add_host:
+        name: pbs_backup_pve
+        groups: dh_pbs_backup_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_connection: ssh
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+        pve_observed: "{{ pve_observed }}"
+      changed_when: false
+
+- name: PBS pilot | Two successive online LXC backups
+  hosts: dh_pbs_backup_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Require commissioned root access to PVE
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Check exact source CT config
+      ansible.builtin.command:
+        argv: [pct, config, "{{ pbs.pilot.source_ctid }}"]
+      register: pbs_source_ct_cfg
+      changed_when: false
+    - name: Refuse unexpected source container
+      ansible.builtin.assert:
+        that:
+          - "'hostname: ansible-serzhan-home' in pbs_source_ct_cfg.stdout_lines"
+          - "'rootfs: local-lvm:vm-1231-disk-0' in pbs_source_ct_cfg.stdout"
+        fail_msg: PBS_SOURCE_LXC_IDENTITY_NOT_VERIFIED
+    - name: Confirm source LXC is running
+      ansible.builtin.command:
+        argv: [pct, status, "{{ pbs.pilot.source_ctid }}"]
+      register: pbs_ct_status
+      changed_when: false
+    - name: Refuse stopped or unknown source LXC
+      ansible.builtin.assert:
+        that:
+          - pbs_ct_status.stdout == 'status: running'
+    - name: Check PBS storage readiness on PVE
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ pbs.pilot.datastore }}"]
+      register: pbs_st_ready
+      changed_when: false
+    - name: Require exact backup storage active
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.datastore in pbs_st_ready.stdout
+          - "'active' in pbs_st_ready.stdout"
+    - name: Check available PBS datastore capacity before backup
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ pbs.pilot.datastore }}"]
+      register: pbs_st_before
+      changed_when: false
+    - name: Record first start timestamp
+      ansible.builtin.command:
+        argv: [date, -u, +%Y-%m-%dT%H:%M:%SZ]
+      register: pbs_first_start
+      changed_when: false
+    - name: Perform first LXC snapshot backup (no CT shutdown)
+      ansible.builtin.command:
+        argv:
+          - vzdump
+          - "{{ pbs.pilot.source_ctid }}"
+          - --storage
+          - "{{ pbs.pilot.datastore }}"
+          - --mode
+          - snapshot
+      register: pbs_backup_first
+      changed_when: true
+    - name: Record second start timestamp
+      ansible.builtin.command:
+        argv: [date, -u, +%Y-%m-%dT%H:%M:%SZ]
+      register: pbs_second_start
+      changed_when: false
+    - name: Perform repeat LXC snapshot backup for delta comparison
+      ansible.builtin.command:
+        argv:
+          - vzdump
+          - "{{ pbs.pilot.source_ctid }}"
+          - --storage
+          - "{{ pbs.pilot.datastore }}"
+          - --mode
+          - snapshot
+      register: pbs_backup_second
+      changed_when: true
+    - name: Check PBS storage usage after backups
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ pbs.pilot.datastore }}"]
+      register: pbs_st_after
+      changed_when: false
+    - name: List backup volumes after tests
+      ansible.builtin.command:
+        argv: [pvesm, list, "{{ pbs.pilot.datastore }}", --content, backup]
+      register: pbs_backup_volumes
+      changed_when: false
+    - name: Report timed results for NFS/PCI comparison
+      ansible.builtin.debug:
+        msg:
+          result: PBS_CT_BACKUP_SUCCESS
+          source_ctid: "{{ pbs.pilot.source_ctid }}"
+          datastore: "{{ pbs.pilot.datastore }}"
+          first_started: "{{ pbs_first_start.stdout }}"
+          first_seconds: "{{ pbs_backup_first.delta }}"
+          repeat_started: "{{ pbs_second_start.stdout }}"
+          repeat_seconds: "{{ pbs_backup_second.delta }}"
+          first_log: "{{ pbs_backup_first.stdout_lines[-16:] }}"
+          repeat_log: "{{ pbs_backup_second.stdout_lines[-16:] }}"
+          datastore_before: "{{ pbs_st_before.stdout_lines }}"
+          datastore_after: "{{ pbs_st_after.stdout_lines }}"
+          backup_listing: "{{ pbs_backup_volumes.stdout_lines }}"

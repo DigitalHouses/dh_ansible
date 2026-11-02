@@ -1,0 +1,241 @@
+---
+# PBS kernel prerequisite only. No disk/pool/PCI/media operations.
+# By default this is an audit. Mutating mode must be operator-selected
+# AND separately authorized by private per-site flags.
+- name: PBS ZFS prerequisite | Scope to the commissioned site and guest
+  hosts: site_runner
+  gather_facts: false
+  vars:
+    pbs_zfs_kernel_action: audit
+  tasks:
+    - name: Read private PBS site configuration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Require approved target and kernel-only action
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'runner'
+          - site.id == site.owner_slug ~ '-' ~ site.type
+          - pbs.name == 'pbs-' ~ site.owner_slug
+          - pbs.os.distribution == 'debian'
+          - pbs.os.major_version | int == 13
+          - pbs.bootstrap.provision_approved == true
+          - pbs.safety.never_touch_media_disk == true
+          - pbs.safety.never_touch_other_guests == true
+          - pbs.pilot.mode == 'nfs'
+          - pbs.network.ipv4.split('/')[0] == pbs.pilot.nfs_client
+          - pbs_zfs_kernel_action in ['audit', 'install_and_reboot']
+        fail_msg: PBS_ZFS_KERNEL_SCOPE_BLOCKED
+    - name: Require explicit private approvals for installing/rebooting
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.zfs_guest_kernel_approved | default(false) | bool
+          - pbs.pilot.zfs_guest_reboot_approved | default(false) | bool
+        fail_msg: PBS_ZFS_KERNEL_INSTALL_NOT_APPROVED
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Register the exact commissioned PBS guest
+      ansible.builtin.add_host:
+        name: pbs_zfs_kernel_guest
+        groups: dh_pbs_zfs_kernel_guest
+        ansible_host: "{{ pbs.pilot.nfs_client }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+        pbs_zfs_kernel_action: "{{ pbs_zfs_kernel_action }}"
+      changed_when: false
+
+- name: PBS ZFS prerequisite | Verify or install complete Proxmox kernel
+  hosts: dh_pbs_zfs_kernel_guest
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Wait for PBS guest SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 120
+        connect_timeout: 8
+      changed_when: false
+    - name: Gather guest identity
+      ansible.builtin.setup:
+    - name: Reject any unexpected guest
+      ansible.builtin.assert:
+        that:
+          - ansible_facts['distribution'] == 'Debian'
+          - ansible_facts['distribution_major_version'] == '13'
+          - ansible_facts['hostname'] == pbs.name
+          - ansible_facts['default_ipv4']['address'] == pbs.pilot.nfs_client
+        fail_msg: PBS_ZFS_KERNEL_GUEST_IDENTITY_MISMATCH
+    - name: Verify existing commissioned admin identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: software_manage
+    - name: Require the PBS server package on this guest
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, proxmox-backup-server]
+      register: pbs_zfs_installed_server
+      changed_when: false
+    - name: Capture running kernel before changes
+      ansible.builtin.command:
+        argv: [uname, -r]
+      register: pbs_kernel_before
+      changed_when: false
+    - name: Check ZFS userspace and running kernel module without importing pools
+      ansible.builtin.command:
+        argv: [timeout, '15', zpool, version]
+      register: pbs_zfs_version_before
+      changed_when: false
+      failed_when: false
+    - name: Record initial kernel readiness
+      ansible.builtin.set_fact:
+        pbs_zfs_initial_ready: "{{ pbs_zfs_version_before.rc == 0 and 'zfs-kmod-' in pbs_zfs_version_before.stdout }}"
+    - name: Fail-closed read-only audit if kernel ZFS is missing
+      ansible.builtin.assert:
+        that:
+          - pbs_zfs_initial_ready
+        fail_msg: PBS_ZFS_KERNEL_MISSING_DO_NOT_TOUCH_MEDIA_OR_PCI
+      when: pbs_zfs_kernel_action == 'audit'
+    # After physical PCI transfer the previous NFS provider VM is stopped.
+    # Detach only the exact obsolete pilot client mount; no contents are deleted.
+    - name: Read old NFS pilot mount source without traversing the filesystem
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_old_nfs_mount
+      changed_when: false
+      failed_when: false
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Verify only the old site-specific pilot export may be detached
+      ansible.builtin.assert:
+        that:
+          - pbs_old_nfs_mount.rc != 0 or pbs_old_nfs_mount.stdout == pbs.pilot.nfs_server ~ ':' ~ pbs.pilot.export_path
+        fail_msg: PBS_ZFS_NFS_MOUNT_IDENTITY_MISMATCH
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Preserve original NFS fstab in a dated local backup and disable only this entry
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: "^{{ pbs.pilot.nfs_server | regex_escape }}:{{ pbs.pilot.export_path | regex_escape }}\\s+{{ pbs.pilot.mount_path | regex_escape }}\\s+nfs4\\s+"
+        state: absent
+        backup: true
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Detach old, inactive NFS pilot mount without contacting stopped media VM
+      ansible.builtin.command:
+        argv: [umount, -l, "{{ pbs.pilot.mount_path }}"]
+      when:
+        - pbs_zfs_kernel_action == 'install_and_reboot'
+        - pbs_old_nfs_mount.rc == 0
+      register: pbs_old_nfs_detach
+    - name: Confirm NFS mount no longer active in PBS guest
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_old_nfs_after
+      changed_when: false
+      failed_when: false
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Require NFS dependency detached before reboot
+      ansible.builtin.assert:
+        that:
+          - pbs_old_nfs_after.rc != 0
+        fail_msg: PBS_ZFS_NFS_STILL_ATTACHED_NO_REBOOT
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Confirm the Debian PBS Enterprise source is the expected trial-only file
+      ansible.builtin.slurp:
+        src: /etc/apt/sources.list.d/pbs-enterprise.sources
+      register: pbs_enterprise_source
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Refuse altering any unexpected Enterprise repository
+      ansible.builtin.assert:
+        that:
+          - "'URIs: https://enterprise.proxmox.com/debian/pbs' in (pbs_enterprise_source.content | b64decode)"
+          - "'Components: pbs-enterprise' in (pbs_enterprise_source.content | b64decode)"
+        fail_msg: PBS_APT_FOREIGN_ENTERPRISE_SOURCE
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Disable only the unused PBS Enterprise repository (no subscription)
+      ansible.builtin.lineinfile:
+        path: /etc/apt/sources.list.d/pbs-enterprise.sources
+        regexp: '^Enabled:'
+        line: 'Enabled: no'
+        insertafter: EOF
+        backup: true
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Install the official full PBS meta-package (includes ZFS kernel)
+      ansible.builtin.apt:
+        name: proxmox-backup
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        fail_on_autoremove: true
+        dpkg_options: force-confdef,force-confold
+      environment:
+        DEBIAN_FRONTEND: noninteractive
+      when:
+        - pbs_zfs_kernel_action == 'install_and_reboot'
+        - not pbs_zfs_initial_ready
+    - name: Reboot only PBS guest to activate its Proxmox kernel
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+        connect_timeout: 15
+        post_reboot_delay: 12
+        test_command: uname -r
+      when:
+        - pbs_zfs_kernel_action == 'install_and_reboot'
+        - not pbs_zfs_initial_ready
+    - name: Activate kernel ZFS module after approved kernel installation
+      ansible.builtin.command:
+        argv: [modprobe, zfs]
+      changed_when: false
+      when:
+        - pbs_zfs_kernel_action == 'install_and_reboot'
+        - not pbs_zfs_initial_ready
+    - name: Observe actual running kernel
+      ansible.builtin.command:
+        argv: [uname, -r]
+      register: pbs_kernel_after
+      changed_when: false
+    - name: Independently verify running ZFS module
+      ansible.builtin.command:
+        argv: [timeout, '15', zpool, version]
+      register: pbs_zfs_version_after
+      changed_when: false
+      failed_when: false
+    - name: Fail closed if kernel module is not ready for PCI
+      ansible.builtin.assert:
+        that:
+          - pbs_zfs_version_after.rc == 0
+          - "'zfs-kmod-' in pbs_zfs_version_after.stdout"
+        fail_msg: PBS_ZFS_KERNEL_UNAVAILABLE_DO_NOT_TOUCH_MEDIA_OR_PCI
+    - name: Verify PBS web service survived kernel operations
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 8007
+        state: started
+        timeout: 90
+      changed_when: false
+    - name: Check pilot NFS mount state after kernel restart
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_zfs_post_nfs
+      changed_when: false
+      failed_when: false
+    - name: Require old NFS storage is not mounted when PCI transfer has already occurred
+      ansible.builtin.assert:
+        that:
+          - pbs_zfs_post_nfs.rc != 0
+        fail_msg: PBS_ZFS_STALE_NFS_MOUNT_RESTORED
+      when: pbs_zfs_kernel_action == 'install_and_reboot'
+    - name: Report ZFS-ready guest without importing any pool
+      ansible.builtin.debug:
+        msg:
+          result: PBS_ZFS_KERNEL_READY
+          before: "{{ pbs_kernel_before.stdout }}"
+          after: "{{ pbs_kernel_after.stdout }}"
+          nfs_baseline_fstab_saved_locally: true
+          stale_nfs_mount_detached: true
+          media_vm_unchanged: true
+          pci_transfer_performed: false

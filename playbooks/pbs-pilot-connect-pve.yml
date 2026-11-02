@@ -1,0 +1,284 @@
+---
+# PBS pilot: integrate an already verified PBS NFS datastore as PVE backup storage.
+# Scoped service API token, no API password in command argv, logs or public Git.
+# Token secret is stored in the native PVE protected /etc/pve/priv/storage file.
+- name: PBS pilot | Resolve site and register PVE/PBS hosts
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Read private PBS declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Load observed live PVE identity
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require precisely approved service-to-service connection
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.mode == 'nfs'
+          - pbs.pilot.datastore == 'pbs-pilot'
+          - pbs.pilot.nfs_client == pbs.network.ipv4.split('/')[0]
+          - pbs.pilot.source_ctid | int == 1231
+          - pbs.bootstrap.provision_approved == true
+          - pve_observed.source == 'host_root_vmbr0'
+        fail_msg: PBS_PILOT_CONNECT_SCOPE_NOT_APPROVED
+    - name: Register PBS root over trusted site guest SSH
+      ansible.builtin.add_host:
+        name: pbs_connect_guest
+        groups: dh_pbs_connect_guest
+        ansible_host: "{{ pbs.pilot.nfs_client }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+      changed_when: false
+    - name: Register root PVE over pinned site administrative SSH
+      ansible.builtin.add_host:
+        name: pbs_connect_pve
+        groups: dh_pbs_connect_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_connection: ssh
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+          -o ConnectTimeout=10
+        pbs: "{{ pbs }}"
+        site: "{{ site }}"
+        pve_observed: "{{ pve_observed }}"
+      changed_when: false
+
+- name: PBS pilot | Ensure datastore and create scoped PVE API credential
+  hosts: dh_pbs_connect_guest
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Confirm PBS administrative access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: service_manage
+    - name: Verify NFS is mounted and is not mistaken for local root filesystem
+      ansible.builtin.command:
+        argv: [stat, -f, -c, '%T', "{{ pbs.pilot.mount_path }}"]
+      register: pbs_connect_fs
+      changed_when: false
+    - name: Require NFS, not a local mountpoint
+      ansible.builtin.assert:
+        that:
+          - pbs_connect_fs.stdout == 'nfs'
+        fail_msg: PBS_DATASTORE_NFS_NOT_MOUNTED
+    - name: Verify actual PBS datastore is created
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: pbs_connect_datastores
+      changed_when: false
+    - name: Refuse not-yet-ready PBS datastore
+      ansible.builtin.assert:
+        that:
+          - (pbs_connect_datastores.stdout | from_json | selectattr('name', 'equalto', pbs.pilot.datastore) | list | length) == 1
+        fail_msg: PBS_DATASTORE_NOT_READY
+    - name: Read existing pilot service token metadata only
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+      register: pbs_existing_tokens
+      changed_when: false
+    - name: Determine whether existing PBS token was commissioned
+      ansible.builtin.set_fact:
+        pbs_token_exists: "{{ (pbs_existing_tokens.stdout | from_json | selectattr('tokenid', 'equalto', 'root@pam!dh-pve-pilot') | list | length) == 1 }}"
+    - name: Inspect PVE storage before creating irreversible credentials
+      ansible.builtin.slurp:
+        src: /etc/pve/storage.cfg
+      delegate_to: pbs_connect_pve
+      register: pbs_pve_preflight_storage
+    - name: Inspect protected PVE secret before creating credentials
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ pbs.pilot.datastore }}.pw"
+      delegate_to: pbs_connect_pve
+      register: pbs_pve_preflight_secret
+    - name: Require either entirely new pilot or previously commissioned connection
+      ansible.builtin.assert:
+        that:
+          - "(pbs_token_exists and ((pbs_pve_preflight_storage.content | b64decode) is search('(?m)^pbs: pbs-pilot$')) and pbs_pve_preflight_secret.stat.exists) or ((not pbs_token_exists) and (not ((pbs_pve_preflight_storage.content | b64decode) is search('(?m)^\\S+: pbs-pilot$'))) and (not pbs_pve_preflight_secret.stat.exists))"
+        fail_msg: PBS_TOKEN_OR_STORAGE_PARTIAL_STATE; refuse to rotate token or adopt foreign storage.
+    - name: Generate one scoped API token, keeping its value entirely secret
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, generate-token, root@pam, dh-pve-pilot, --comment, DigitalHouses PBS pilot PVE backup client]
+      register: pbs_generated_token
+      no_log: true
+      when: not pbs_token_exists
+    - name: Extract secret only into Ansible host memory
+      ansible.builtin.set_fact:
+        pbs_pilot_token_secret: "{{ (pbs_generated_token.stdout | regex_search('(?s)\\{.*\\}') | from_json).value }}"
+      no_log: true
+      when: not pbs_token_exists
+    - name: Validate secret exists without exposing it
+      ansible.builtin.assert:
+        that:
+          - pbs_pilot_token_secret | length >= 30
+        fail_msg: PBS_TOKEN_SECRET_EXTRACTION_FAILED
+      no_log: true
+      when: not pbs_token_exists
+    - name: Grant token backup on pilot datastore only
+      ansible.builtin.command:
+        argv:
+          - proxmox-backup-manager
+          - acl
+          - update
+          - "/datastore/{{ pbs.pilot.datastore }}"
+          - DatastoreBackup
+          - --auth-id
+          - root@pam!dh-pve-pilot
+      no_log: true
+      when: not pbs_token_exists
+    - name: Grant datastore metadata audit to same scoped token
+      ansible.builtin.command:
+        argv:
+          - proxmox-backup-manager
+          - acl
+          - update
+          - "/datastore/{{ pbs.pilot.datastore }}"
+          - DatastoreAudit
+          - --auth-id
+          - root@pam!dh-pve-pilot
+      no_log: true
+      when: not pbs_token_exists
+    - name: Read actual PBS TLS certificate fingerprint over pinned SSH
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, /etc/proxmox-backup/proxy.pem, -noout, -fingerprint, -sha256]
+      register: pbs_cert_fingerprint
+      changed_when: false
+    - name: Store observed certificate fingerprint as a nonsecret fact
+      ansible.builtin.set_fact:
+        pbs_pilot_fingerprint: "{{ pbs_cert_fingerprint.stdout | regex_replace('^sha256 Fingerprint=', '') }}"
+    - name: Require standard SHA-256 certificate fingerprint
+      ansible.builtin.assert:
+        that:
+          - pbs_pilot_fingerprint | length == 95
+        fail_msg: PBS_TLS_FINGERPRINT_INVALID
+
+- name: PBS pilot | Attach scoped PBS storage on PVE using native secret store
+  hosts: dh_pbs_connect_pve
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Verify commissioned PVE identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Verify exact PVE hostname
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: pbs_pve_hostname
+      changed_when: false
+    - name: Require observed node, not any other house
+      ansible.builtin.assert:
+        that:
+          - pbs_pve_hostname.stdout == pve_observed.node
+          - pbs.pilot.datastore == 'pbs-pilot'
+    - name: Read canonical PVE storage configuration
+      ansible.builtin.slurp:
+        src: /etc/pve/storage.cfg
+      register: pbs_storage_cfg
+    - name: Check for an existing PVE secret with the pilot storage identity
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ pbs.pilot.datastore }}.pw"
+      register: pbs_existing_pve_secret
+    - name: Determine whether exact PVE pilot storage exists
+      ansible.builtin.set_fact:
+        pbs_pve_storage_exists: "{{ (pbs_storage_cfg.content | b64decode) is search('(?m)^pbs: ' ~ pbs.pilot.datastore ~ '$') }}"
+    - name: Refuse foreign or partial PVE storage identity
+      ansible.builtin.assert:
+        that:
+          - "not ((pbs_storage_cfg.content | b64decode) is search('(?m)^(?!pbs:)\\S+: ' ~ pbs.pilot.datastore ~ '$'))"
+          - "pbs_pve_storage_exists == pbs_existing_pve_secret.stat.exists"
+          - "pbs_pve_storage_exists == hostvars['pbs_connect_guest'].pbs_token_exists"
+          - "(not pbs_pve_storage_exists) or ('server ' ~ pbs.pilot.nfs_client in (pbs_storage_cfg.content | b64decode))"
+          - "(not pbs_pve_storage_exists) or ('username root@pam!dh-pve-pilot' in (pbs_storage_cfg.content | b64decode))"
+          - "(not pbs_pve_storage_exists) or ('datastore ' ~ pbs.pilot.datastore in (pbs_storage_cfg.content | b64decode))"
+          - "(not pbs_pve_storage_exists) or ('fingerprint ' ~ hostvars['pbs_connect_guest'].pbs_pilot_fingerprint in (pbs_storage_cfg.content | b64decode))"
+        fail_msg: PBS_PVE_FOREIGN_OR_PARTIAL_STORAGE_STATE
+    - name: Create exact PVE PBS pilot storage, initially disabled
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - add
+          - pbs
+          - "{{ pbs.pilot.datastore }}"
+          - --server
+          - "{{ pbs.pilot.nfs_client }}"
+          - --datastore
+          - "{{ pbs.pilot.datastore }}"
+          - --username
+          - root@pam!dh-pve-pilot
+          - --fingerprint
+          - "{{ hostvars['pbs_connect_guest'].pbs_pilot_fingerprint }}"
+          - --content
+          - backup
+          - --disable
+          - '1'
+      when: not pbs_pve_storage_exists
+    - name: Ensure native protected PVE secret directory
+      ansible.builtin.file:
+        path: /etc/pve/priv/storage
+        state: directory
+        owner: root
+        group: www-data
+        mode: '0700'
+      when: not pbs_pve_storage_exists
+    - name: Store token using native pmxcfs write (no rename, chmod or argv secret)
+      ansible.builtin.command:
+        argv:
+          - /bin/sh
+          - -c
+          - "umask 077; cat > /etc/pve/priv/storage/{{ pbs.pilot.datastore }}.pw"
+        stdin: "{{ hostvars['pbs_connect_guest'].pbs_pilot_token_secret }}\n"
+      no_log: true
+      when: not pbs_pve_storage_exists
+    - name: Stat native protected PVE secret after installation
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ pbs.pilot.datastore }}.pw"
+      register: pbs_written_secret
+      no_log: true
+    - name: Require root-only nonempty PVE secret
+      ansible.builtin.assert:
+        that:
+          - pbs_written_secret.stat.exists
+          - pbs_written_secret.stat.size >= 36
+          - pbs_written_secret.stat.mode == '0600'
+        fail_msg: PBS_NATIVE_SECRET_FILE_INVALID
+      no_log: true
+    - name: Enable PBS storage only after the native secret file is written
+      ansible.builtin.command:
+        argv: [pvesm, set, "{{ pbs.pilot.datastore }}", --disable, '0']
+      when: not pbs_pve_storage_exists
+    - name: Verify actual PVE PBS storage is active
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ pbs.pilot.datastore }}"]
+      register: pbs_active_storage
+      changed_when: false
+    - name: Require storage active rather than configured-only
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.datastore in pbs_active_storage.stdout
+          - "'active' in pbs_active_storage.stdout"
+        fail_msg: PBS_PVE_STORAGE_NOT_ACTIVE
+    - name: Report PVE integration without secrets
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PVE_STORAGE_READY
+          storage: "{{ pbs.pilot.datastore }}"
+          target: "{{ pbs.pilot.nfs_client }}"
+          datastore: "{{ pbs.pilot.datastore }}"
+          authentication: scoped_api_token
+          token_secret: REDACTED

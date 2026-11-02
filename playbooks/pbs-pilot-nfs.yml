@@ -1,0 +1,257 @@
+---
+# DigitalHouses PBS pilot A: independent PBS VM using an NFS datastore from
+# the existing media VM. Zero changes to PCI assignments or other ZFS datasets.
+# Site-specific IPs, paths and quota live in the private site inventory.
+- name: PBS pilot A | Validate site intent and register managed endpoints
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Load private PBS declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Require explicitly bounded NFS experiment
+      ansible.builtin.assert:
+        that:
+          - pbs.bootstrap.provision_approved == true
+          - pbs.pilot.mode == 'nfs'
+          - pbs.pilot.datastore == 'pbs-pilot'
+          - pbs.pilot.nfs_client == pbs.network.ipv4.split('/')[0]
+          - pbs.pilot.nfs_server != pbs.pilot.nfs_client
+          - pbs.pilot.zfs_dataset is search('/backups/pbs-pilot$')
+          - pbs.pilot.export_path is search('/backups/pbs-pilot$')
+          - pbs.pilot.mount_path == '/mnt/pbs-pilot'
+          - pbs.pilot.refquota_gib | int >= 32
+          - pbs.pilot.refquota_gib | int <= 512
+          - pbs.pilot.source_ctid | int == 1231
+          - pbs.safety.never_touch_media_disk == true
+        fail_msg: PBS_NFS_PILOT_SCOPE_NOT_APPROVED
+    - name: Register existing media VM via pinned site SSH
+      ansible.builtin.add_host:
+        name: pbs_nfs_media
+        groups: dh_pbs_nfs_media
+        ansible_host: "{{ pbs.pilot.nfs_server }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+      changed_when: false
+    - name: Register PBS guest via pinned site SSH
+      ansible.builtin.add_host:
+        name: pbs_nfs_guest
+        groups: dh_pbs_nfs_guest
+        ansible_host: "{{ pbs.pilot.nfs_client }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+          -o ConnectTimeout=10
+        site: "{{ site }}"
+        pbs: "{{ pbs }}"
+      changed_when: false
+
+- name: PBS pilot A | Prepare bounded ZFS dataset and NFS export on media VM
+  hosts: dh_pbs_nfs_media
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Confirm media guest Linux administrative identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Require expected existing ZFS pool is online
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, health, "{{ pbs.pilot.zfs_dataset.split('/')[0] }}"]
+      register: pbs_pool_health
+      changed_when: false
+    - name: Refuse unhealthy or unexpected pool
+      ansible.builtin.assert:
+        that:
+          - pbs_pool_health.stdout == 'ONLINE'
+        fail_msg: PBS_MEDIA_ZFS_POOL_NOT_ONLINE
+    - name: Check whether only the pilot dataset already exists
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name, "{{ pbs.pilot.zfs_dataset }}"]
+      register: pbs_dataset_check
+      changed_when: false
+      failed_when: false
+    - name: Create new pilot dataset without touching other datasets
+      ansible.builtin.command:
+        argv:
+          - zfs
+          - create
+          - -o
+          - atime=on
+          - -o
+          - compression=lz4
+          - -o
+          - "refquota={{ pbs.pilot.refquota_gib }}G"
+          - "{{ pbs.pilot.zfs_dataset }}"
+      when: pbs_dataset_check.rc != 0
+    - name: Require exact ZFS mountpoint for pilot dataset
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, mountpoint, "{{ pbs.pilot.zfs_dataset }}"]
+      register: pbs_dataset_mount
+      changed_when: false
+    - name: Refuse any unexpected mountpoint
+      ansible.builtin.assert:
+        that:
+          - pbs_dataset_mount.stdout == pbs.pilot.export_path
+        fail_msg: PBS_PILOT_DATASET_MOUNT_DRIFT
+    - name: Require atime enabled for PBS garbage collection
+      ansible.builtin.command:
+        argv: [zfs, get, -H, -o, value, atime, "{{ pbs.pilot.zfs_dataset }}"]
+      register: pbs_dataset_atime
+      changed_when: false
+    - name: Reject unsafe dataset atime setting
+      ansible.builtin.assert:
+        that:
+          - pbs_dataset_atime.stdout == 'on'
+        fail_msg: PBS_DATASTORE_ATIME_REQUIRED
+    - name: Set only new pilot dataset ownership for PBS backup user UID 34
+      ansible.builtin.file:
+        path: "{{ pbs.pilot.export_path }}"
+        state: directory
+        owner: '34'
+        group: '34'
+        mode: '0750'
+    - name: Publish restricted NFS export to exact PBS VM IP
+      ansible.builtin.copy:
+        dest: /etc/exports.d/dh-pbs-pilot.exports
+        owner: root
+        group: root
+        mode: '0644'
+        content: "{{ pbs.pilot.export_path }} {{ pbs.pilot.nfs_client }}(rw,sync,no_subtree_check,no_root_squash)\n"
+      notify: Reload NFS exports
+    - name: Apply NFS export configuration before guest mounting
+      ansible.builtin.meta: flush_handlers
+    - name: Read effective NFS exports
+      ansible.builtin.command:
+        argv: [exportfs, -v]
+      register: pbs_export_verify
+      changed_when: false
+    - name: Require private PBS export is active
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.export_path in pbs_export_verify.stdout
+          - pbs.pilot.nfs_client in pbs_export_verify.stdout
+        fail_msg: PBS_MEDIA_NFS_EXPORT_MISSING
+  handlers:
+    - name: Reload NFS exports
+      ansible.builtin.command:
+        argv: [exportfs, -ra]
+
+- name: PBS pilot A | Attach NFS and initialize actual PBS datastore
+  hosts: dh_pbs_nfs_guest
+  gather_facts: false
+  become: true
+  pre_tasks:
+    - name: Wait for commissioned PBS guest SSH
+      ansible.builtin.wait_for_connection:
+        connect_timeout: 8
+        timeout: 100
+      changed_when: false
+  tasks:
+    - name: Confirm guest administrative identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: filesystem_manage
+    - name: Install Debian NFS client and disk measurement tools
+      ansible.builtin.apt:
+        name: [nfs-common, sysstat]
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+    - name: Prepare dedicated empty NFS mountpoint
+      ansible.builtin.file:
+        path: "{{ pbs.pilot.mount_path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+    - name: Persist pilot NFS mount with nofail on reboot
+      ansible.builtin.lineinfile:
+        path: /etc/fstab
+        regexp: '^[^#].*\s/mnt/pbs-pilot\s+nfs'
+        line: "{{ pbs.pilot.nfs_server }}:{{ pbs.pilot.export_path }} {{ pbs.pilot.mount_path }} nfs4 rw,hard,vers=4.1,_netdev,nofail 0 0"
+        state: present
+        backup: false
+    - name: Require media NFS port reachable before mounting
+      ansible.builtin.wait_for:
+        host: "{{ pbs.pilot.nfs_server }}"
+        port: 2049
+        timeout: 25
+    - name: Inspect pilot NFS mount before action
+      ansible.builtin.command:
+        argv: [mountpoint, -q, "{{ pbs.pilot.mount_path }}"]
+      register: pbs_pilot_mount
+      changed_when: false
+      failed_when: false
+    - name: Mount only the pilot NFS filesystem
+      ansible.builtin.command:
+        argv: [mount, "{{ pbs.pilot.mount_path }}"]
+      when: pbs_pilot_mount.rc != 0
+    - name: Verify resulting filesystem is NFS
+      ansible.builtin.command:
+        argv: [stat, -f, -c, '%T', "{{ pbs.pilot.mount_path }}"]
+      register: pbs_pilot_fs_type
+      changed_when: false
+    - name: Refuse datastore operations unless mounted over NFS
+      ansible.builtin.assert:
+        that:
+          - pbs_pilot_fs_type.stdout == 'nfs'
+        fail_msg: PBS_NFS_MOUNT_NOT_ACTIVE_REFUSE_LOCAL_DATASTORE
+    - name: Verify root can initialize PBS datastore over restricted NFS export
+      ansible.builtin.command:
+        argv: [touch, "{{ pbs.pilot.mount_path }}/.dh-nfs-root-check"]
+      changed_when: false
+    - name: Remove only our root access probe
+      ansible.builtin.file:
+        path: "{{ pbs.pilot.mount_path }}/.dh-nfs-root-check"
+        state: absent
+    - name: Inspect existing PBS datastores
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: pbs_datastore_pre
+      changed_when: false
+    - name: Create pilot NFS datastore only if absent
+      ansible.builtin.command:
+        argv:
+          - proxmox-backup-manager
+          - datastore
+          - create
+          - "{{ pbs.pilot.datastore }}"
+          - "{{ pbs.pilot.mount_path }}"
+      when: pbs.pilot.datastore not in pbs_datastore_pre.stdout
+    - name: Read PBS datastore list after creation
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: pbs_datastore_final
+      changed_when: false
+    - name: Require actual PBS datastore points at mounted NFS
+      ansible.builtin.assert:
+        that:
+          - pbs.pilot.datastore in pbs_datastore_final.stdout
+          - pbs.pilot.mount_path in pbs_datastore_final.stdout
+          - pbs_pilot_fs_type.stdout == 'nfs'
+        fail_msg: PBS_NFS_DATASTORE_VERIFY_FAILED
+    - name: Report true readiness of pilot datastore
+      ansible.builtin.debug:
+        msg:
+          result: PBS_NFS_DATASTORE_READY
+          datastore: "{{ pbs.pilot.datastore }}"
+          path: "{{ pbs.pilot.mount_path }}"
+          media_vm_unchanged: true
+          nfs_root_squash: false

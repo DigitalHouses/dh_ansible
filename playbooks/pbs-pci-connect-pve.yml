@@ -1,0 +1,252 @@
+---
+# PBS PCI pilot: register a fresh already-initialized native ZFS datastore
+# as a separate PVE backup storage. Reuse the existing narrowly-scoped PBS
+# token secret without printing or rotating it; leave old NFS backup data.
+- name: PBS PCI connect | Register approved PVE and PBS endpoints
+  hosts: site_runner
+  gather_facts: false
+  tasks:
+    - name: Read site PBS declaration
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pbs.yml"
+    - name: Read observed PVE address
+      ansible.builtin.include_vars:
+        file: "/var/lib/ansible/site-data/{{ site.id }}/pve-runtime.yml"
+    - name: Require precisely authorized pilot
+      ansible.builtin.assert:
+        that:
+          - "site.id == 'serzhan-home'"
+          - "pbs.vmid | int == 2233"
+          - "pbs.name == 'pbs-serzhan'"
+          - "pbs.pilot.source_ctid | int == 1231"
+          - "pbs.pilot.datastore == 'pbs-pilot'"
+          - "pbs.safety.never_touch_media_disk | bool"
+          - "pbs.safety.never_touch_other_guests | bool"
+        fail_msg: PBS_PCI_CONNECT_SITE_NOT_AUTHORIZED
+    - name: Register pinned PVE endpoint
+      ansible.builtin.add_host:
+        name: pci_connect_pve
+        groups: dh_pci_connect_pve
+        ansible_host: "{{ pve_observed.ipv4 }}"
+        ansible_user: root
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pve_known_hosts
+        pbs: "{{ pbs }}"
+      changed_when: false
+    - name: Register pinned PBS endpoint
+      ansible.builtin.add_host:
+        name: pci_connect_pbs
+        groups: dh_pci_connect_pbs
+        ansible_host: "{{ pbs.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_pbs_guest_known_hosts
+        pbs: "{{ pbs }}"
+      changed_when: false
+
+- name: PBS PCI connect | Grant existing scoped token on new datastore
+  hosts: dh_pci_connect_pbs
+  gather_facts: false
+  become: true
+  vars:
+    new_name: pbs-pci-pilot
+    new_path: /serzhan-pool/backups/pbs-pci-pilot
+    tokenid: root@pam!dh-pve-pilot
+  tasks:
+    - name: Check administrative access
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: service_manage
+    - name: Verify live PBS datastore registration
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: stores
+      changed_when: false
+    - name: Require the old PBS NFS registration and new PCI registration
+      ansible.builtin.assert:
+        that:
+          - "(stores.stdout | from_json | selectattr('name', 'equalto', new_name) | selectattr('path', 'equalto', new_path) | list | length) == 1"
+          - "(stores.stdout | from_json | selectattr('name', 'equalto', 'pbs-pilot') | list | length) == 1"
+        fail_msg: PBS_PCI_DATASTORE_NOT_INITIALIZED_OR_OLD_BASELINE_MISSING
+    - name: Require the proper ZFS dataset backs the new datastore
+      ansible.builtin.command:
+        argv: [findmnt, -n, -o, SOURCE, --mountpoint, "{{ new_path }}"]
+      register: zfs_source
+      changed_when: false
+    - name: Require exact dataset identity
+      ansible.builtin.assert:
+        that:
+          - "zfs_source.stdout == 'serzhan-pool/backups/pbs-pci-pilot'"
+    - name: Check existing token exists without reading secret
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+      register: existing_tokens
+      changed_when: false
+    - name: Require previously commissioned PVE token
+      ansible.builtin.assert:
+        that:
+          - "(existing_tokens.stdout | from_json | selectattr('tokenid', 'equalto', tokenid) | list | length) == 1"
+        fail_msg: PBS_PCI_EXISTING_PVE_TOKEN_NOT_FOUND
+    - name: Grant only new datastore backup permission to existing token
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, update, "/datastore/{{ new_name }}", DatastoreBackup, --auth-id, "{{ tokenid }}"]
+    - name: Grant new datastore metadata read permission
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, update, "/datastore/{{ new_name }}", DatastoreAudit, --auth-id, "{{ tokenid }}"]
+    - name: Read current PBS certificate fingerprint
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, /etc/proxmox-backup/proxy.pem, -noout, -fingerprint, -sha256]
+      register: certificate_fingerprint
+      changed_when: false
+    - name: Normalize certificate fingerprint
+      ansible.builtin.set_fact:
+        pci_fingerprint: "{{ certificate_fingerprint.stdout | regex_replace('^sha256 Fingerprint=', '') }}"
+    - name: Require standard SHA256 fingerprint
+      ansible.builtin.assert:
+        that:
+          - "pci_fingerprint | length == 95"
+    - name: Confirm scoped ACL now exists
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, list, --output-format, json]
+      register: all_acls
+      changed_when: false
+    - name: Require token has backup and audit on new datastore
+      ansible.builtin.assert:
+        that:
+          - "(all_acls.stdout | from_json | selectattr('path', 'equalto', '/datastore/' ~ new_name) | selectattr('ugid', 'equalto', tokenid) | selectattr('roleid', 'equalto', 'DatastoreBackup') | list | length) == 1"
+          - "(all_acls.stdout | from_json | selectattr('path', 'equalto', '/datastore/' ~ new_name) | selectattr('ugid', 'equalto', tokenid) | selectattr('roleid', 'equalto', 'DatastoreAudit') | list | length) == 1"
+
+- name: PBS PCI connect | Register isolated PBS backup storage on PVE
+  hosts: dh_pci_connect_pve
+  gather_facts: false
+  vars:
+    new_name: pbs-pci-pilot
+    old_name: pbs-pilot
+  tasks:
+    - name: Verify PVE identity
+      ansible.builtin.include_role:
+        name: infrastructure_access
+      vars:
+        infrastructure_access_capability: host_manage
+    - name: Require old media VM stopped and PBS running
+      ansible.builtin.command:
+        argv: [qm, status, '2232']
+      register: media_state
+      changed_when: false
+    - name: Require PBS guest still running
+      ansible.builtin.command:
+        argv: [qm, status, '2233']
+      register: pbs_state
+      changed_when: false
+    - name: Require PCI remains owned only by PBS VM
+      ansible.builtin.command:
+        argv: [grep, -RlF, '0000:2b:00.0', /etc/pve/qemu-server]
+      register: pci_owners
+      changed_when: false
+    - name: Confirm exclusive PCI and guest states
+      ansible.builtin.assert:
+        that:
+          - "media_state.stdout == 'status: stopped'"
+          - "pbs_state.stdout == 'status: running'"
+          - "pci_owners.stdout_lines == ['/etc/pve/qemu-server/2233.conf']"
+    - name: Read current PVE storage config
+      ansible.builtin.slurp:
+        src: /etc/pve/storage.cfg
+      register: storage_cfg
+    - name: Require old commissioned PBS storage with correct server and token
+      ansible.builtin.assert:
+        that:
+          - "((storage_cfg.content | b64decode) is search('(?m)^pbs: pbs-pilot$'))"
+          - "'server 192.168.11.233' in (storage_cfg.content | b64decode)"
+          - "'username root@pam!dh-pve-pilot' in (storage_cfg.content | b64decode)"
+          - "(('pbs: ' ~ new_name) not in (storage_cfg.content | b64decode))"
+        fail_msg: PBS_PCI_PVE_STORAGE_NOT_FRESH_OR_FOREIGN
+    - name: Read existing protected native token file metadata only
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ old_name }}.pw"
+      register: old_secret
+    - name: Require old token file already commissioned
+      ansible.builtin.assert:
+        that:
+          - "old_secret.stat.isreg | default(false)"
+          - "old_secret.stat.mode == '0600'"
+          - "old_secret.stat.size >= 30"
+        fail_msg: PBS_PCI_EXISTING_PVE_SECRET_NOT_READY
+    - name: Refuse to replace any preexisting new-storage password
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ new_name }}.pw"
+      register: new_secret
+    - name: Require new storage identity unused before provisioning
+      ansible.builtin.assert:
+        that:
+          - "not new_secret.stat.exists"
+    - name: Add new PCI/ZFS PBS storage disabled initially
+      ansible.builtin.command:
+        argv:
+          - pvesm
+          - add
+          - pbs
+          - "{{ new_name }}"
+          - --server
+          - '192.168.11.233'
+          - --datastore
+          - "{{ new_name }}"
+          - --username
+          - root@pam!dh-pve-pilot
+          - --fingerprint
+          - "{{ hostvars['pci_connect_pbs'].pci_fingerprint }}"
+          - --content
+          - backup
+          - --disable
+          - '1'
+    - name: Copy existing PVE protected token without reading it into Ansible
+      ansible.builtin.shell: >-
+        umask 077; cat /etc/pve/priv/storage/pbs-pilot.pw
+        > /etc/pve/priv/storage/pbs-pci-pilot.pw
+      no_log: true
+    - name: Check new protected secret metadata only
+      ansible.builtin.stat:
+        path: "/etc/pve/priv/storage/{{ new_name }}.pw"
+      register: copied_secret
+      no_log: true
+    - name: Require secret persisted in native PVE storage
+      ansible.builtin.assert:
+        that:
+          - copied_secret.stat.exists
+          - copied_secret.stat.mode == '0600'
+          - copied_secret.stat.size == old_secret.stat.size
+        fail_msg: PBS_PCI_PVE_PROTECTED_SECRET_COPY_FAILED
+      no_log: true
+    - name: Enable only new PCI pilot storage
+      ansible.builtin.command:
+        argv: [pvesm, set, "{{ new_name }}", --disable, '0']
+    - name: Verify independent new PVE storage online
+      ansible.builtin.command:
+        argv: [pvesm, status, --storage, "{{ new_name }}"]
+      register: storage_status
+      changed_when: false
+    - name: Require PCI storage active
+      ansible.builtin.assert:
+        that:
+          - "new_name in storage_status.stdout"
+          - "'active' in storage_status.stdout"
+        fail_msg: PBS_PCI_PVE_STORAGE_INACTIVE
+    - name: Disable unavailable old NFS storage in PVE config, leaving data intact
+      ansible.builtin.command:
+        argv: [pvesm, set, "{{ old_name }}", --disable, '1']
+    - name: Report ready-for-backup PCI storage
+      ansible.builtin.debug:
+        msg:
+          result: PBS_PCI_PVE_STORAGE_READY
+          storage: "{{ new_name }}"
+          old_nfs_storage: preserved_but_disabled
+          source_ctid: 1231
+          original_nfs_backups_deleted: false
