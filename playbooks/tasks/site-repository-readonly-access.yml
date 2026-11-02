@@ -211,9 +211,39 @@
       title: "{{ dh_site_deploy_title }}"
       key: "{{ dh_site_public_key }}"
       read_only: true
-    status_code: 201
+    status_code: [201, 403, 422]
+  register: dh_site_deploy_key_create
   when: dh_site_named_deploy_keys | length == 0
   no_log: true
+
+# GitHub response may contain public-key material. Never print its message
+# or original response; report only predefined HTTP statuses and safe codes.
+- name: Report sanitized GitHub deploy-key registration failure
+  ansible.builtin.assert:
+    that:
+      - dh_site_deploy_key_create.status | default(0) == 201
+    fail_msg: >-
+      GITHUB_DEPLOY_KEY_CREATION_BLOCKED:
+      HTTP {{ dh_site_deploy_key_create.status | default(0) | int }};
+      codes={{
+        (
+          (dh_site_deploy_key_create.json.errors | default([]))
+          | selectattr('code', 'defined')
+          | map(attribute='code')
+          | list
+          | intersect(['missing', 'missing_field', 'invalid', 'already_exists', 'unprocessable', 'custom'])
+        ) | join(',')
+      }};
+      fields={{
+        (
+          (dh_site_deploy_key_create.json.errors | default([]))
+          | selectattr('field', 'defined')
+          | map(attribute='field')
+          | list
+          | intersect(['key', 'title', 'read_only'])
+        ) | join(',')
+      }}.
+  when: dh_site_named_deploy_keys | length == 0
 
 - name: Read back registered GitHub deploy key
   ansible.builtin.uri:
