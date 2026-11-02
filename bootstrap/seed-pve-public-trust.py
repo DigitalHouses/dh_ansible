@@ -30,6 +30,8 @@ def main():
     if site != args.site:
         raise ValueError("PVE_TRUST_WRONG_SITE")
     fingerprint = old["read_live_certificate"](iface.ip)
+    old["pct"](args.runner_ctid, "install", "-d", "-o", "semaphore",
+               "-g", "semaphore", "-m", "0700", "/var/lib/semaphore/.ssh")
     old["install_guest_trust"](args.runner_ctid, str(iface.ip), node, fingerprint)
     print("PVE_PUBLIC_TRUST_SEED=PASS")
     print("PVE_PUBLIC_TRUST_SITE=" + site)
