@@ -132,7 +132,7 @@
         owner: root
         group: root
         mode: '0644'
-        content: "{{ pbs.pilot.export_path }} {{ pbs.pilot.nfs_client }}(rw,sync,no_subtree_check,root_squash)\n"
+        content: "{{ pbs.pilot.export_path }} {{ pbs.pilot.nfs_client }}(rw,sync,no_subtree_check,no_root_squash)\n"
       notify: Reload NFS exports
     - name: Apply NFS export configuration before guest mounting
       ansible.builtin.meta: flush_handlers
@@ -256,4 +256,4 @@
           datastore: "{{ pbs.pilot.datastore }}"
           path: "{{ pbs.pilot.mount_path }}"
           media_vm_unchanged: true
-          nfs_root_squash: true
+          nfs_root_squash: false
