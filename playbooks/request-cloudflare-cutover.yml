@@ -27,7 +27,6 @@
           - site.id == site.owner_slug ~ '-' ~ site.type
           - pve_observed.source == 'host_root_vmbr0'
           - pve_observed.ipv4 is match('^[0-9]+(\.[0-9]+){3}$')
-          - pve_observed.api_hostname | length > 0
           - pve_observed.node | length > 0
           - DH_CLOUDFLARE_API_TOKEN is defined
           - (DH_CLOUDFLARE_API_TOKEN | default('') | length) > 20
@@ -281,6 +280,9 @@
       when: cf_existing | length == 0
       no_log: true
 
+    # Cloudflare validates the origin URL's observed PVE IP against the
+    # trusted PVE CA. Task 06 already verified the IP certificate identity;
+    # no synthetic api_hostname exists in the fresh bootstrap runtime file.
     - name: Resolve canonical Tunnel UUID and expected TLS ingress
       ansible.builtin.set_fact:
         cf_tunnel_id: "{{ cf_existing[0].id if cf_existing | length == 1 else cf_new_tunnel.json.result.id }}"
@@ -288,7 +290,6 @@
           - hostname: "{{ cf_host }}"
             service: "{{ cf_origin }}"
             originRequest:
-              originServerName: "{{ pve_observed.api_hostname }}"
               caPool: /etc/cloudflared/dh-pve-ca.pem
               noTLSVerify: false
           - service: http_status:404
@@ -323,7 +324,6 @@
               cf_old_rules | length == 2
               and cf_old_rules[0].hostname == cf_host
               and cf_old_rules[0].service == cf_origin
-              and cf_old_rules[0].originRequest.originServerName == pve_observed.api_hostname
               and cf_old_rules[0].originRequest.caPool == '/etc/cloudflared/dh-pve-ca.pem'
               and cf_old_rules[0].originRequest.noTLSVerify == false
               and cf_old_rules[1].service == 'http_status:404'
@@ -600,7 +600,6 @@
           - cf_ingress_final.json.result.config.ingress | length == 2
           - cf_ingress_final.json.result.config.ingress[0].hostname == cf_host
           - cf_ingress_final.json.result.config.ingress[0].service == cf_origin
-          - cf_ingress_final.json.result.config.ingress[0].originRequest.originServerName == pve_observed.api_hostname
           - cf_ingress_final.json.result.config.ingress[0].originRequest.caPool == '/etc/cloudflared/dh-pve-ca.pem'
           - cf_ingress_final.json.result.config.ingress[0].originRequest.noTLSVerify == false
           - cf_ingress_final.json.result.config.ingress[1].service == 'http_status:404'
