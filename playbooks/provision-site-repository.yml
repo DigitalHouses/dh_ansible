@@ -93,18 +93,33 @@
           has_issues: false
           has_projects: false
           has_wiki: false
-        status_code: [201, 403, 422]
+        status_code: [201, 401, 403, 409, 422, 429]
       register: dh_git_created
       when: dh_git_before.status == 404
       no_log: true
 
+    # Keep the GitHub response/body and token under no_log. Only the numeric
+    # HTTP status and a fixed operator hint may appear in the task log.
     - name: Require successful private repository creation or safe adoption
       ansible.builtin.assert:
         that:
           - dh_git_before.status == 200 or dh_git_created.status | default(0) == 201
         fail_msg: >-
           GITHUB_PRIVATE_REPO_CREATION_BLOCKED:
-          check owner login and repository creation/Contents permissions.
+          HTTP {{ dh_git_created.status | default(0) | int }}.
+          {% if dh_git_created.status | default(0) | int in [401, 403] %}
+          Verify the PAT has Repository creation: Read and write
+          (or Administration: Read and write), and access to the DigitalHouses account.
+          {% elif dh_git_created.status | default(0) | int == 422 %}
+          GitHub rejected the repository request: check name collision, account limits
+          and validation in the GitHub account; no existing repository is overwritten.
+          {% elif dh_git_created.status | default(0) | int == 429 %}
+          GitHub rate-limited repository creation; retry after the API limit resets.
+          {% elif dh_git_created.status | default(0) | int == 409 %}
+          GitHub reported a creation conflict; inspect the repository before retrying.
+          {% else %}
+          GitHub did not confirm creation; inspect API availability and account permissions.
+          {% endif %}
       when: dh_git_before.status == 404
 
     - name: Verify actual repository identity after creation or adoption

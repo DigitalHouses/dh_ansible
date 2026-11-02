@@ -45,6 +45,26 @@ def test_create_is_private_user_account_and_missing_only():
     assert defaults["use_proxy"] is False
 
 
+def test_create_failure_reports_only_safe_http_status_and_fixed_hints():
+    play = yaml.safe_load(P.read_text())[0]
+    create = task(play, "Create only a missing PRIVATE site repository")
+    assert create["no_log"] is True
+    codes = create["ansible.builtin.uri"]["status_code"]
+    assert set([201, 401, 403, 409, 422, 429]).issubset(set(codes))
+
+    check = task(play, "Require successful private repository creation")
+    assert check["when"] == "dh_git_before.status == 404"
+    hint = check["ansible.builtin.assert"]["fail_msg"]
+    assert "dh_git_created.status" in hint
+    assert "HTTP" in hint
+    assert "Repository creation" in hint
+    assert "Administration" in hint
+    assert "422" in hint
+    assert "dh_git_created.json" not in hint
+    assert "dh_git_created.content" not in hint
+    assert "DH_GITHUB_PROVISION_TOKEN" not in hint
+
+
 def test_existing_repo_must_be_private_and_recognized_before_adoption():
     play = yaml.safe_load(P.read_text())[0]
     privacy = task(play, "Demand exact private repository identity")
