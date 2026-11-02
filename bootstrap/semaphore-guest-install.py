@@ -37,7 +37,7 @@ ADMIN_SECRET = Path("/root/dh-semaphore-initial-admin-password")
 UNIT = Path("/etc/systemd/system/digitalhouses-semaphore.service")
 VENV = Path("/opt/ansible/venv")
 APT_PKGS = ("python3", "python3-venv", "python3-pip", "ca-certificates", "curl",
-            "openssl", "git", "openssh-client", "sudo", "tzdata", "avahi-daemon", "avahi-utils")
+            "openssl", "git", "openssh-client", "sshpass", "sudo", "tzdata", "avahi-daemon", "avahi-utils")
 
 
 class Blocked(RuntimeError):
