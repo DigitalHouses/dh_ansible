@@ -5,20 +5,23 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_media_vm_preflight_catalog_is_read_only():
+def test_media_vm_80_requires_scoped_site_read_and_hardware_preflight():
     import json
     catalog = json.loads((ROOT / "catalog/semaphore-tasks.json").read_text())
     entries = [x for x in catalog["tasks"] if x["title"].startswith("80-Медиасервер")]
     assert len(entries) == 1
     assert entries[0]["playbook"] == "playbooks/plan-pve-media-vm.yml"
-    playbook = (ROOT / entries[0]["playbook"]).read_text()
-    worker = (ROOT / "bootstrap/pve-access-audit-request.sh").read_text()
-    guarded = (ROOT / "playbooks/audit-pve-access.yml").read_text()
-    assert "MEDIA_PLAN_" in playbook
-    assert "MEDIA_PLAN" in worker
-    assert "pve_audit" in guarded
-    assert "pve_media_vm_plan" in guarded
-    assert "pve_media_vm_apply" not in playbook
+    plays = yaml.safe_load((ROOT / entries[0]["playbook"]).read_text())
+    assert len(plays) == 4
+    first = str(plays[0])
+    assert "media_site_repo.json.private == true" in first
+    assert "MEDIA_SITE_MARKER_MISMATCH" in first
+    assert "MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED" in first
+    pve = str(plays[1])
+    assert "infrastructure_access" in pve
+    assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in pve
+    assert "dh-media-pve-preflight.py" in pve
+    assert "dh-pve-media-deploy.py" in pve
 
 
 def test_media_vm_identity_uses_service_site_ip_octet_rule():
