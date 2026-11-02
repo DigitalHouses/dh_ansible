@@ -22,19 +22,19 @@ def approved_data():
         "pool_name": "serzhan-pool", "mode": "readwrite",
         "destructive_without_backup": True,
         "disk": {
-            "serial": "PK1331PAGH7VHS", "wwn": "0x5000cca22bc6ef0d",
-            "size_bytes": 4000787030016,
-            "observed_filesystem": "ntfs", "observed_label": "HITACHI_4TB",
-            "observed_partuuid": "7666ad6d-c11f-4292-914f-ea7eef4d420c",
-            "observed_reserved_partuuid": "225fc0f3-0a5c-4b88-98d2-06c946051f69",
+            "serial": "TEST_DISK_001", "wwn": "0x1234567890abcdef",
+            "size_bytes": 4000000000000,
+            "observed_filesystem": "ntfs", "observed_label": "DEMO_NTFS_DISK",
+            "observed_partuuid": "11111111-2222-4333-8444-555555555555",
+            "observed_reserved_partuuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
         },
         "one_time_ntfs_erase": {
             "approved": True, "scope": "first_create_only",
-            "serial": "PK1331PAGH7VHS", "wwn": "0x5000cca22bc6ef0d",
-            "size_bytes": 4000787030016,
-            "partition_filesystem": "ntfs", "partition_label": "HITACHI_4TB",
-            "partition_partuuid": "7666ad6d-c11f-4292-914f-ea7eef4d420c",
-            "reserved_partuuid": "225fc0f3-0a5c-4b88-98d2-06c946051f69",
+            "serial": "TEST_DISK_001", "wwn": "0x1234567890abcdef",
+            "size_bytes": 4000000000000,
+            "partition_filesystem": "ntfs", "partition_label": "DEMO_NTFS_DISK",
+            "partition_partuuid": "11111111-2222-4333-8444-555555555555",
+            "reserved_partuuid": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
         },
     }
 
@@ -56,7 +56,7 @@ def command(*args, **kwargs):
         if path == "/dev/sdb2" and field == "TYPE":
             return "ntfs"
         if path == "/dev/sdb2" and field == "LABEL":
-            return "HITACHI_4TB"
+            return "DEMO_NTFS_DISK"
     if args[0] == "/usr/bin/findmnt":
         return None
     raise AssertionError("Unexpected command " + str(args))
@@ -105,7 +105,7 @@ def test_unapproved_foreign_partition_still_blocks(tmp_path):
          patch.object(m, "physical_partitions", return_value=partitions()), \
          patch.object(m, "command", side_effect=AssertionError("should not wipe")):
         with pytest.raises(m.Blocked, match="UNKNOWN_EXISTING_PARTITIONS"):
-            m.ensure_create(data, "/dev/disk/by-id/wwn-0x5000cca22bc6ef0d", "/dev/sdb", "erase")
+            m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb", "erase")
 
 
 def test_canonical_pool_is_preserved_even_with_erase_survey(tmp_path):
@@ -114,7 +114,7 @@ def test_canonical_pool_is_preserved_even_with_erase_survey(tmp_path):
     with patch.object(m, "get_pool", return_value="123"), \
          patch.object(m, "ensure_import", return_value=("123", False)) as verified, \
          patch.object(m, "command", side_effect=AssertionError("must not wipe")):
-        assert m.ensure_create(data, "/dev/disk/by-id/wwn-0x5000cca22bc6ef0d",
+        assert m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef",
                                "/dev/sdb", "erase") == ("123", False)
         verified.assert_called_once()
 
