@@ -51,13 +51,13 @@ class FakeSocket:
 
 
 @pytest.mark.parametrize("reply,status", [
-    (b"\\x20\\x02\\x00\\x00", "READY"),
-    (b"\\x20\\x02\\x00\\x04", "AUTH_FAILED"),
-    (b"\\x20\\x02\\x00\\x05", "AUTH_FAILED"),
-    (b"\\x20\\x02\\x00\\x03", "UNREACHABLE"),
-    (b"\\x20\\x02\\x00\\x01", "PROTOCOL_ERROR"),
-    (b"\\x20\\x02\\x00\\xff", "PROTOCOL_ERROR"),
-    (b"\\x30\\x02\\x00\\x00", "PROTOCOL_ERROR"),
+    (b"\x20\x02\x00\x00", "READY"),
+    (b"\x20\x02\x00\x04", "AUTH_FAILED"),
+    (b"\x20\x02\x00\x05", "AUTH_FAILED"),
+    (b"\x20\x02\x00\x03", "UNREACHABLE"),
+    (b"\x20\x02\x00\x01", "PROTOCOL_ERROR"),
+    (b"\x20\x02\x00\xff", "PROTOCOL_ERROR"),
+    (b"\x30\x02\x00\x00", "PROTOCOL_ERROR"),
 ])
 def test_mqtt_connect_no_pubsub_or_credential_output(monkeypatch, reply, status):
     m = module()
@@ -69,10 +69,10 @@ def test_mqtt_connect_no_pubsub_or_credential_output(monkeypatch, reply, status)
         result = m.check("broker.example.test", "demo-user", "dummy-secret")
     assert result == status
     assert output.getvalue() == ""
-    assert sock.sent.startswith(b"\\x10")
+    assert sock.sent.startswith(b"\x10")
     assert b"demo-user" in sock.sent
     assert b"dummy-secret" in sock.sent
-    assert b"\\x00\\x04MQTT\\x04\\xC2" in sock.sent
+    assert b"\x00\x04MQTT\x04\xC2" in sock.sent
     assert sock.sent[0] == 0x10  # CONNECT, no PUB/SUB
 
 
