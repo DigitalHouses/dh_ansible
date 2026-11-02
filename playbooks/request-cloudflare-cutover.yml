@@ -105,6 +105,7 @@
       ansible.builtin.set_fact:
         cf_host: "dh-{{ site.id }}-pve.{{ cf_zone }}"
         cf_origin: "https://{{ pve_observed.ipv4 }}:8006"
+        cf_tunnel_name: "{{ site.id }}-pve"
 
   tasks:
     - name: Resolve verified zone and owning account
@@ -210,7 +211,7 @@
 
     - name: List nondeleted tunnels with the site name
       ansible.builtin.uri:
-        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ site.id }}&is_deleted=false&per_page=100"
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ cf_tunnel_name }}&is_deleted=false&per_page=100"
         headers:
           Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
         status_code: 200
@@ -222,10 +223,27 @@
 
     - name: Restrict candidate list to the exact site
       ansible.builtin.set_fact:
-        cf_existing: "{{ cf_tunnels.json.result | selectattr('name', 'equalto', site.id) | list }}"
+        cf_existing: "{{ cf_tunnels.json.result | selectattr('name', 'equalto', cf_tunnel_name) | list }}"
       no_log: true
 
-    - name: Protect all foreign tunnel and DNS resources
+    - name: List nondeleted pre-existing shared site tunnels for a safe PVE-only cutover
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel?name={{ site.id }}&is_deleted=false&per_page=100"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        timeout: 20
+        validate_certs: true
+      register: cf_shared_tunnels
+      changed_when: false
+      no_log: true
+
+    - name: Record one exact shared site tunnel without changing its ingress
+      ansible.builtin.set_fact:
+        cf_shared_existing: "{{ cf_shared_tunnels.json.result | selectattr('name', 'equalto', site.id) | list }}"
+      no_log: true
+
+    - name: Refuse foreign DNS and tunnel collisions before host/package changes
       ansible.builtin.assert:
         that:
           - cf_dns_old.json.success
@@ -235,15 +253,51 @@
           - cf_tunnels.json.result_info.total_pages | default(1) | int == 1
           - cf_existing | length <= 1
           - cf_existing | length == 0 or cf_existing[0].config_src == 'cloudflare'
-          - cf_dns_old.json.result | length == 0 or cf_existing | length == 1
+          - cf_shared_tunnels.json.success
+          - cf_shared_tunnels.json.result_info.total_pages | default(1) | int == 1
+          - cf_shared_existing | length <= 1
+          - cf_shared_existing | length == 0 or cf_shared_existing[0].config_src == 'cloudflare'
           - >-
             cf_dns_old.json.result | length == 0 or (
               cf_dns_old.json.result[0].type == 'CNAME'
               and cf_dns_old.json.result[0].proxied == true
-              and cf_dns_old.json.result[0].content == cf_existing[0].id ~ '.cfargotunnel.com'
+              and (
+                (cf_existing | length == 1
+                 and cf_dns_old.json.result[0].content == cf_existing[0].id ~ '.cfargotunnel.com')
+                or
+                (cf_shared_existing | length == 1
+                 and cf_dns_old.json.result[0].content == cf_shared_existing[0].id ~ '.cfargotunnel.com')
+              )
             )
         fail_msg: CF_EXISTING_TUNNEL_OR_DNS_COLLISION
       no_log: true
+
+    - name: Inspect legacy shared ingress only if its DNS would be migrated
+      ansible.builtin.uri:
+        url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel/{{ cf_shared_existing[0].id }}/configurations"
+        headers:
+          Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
+        status_code: 200
+        validate_certs: true
+      register: cf_shared_config
+      changed_when: false
+      no_log: true
+      when: >-
+        cf_dns_old.json.result | length == 1
+        and cf_shared_existing | length == 1
+        and cf_dns_old.json.result[0].content == cf_shared_existing[0].id ~ '.cfargotunnel.com'
+
+    - name: Prove legacy shared tunnel owns only the old PVE hostname being repointed
+      ansible.builtin.assert:
+        that:
+          - cf_shared_config.json.success
+          - >-
+            cf_shared_config.json.result.config.ingress
+            | selectattr('hostname', 'defined')
+            | selectattr('hostname', 'equalto', cf_host) | list | length == 1
+        fail_msg: CF_SHARED_PVE_INGRESS_NOT_PROVEN
+      no_log: true
+      when: cf_shared_config is not skipped
 
     - name: Register the already-commissioned root SSH target
       ansible.builtin.add_host:
@@ -263,6 +317,150 @@
       no_log: true
       changed_when: false
 
+
+- name: Cloudflare PVE | native package, version and service ownership preflight
+  hosts: cf_pve_target_group
+  gather_facts: false
+  become: false
+  vars:
+    cf_service_unit: |
+      [Unit]
+      Description=DigitalHouses canonical Cloudflare Tunnel for PVE
+      Wants=network-online.target
+      After=network-online.target
+      [Service]
+      Type=simple
+      User=root
+      ExecStart=/usr/bin/cloudflared tunnel --no-autoupdate run --token-file /etc/cloudflared/dh-pve-token
+      Restart=on-failure
+      RestartSec=5s
+      [Install]
+      WantedBy=multi-user.target
+  tasks:
+    - name: Read PVE hostname
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: cf_pve_node
+      changed_when: false
+
+    - name: Require the expected commissioned node
+      ansible.builtin.assert:
+        that: cf_pve_node.stdout == cf_expected_node
+        fail_msg: CF_PVE_NODE_MISMATCH
+
+    - name: Check current cloudflared systemd unit ownership
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, FragmentPath, --value, cloudflared.service]
+      register: cf_service_location
+      changed_when: false
+      failed_when: false
+
+    - name: Never replace an unrelated or legacy connector service
+      ansible.builtin.assert:
+        that: cf_service_location.stdout | trim in ['', '/etc/systemd/system/cloudflared.service']
+        fail_msg: CF_LEGACY_SERVICE_CONFLICT
+
+    - name: Inspect systemd unit on disk
+      ansible.builtin.stat:
+        path: /etc/systemd/system/cloudflared.service
+        follow: false
+      register: cf_existing_unit
+
+    - name: Read existing unit only for strict own-service adoption
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/cloudflared.service
+      register: cf_existing_unit_bytes
+      when: cf_existing_unit.stat.exists
+      no_log: true
+
+    - name: Fail closed if an unknown unit already occupies the name
+      ansible.builtin.assert:
+        that:
+          - not cf_existing_unit.stat.exists or (
+              cf_existing_unit.stat.isreg
+              and not cf_existing_unit.stat.islnk
+              and cf_existing_unit_bytes.content | b64decode == cf_service_unit
+            )
+        fail_msg: CF_EXISTING_CLOUDFLARED_NOT_MANAGED
+
+    - name: Detect official package installation
+      ansible.builtin.command:
+        argv: [dpkg-query, -W, cloudflared]
+      register: cf_pkg_installed
+      changed_when: false
+      failed_when: false
+
+    - name: Inspect pre-existing sources if package is missing
+      ansible.builtin.command:
+        argv:
+          - grep
+          - -R
+          - -l
+          - pkg.cloudflare.com/cloudflared
+          - /etc/apt/sources.list
+          - /etc/apt/sources.list.d
+      register: cf_existing_sources
+      changed_when: false
+      failed_when: false
+      when: cf_pkg_installed.rc != 0
+
+    - name: Avoid conflicting Cloudflare Signed-By sources
+      ansible.builtin.assert:
+        that: >-
+          cf_pkg_installed.rc == 0 or (
+            cf_existing_sources.stdout_lines | default([])
+            | difference(['/etc/apt/sources.list.d/dh-cloudflared.list']) | length == 0
+          )
+        fail_msg: CF_APT_SOURCE_CONFLICT
+
+    - name: Install official package signing key if needed
+      ansible.builtin.get_url:
+        url: https://pkg.cloudflare.com/cloudflare-main.gpg
+        dest: /usr/share/keyrings/dh-cloudflare-main.gpg
+        owner: root
+        group: root
+        mode: '0644'
+      when: cf_pkg_installed.rc != 0
+
+    - name: Add only one signed Cloudflare package source
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list.d/dh-cloudflared.list
+        content: "deb [signed-by=/usr/share/keyrings/dh-cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
+        owner: root
+        group: root
+        mode: '0644'
+      when: cf_pkg_installed.rc != 0
+
+    - name: Install cloudflared via native apt
+      ansible.builtin.apt:
+        name: cloudflared
+        state: present
+        update_cache: true
+      when: cf_pkg_installed.rc != 0
+
+    - name: Check installed cloudflared version
+      ansible.builtin.command:
+        argv: [cloudflared, --version]
+      register: cf_installed_version
+      changed_when: false
+
+    - name: Require token-file feature (not token in service command)
+      ansible.builtin.assert:
+        that:
+          - cf_installed_version.stdout is search('version [0-9]{4}\.[0-9]+\.[0-9]+')
+          - >-
+            (cf_installed_version.stdout | regex_search('[0-9]{4}\.[0-9]+\.[0-9]+'))
+            is version('2025.4.0', '>=')
+        fail_msg: CF_CLOUDFLARED_TOKEN_FILE_UNSUPPORTED
+
+
+- name: Cloudflare PVE | provision dedicated PVE-only Tunnel after package preflight
+  hosts: site_runner
+  gather_facts: false
+  become: false
+  vars:
+    cf_api: https://api.cloudflare.com/client/v4
+  tasks:
     - name: Create an absent remotely managed tunnel (no legacy deletion)
       ansible.builtin.uri:
         url: "{{ cf_api }}/accounts/{{ cf_account_id }}/cfd_tunnel"
@@ -271,7 +469,7 @@
           Authorization: "Bearer {{ DH_CLOUDFLARE_API_TOKEN }}"
         body_format: json
         body:
-          name: "{{ site.id }}"
+          name: "{{ cf_tunnel_name }}"
           config_src: cloudflare
         status_code: 200
         validate_certs: true
@@ -416,7 +614,8 @@
       no_log: true
       changed_when: false
 
-- name: Cloudflare PVE | native Linux package and systemd management
+
+- name: Cloudflare PVE | configure and start commissioned connector
   hosts: cf_pve_target_group
   gather_facts: false
   become: false
@@ -435,122 +634,6 @@
       [Install]
       WantedBy=multi-user.target
   tasks:
-    - name: Read PVE hostname
-      ansible.builtin.command:
-        argv: [hostname, -s]
-      register: cf_pve_node
-      changed_when: false
-
-    - name: Require the expected commissioned node
-      ansible.builtin.assert:
-        that: cf_pve_node.stdout == cf_expected_node
-        fail_msg: CF_PVE_NODE_MISMATCH
-
-    - name: Check current cloudflared systemd unit ownership
-      ansible.builtin.command:
-        argv: [systemctl, show, -p, FragmentPath, --value, cloudflared.service]
-      register: cf_service_location
-      changed_when: false
-      failed_when: false
-
-    - name: Never replace an unrelated or legacy connector service
-      ansible.builtin.assert:
-        that: cf_service_location.stdout | trim in ['', '/etc/systemd/system/cloudflared.service']
-        fail_msg: CF_LEGACY_SERVICE_CONFLICT
-
-    - name: Inspect systemd unit on disk
-      ansible.builtin.stat:
-        path: /etc/systemd/system/cloudflared.service
-        follow: false
-      register: cf_existing_unit
-
-    - name: Read existing unit only for strict own-service adoption
-      ansible.builtin.slurp:
-        src: /etc/systemd/system/cloudflared.service
-      register: cf_existing_unit_bytes
-      when: cf_existing_unit.stat.exists
-      no_log: true
-
-    - name: Fail closed if an unknown unit already occupies the name
-      ansible.builtin.assert:
-        that:
-          - not cf_existing_unit.stat.exists or (
-              cf_existing_unit.stat.isreg
-              and not cf_existing_unit.stat.islnk
-              and cf_existing_unit_bytes.content | b64decode == cf_service_unit
-            )
-        fail_msg: CF_EXISTING_CLOUDFLARED_NOT_MANAGED
-
-    - name: Detect official package installation
-      ansible.builtin.command:
-        argv: [dpkg-query, -W, cloudflared]
-      register: cf_pkg_installed
-      changed_when: false
-      failed_when: false
-
-    - name: Inspect pre-existing sources if package is missing
-      ansible.builtin.command:
-        argv:
-          - grep
-          - -R
-          - -l
-          - pkg.cloudflare.com/cloudflared
-          - /etc/apt/sources.list
-          - /etc/apt/sources.list.d
-      register: cf_existing_sources
-      changed_when: false
-      failed_when: false
-      when: cf_pkg_installed.rc != 0
-
-    - name: Avoid conflicting Cloudflare Signed-By sources
-      ansible.builtin.assert:
-        that: >-
-          cf_pkg_installed.rc == 0 or (
-            cf_existing_sources.stdout_lines | default([])
-            | difference(['/etc/apt/sources.list.d/dh-cloudflared.list']) | length == 0
-          )
-        fail_msg: CF_APT_SOURCE_CONFLICT
-
-    - name: Install official package signing key if needed
-      ansible.builtin.get_url:
-        url: https://pkg.cloudflare.com/cloudflare-main.gpg
-        dest: /usr/share/keyrings/dh-cloudflare-main.gpg
-        owner: root
-        group: root
-        mode: '0644'
-      when: cf_pkg_installed.rc != 0
-
-    - name: Add only one signed Cloudflare package source
-      ansible.builtin.copy:
-        dest: /etc/apt/sources.list.d/dh-cloudflared.list
-        content: "deb [signed-by=/usr/share/keyrings/dh-cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main\n"
-        owner: root
-        group: root
-        mode: '0644'
-      when: cf_pkg_installed.rc != 0
-
-    - name: Install cloudflared via native apt
-      ansible.builtin.apt:
-        name: cloudflared
-        state: present
-        update_cache: true
-      when: cf_pkg_installed.rc != 0
-
-    - name: Check installed cloudflared version
-      ansible.builtin.command:
-        argv: [cloudflared, --version]
-      register: cf_installed_version
-      changed_when: false
-
-    - name: Require token-file feature (not token in service command)
-      ansible.builtin.assert:
-        that:
-          - cf_installed_version.stdout is search('version [0-9]{4}\.[0-9]+\.[0-9]+')
-          - >-
-            (cf_installed_version.stdout | regex_search('[0-9]{4}\.[0-9]+\.[0-9]+'))
-            is version('2025.4.0', '>=')
-        fail_msg: CF_CLOUDFLARED_TOKEN_FILE_UNSUPPORTED
-
     - name: Ensure restricted cloudflared config directory
       ansible.builtin.file:
         path: /etc/cloudflared
