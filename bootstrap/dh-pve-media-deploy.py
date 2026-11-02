@@ -266,7 +266,7 @@ def ensure_config(vmid, site, data):
        "ip=" + data["network"]["ipv4"] + ",gw=" + gateway)
     qm("set", vmid, "--nameserver", gateway)
     pubkey = pct("ssh-keygen", "-y", "-f",
-                 "/var/lib/ansible/.ssh/pve_host_write_ed25519")
+                 "/var/lib/semaphore/.ssh/dh_pve_admin_ed25519")
     need(pubkey.startswith("ssh-ed25519 "), "SSH_PUBLIC_KEY_UNAVAILABLE")
     fd, name = tempfile.mkstemp(prefix="dh-media-key-", dir="/run")
     try:
