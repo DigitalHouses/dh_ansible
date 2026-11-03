@@ -141,7 +141,9 @@
     - { key: hostpci0, value: "{{ media_vm.pci.gpu }},pcie=1" }
     - { key: hostpci1, value: "{{ media_vm.pci.sata_controller }},pcie=1" }
     - { key: boot, value: 'order=scsi0' }
-  when: media_vm_settings[item.key] | default('') != item.value
+  when: >-
+    media_vm_settings[item.key] | default('') != item.value
+    and not (item.key == 'agent' and media_vm_settings.agent | default('') in ['1', 'enabled=1'])
 
 - name: Ensure image cache exists
   ansible.builtin.file:
@@ -249,22 +251,473 @@
     src: /etc/pve/storage.cfg
   register: media_storage_cfg
 
-- name: Parse local directory storage content
+- name: Read PVE local storage stanza, not unrelated storages
   ansible.builtin.set_fact:
-    media_local_storage: >-
-      {{ (media_storage_cfg.content | b64decode |
-          regex_findall('(?ms)^dir: local\s*\n((?:(?!^[A-Za-z0-9_-]+:).)*?)\Z')) | first | default('') }}
-  # Scan until next storage section; no custom storage parser or Python helper.
+    media_local_storage_lines: >-
+      {{ (media_storage_cfg.content | b64decode
+          | regex_findall('(?ms)^dir: local[ \t]*\n((?:(?!^[a-z][a-z0-9-]*: ).|\n)*)'))
+          | first | default('') }}
 
-- name: Preserve existing content types when enabling supported snippets
+- name: Extract local storage content types
   ansible.builtin.set_fact:
     media_local_contents: >-
-      {{ (media_storage_cfg.content | b64decode |
-          regex_findall('(?m)^[ \t]+content[ \t]+([a-z,]+)\s*$')) | first | default('') }}
+      {{ (media_local_storage_lines
+          | regex_findall('(?m)^[ \t]+content[ \t]+([a-z,]+)\s*
 
-- name: Require standard local snippets storage before using cloud-init
+- name: Enable snippets on existing PVE local dir storage
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - local
+      - --content
+      - "{{ (media_local_contents.split(',') + ['snippets']) | unique | join(',') }}"
+  when: "'snippets' not in media_local_contents.split(',')"
+
+- name: Create the PVE cloud-init snippet folder
+  ansible.builtin.file:
+    path: /var/lib/vz/snippets
+    state: directory
+    mode: '0750'
+
+- name: Install native cloud-init vendor-data for first-boot QGA
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml"
+    mode: '0644'
+    content: |
+      #cloud-config
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent.service]
+
+- name: Install native cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+    mode: '0644'
+    content: |
+      instance-id: dh-media-{{ media_vm.vmid }}-qga-v1
+      local-hostname: {{ media_vm.name }}
+
+- name: Inspect current cloud-init setting
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_cloudinit_state
+  changed_when: false
+
+- name: Set vendor/meta cloud-init without overriding default user/network
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --cicustom
+      - "vendor=local:snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml,meta=local:snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+  when: >-
+    ('vendor=local:snippets/dh-media-' ~ (media_vm.vmid | string) ~ '-qga-v1.yaml')
+    not in media_cloudinit_state.stdout
+
+- name: Write authorized runner public key to temporary PVE file
+  ansible.builtin.copy:
+    dest: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    content: "{{ media_guest_pubkey }}\n"
+    mode: '0600'
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Set SSH public key in cloud-init when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --sshkeys, "/run/dh-media-{{ media_vm.vmid }}-pubkey"]
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Remove temporary runner key after setting cloud-init
+  ansible.builtin.file:
+    path: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    state: absent
+
+- name: Generate cloud-init ISO
+  ansible.builtin.command:
+    argv: [qm, cloudinit, update, "{{ media_vm.vmid }}"]
+  changed_when: false
+
+- name: Read VM power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_power
+  changed_when: false
+
+- name: Start VM when not running
+  ansible.builtin.command:
+    argv: [qm, start, "{{ media_vm.vmid }}"]
+  when: media_vm_power.stdout == 'status: stopped'
+
+- name: Inspect protection after provisioning
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_vm_protection_readback
+  changed_when: false
+
+- name: Restore configured VM deletion protection when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
+  when:
+    - media_vm.lifecycle.protection | default(true) | bool
+    - media_vm_protection_readback.stdout is not search('(?m)^protection: 1
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
   ansible.builtin.assert:
     that:
+      - media_vm_result.stdout == 'status: running'
+    fail_msg: MEDIA_VM_NOT_RUNNING
+))
+          | first | default('') }}
+
+- name: Require standard PVE local storage before enabling snippets
+  ansible.builtin.assert:
+    that:
+      - media_local_storage_lines is search('(?m)^[ \t]+path[ \t]+/var/lib/vz\s*
+
+- name: Enable snippets on existing PVE local dir storage
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - local
+      - --content
+      - "{{ (media_local_contents.split(',') + ['snippets']) | unique | join(',') }}"
+  when: "'snippets' not in media_local_contents.split(',')"
+
+- name: Create the PVE cloud-init snippet folder
+  ansible.builtin.file:
+    path: /var/lib/vz/snippets
+    state: directory
+    mode: '0750'
+
+- name: Install native cloud-init vendor-data for first-boot QGA
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml"
+    mode: '0644'
+    content: |
+      #cloud-config
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent.service]
+
+- name: Install native cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+    mode: '0644'
+    content: |
+      instance-id: dh-media-{{ media_vm.vmid }}-qga-v1
+      local-hostname: {{ media_vm.name }}
+
+- name: Inspect current cloud-init setting
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_cloudinit_state
+  changed_when: false
+
+- name: Set vendor/meta cloud-init without overriding default user/network
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --cicustom
+      - "vendor=local:snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml,meta=local:snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+  when: >-
+    ('vendor=local:snippets/dh-media-' ~ (media_vm.vmid | string) ~ '-qga-v1.yaml')
+    not in media_cloudinit_state.stdout
+
+- name: Write authorized runner public key to temporary PVE file
+  ansible.builtin.copy:
+    dest: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    content: "{{ media_guest_pubkey }}\n"
+    mode: '0600'
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Set SSH public key in cloud-init when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --sshkeys, "/run/dh-media-{{ media_vm.vmid }}-pubkey"]
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Remove temporary runner key after setting cloud-init
+  ansible.builtin.file:
+    path: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    state: absent
+
+- name: Generate cloud-init ISO
+  ansible.builtin.command:
+    argv: [qm, cloudinit, update, "{{ media_vm.vmid }}"]
+  changed_when: false
+
+- name: Read VM power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_power
+  changed_when: false
+
+- name: Start VM when not running
+  ansible.builtin.command:
+    argv: [qm, start, "{{ media_vm.vmid }}"]
+  when: media_vm_power.stdout == 'status: stopped'
+
+- name: Restore configured VM deletion protection
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
+  when: media_vm.lifecycle.protection | default(true) | bool
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - media_vm_result.stdout == 'status: running'
+    fail_msg: MEDIA_VM_NOT_RUNNING
+)
+      - media_local_contents | length > 0
+    fail_msg: MEDIA_LOCAL_STORAGE_CONFIG_INVALID
+
+- name: Enable snippets on existing PVE local dir storage
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - local
+      - --content
+      - "{{ (media_local_contents.split(',') + ['snippets']) | unique | join(',') }}"
+  when: "'snippets' not in media_local_contents.split(',')"
+
+- name: Create the PVE cloud-init snippet folder
+  ansible.builtin.file:
+    path: /var/lib/vz/snippets
+    state: directory
+    mode: '0750'
+
+- name: Install native cloud-init vendor-data for first-boot QGA
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml"
+    mode: '0644'
+    content: |
+      #cloud-config
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent.service]
+
+- name: Install native cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+    mode: '0644'
+    content: |
+      instance-id: dh-media-{{ media_vm.vmid }}-qga-v1
+      local-hostname: {{ media_vm.name }}
+
+- name: Inspect current cloud-init setting
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_cloudinit_state
+  changed_when: false
+
+- name: Set vendor/meta cloud-init without overriding default user/network
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --cicustom
+      - "vendor=local:snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml,meta=local:snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+  when: >-
+    ('vendor=local:snippets/dh-media-' ~ (media_vm.vmid | string) ~ '-qga-v1.yaml')
+    not in media_cloudinit_state.stdout
+
+- name: Write authorized runner public key to temporary PVE file
+  ansible.builtin.copy:
+    dest: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    content: "{{ media_guest_pubkey }}\n"
+    mode: '0600'
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Set SSH public key in cloud-init when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --sshkeys, "/run/dh-media-{{ media_vm.vmid }}-pubkey"]
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Remove temporary runner key after setting cloud-init
+  ansible.builtin.file:
+    path: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    state: absent
+
+- name: Generate cloud-init ISO
+  ansible.builtin.command:
+    argv: [qm, cloudinit, update, "{{ media_vm.vmid }}"]
+  changed_when: false
+
+- name: Read VM power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_power
+  changed_when: false
+
+- name: Start VM when not running
+  ansible.builtin.command:
+    argv: [qm, start, "{{ media_vm.vmid }}"]
+  when: media_vm_power.stdout == 'status: stopped'
+
+- name: Restore configured VM deletion protection
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
+  when: media_vm.lifecycle.protection | default(true) | bool
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - media_vm_result.stdout == 'status: running'
+    fail_msg: MEDIA_VM_NOT_RUNNING
+)
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - media_vm_result.stdout == 'status: running'
+    fail_msg: MEDIA_VM_NOT_RUNNING
+))
+          | first | default('') }}
+
+- name: Require standard PVE local storage before enabling snippets
+  ansible.builtin.assert:
+    that:
+      - media_local_storage_lines is search('(?m)^[ \t]+path[ \t]+/var/lib/vz\s*
+
+- name: Enable snippets on existing PVE local dir storage
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - local
+      - --content
+      - "{{ (media_local_contents.split(',') + ['snippets']) | unique | join(',') }}"
+  when: "'snippets' not in media_local_contents.split(',')"
+
+- name: Create the PVE cloud-init snippet folder
+  ansible.builtin.file:
+    path: /var/lib/vz/snippets
+    state: directory
+    mode: '0750'
+
+- name: Install native cloud-init vendor-data for first-boot QGA
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml"
+    mode: '0644'
+    content: |
+      #cloud-config
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent.service]
+
+- name: Install native cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+    mode: '0644'
+    content: |
+      instance-id: dh-media-{{ media_vm.vmid }}-qga-v1
+      local-hostname: {{ media_vm.name }}
+
+- name: Inspect current cloud-init setting
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_cloudinit_state
+  changed_when: false
+
+- name: Set vendor/meta cloud-init without overriding default user/network
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --cicustom
+      - "vendor=local:snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml,meta=local:snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+  when: >-
+    ('vendor=local:snippets/dh-media-' ~ (media_vm.vmid | string) ~ '-qga-v1.yaml')
+    not in media_cloudinit_state.stdout
+
+- name: Write authorized runner public key to temporary PVE file
+  ansible.builtin.copy:
+    dest: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    content: "{{ media_guest_pubkey }}\n"
+    mode: '0600'
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Set SSH public key in cloud-init when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --sshkeys, "/run/dh-media-{{ media_vm.vmid }}-pubkey"]
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Remove temporary runner key after setting cloud-init
+  ansible.builtin.file:
+    path: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    state: absent
+
+- name: Generate cloud-init ISO
+  ansible.builtin.command:
+    argv: [qm, cloudinit, update, "{{ media_vm.vmid }}"]
+  changed_when: false
+
+- name: Read VM power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_power
+  changed_when: false
+
+- name: Start VM when not running
+  ansible.builtin.command:
+    argv: [qm, start, "{{ media_vm.vmid }}"]
+  when: media_vm_power.stdout == 'status: stopped'
+
+- name: Restore configured VM deletion protection
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
+  when: media_vm.lifecycle.protection | default(true) | bool
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - media_vm_result.stdout == 'status: running'
+    fail_msg: MEDIA_VM_NOT_RUNNING
+)
       - media_local_contents | length > 0
     fail_msg: MEDIA_LOCAL_STORAGE_CONFIG_INVALID
 
