@@ -9,8 +9,9 @@
       - media_vm.file_access.accounts is not string
       - media_vm.storage.mode == 'readwrite'
       - media_vm.file_access.accounts | length == 2
+      - (media_vm.file_access.accounts | map(attribute='name') | unique | list | length) == 2
       - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
-      - "'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)"
+      - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first) == site.owner_slug ~ '_admin'
     fail_msg: MEDIA_FILE_ACCESS_FLEET_REQUIRED
 
 - name: Validate approved account roles without reading any passwords
@@ -19,18 +20,12 @@
       - item.name is match('^[a-z][a-z0-9_]{2,30}$')
       - item.role in ['owner', 'administrator']
       - item.name not in ['root', 'debian', 'nobody', 'plex', 'jellyfin', 'radarr', 'sonarr', 'prowlarr', 'qbittorrent', 'filestash']
-      - (item.name == 'serzhan_admin') == (item.role == 'administrator')
+      - (item.role != 'administrator') or (item.name == site.owner_slug ~ '_admin')
       - item.password is not defined
     fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
   loop: "{{ media_vm.file_access.accounts }}"
   loop_control:
     label: "{{ item.name | default('invalid') }}"
-
-- name: Explicitly reject duplicate owner identities
-  ansible.builtin.assert:
-    that:
-      - (media_vm.file_access.accounts | map(attribute='name') | list | unique | length) == 2
-    fail_msg: MEDIA_FILE_ACCESS_DUPLICATE_IDENTITIES
 
 - name: Require actual media application configuration
   ansible.builtin.assert:
