@@ -75,7 +75,7 @@ def test_task80_operator_selection_needs_no_second_approval_or_legacy_nfs():
     guest = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text(encoding="utf-8")
     catalog = (ROOT / "catalog/semaphore-tasks.json").read_text(encoding="utf-8")
     for source in (play, preflight, deploy):
-        assert "data[\\\"approvals\\\"]" not in source
+        assert 'data["approvals"]' not in source
         assert "media_vm.approvals" not in source
     assert "MEDIA_PVE_PREFLIGHT=PASS" in preflight
     assert "SATA_CONTROLLER_NOT_AHCI" in preflight
