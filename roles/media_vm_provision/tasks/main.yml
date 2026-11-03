@@ -111,7 +111,7 @@
 
 - name: Remove only selected VM and its virtual disks
   ansible.builtin.command:
-    argv: [qm, destroy, "{{ media_vm.vmid }}", --purge, '1', --destroy-unreferenced-disks, '1']
+    argv: [qm, destroy, "{{ media_vm.vmid }}", --purge, '1']
   when: media_vm_action == 'recreate'
 
 - name: Create VM through one shared create/recreate block
