@@ -5,8 +5,7 @@
       - media_vm.storage.mode == 'readwrite'
       - media_vm.file_access.accounts | length == 2
       - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
-      - "'serzhan_admin' in (media_vm.file_access.accounts | map(attribute='name') | list)"
-      - (media_vm.file_access.accounts | selectattr('name', 'equalto', 'serzhan_admin') | map(attribute='role') | first) == 'administrator'
+      - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first) == media_owner_slug ~ '_admin'
     fail_msg: MEDIA_FILE_ACCESS_INITIAL_ACCOUNTS_INVALID
 
 - name: Create approved media access groups
@@ -72,7 +71,7 @@
       - --account
       - "{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first }}"
       - --account
-      - serzhan_admin
+      - "{{ media_vm.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first }}"
   register: media_access_result
   changed_when: "'SYNCHRONIZED' in media_access_result.stdout"
   no_log: true
