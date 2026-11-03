@@ -87,6 +87,8 @@ jobs:
 
       - name: Validate Media 80 Ansible syntax before legacy regression tests
         run: ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
+      - name: Validate standalone Task 80 native role syntax
+        run: ansible-playbook --syntax-check -i localhost, tests/ansible/media80-role-syntax.yml
       - name: Verify native Media 80 actions and no unintended Python executor
         run: ansible-playbook -i localhost, -c local tests/ansible/media80-native-contract.yml
 
