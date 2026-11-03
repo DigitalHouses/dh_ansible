@@ -297,8 +297,8 @@ def main():
     data = json.loads(args.config.read_text())
     require(re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
                          data["pool_name"]) is not None, "POOL_NAMING_INVALID")
-    disk, physical = find_disk(data)
     if args.discover_only:
+        _, physical = find_disk(data)
         print("MEDIA_SATA_DEVICE=" + physical, flush=True)
         return
     require(args.action in ("import", "erase"), "DISK_ACTION_REQUIRED")
@@ -313,6 +313,7 @@ def main():
     validate_layout(data)
     require(args.action != "erase" or data["mode"] == "readwrite",
             "ERASE_REQUIRES_READWRITE")
+    disk, physical = find_disk(data)
     command("/usr/sbin/modprobe", "zfs")
     if args.action == "erase":
         print("MEDIA_DISK_ACTION=ERASE", flush=True)
