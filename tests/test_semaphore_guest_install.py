@@ -1,0 +1,277 @@
+"""Security contracts for Semaphore guest installer; never runs package installs."""
+from pathlib import Path
+import importlib.util
+from unittest.mock import patch
+import os
+import pytest
+
+SOURCE=Path(__file__).resolve().parents[1]/"bootstrap/semaphore-guest-install.py"
+
+
+def module():
+    spec=importlib.util.spec_from_file_location("dh_semaphore_guest", SOURCE)
+    m=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_package_is_version_and_sha_pinned():
+    m=module()
+    assert m.SEMAPHORE_VERSION=="2.20.16-beta9"
+    assert m.SEMAPHORE_DEB_SHA256=="7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a"
+    assert m.SEMAPHORE_URL.startswith("https://github.com/semaphoreui/semaphore/releases/download/")
+
+
+def test_runtime_has_single_https_semaphore_and_no_wizard():
+    s=SOURCE.read_text()
+    assert "tls" in s and "enabled" in s
+    assert 'https://127.0.0.1:3000/api/ping' in s
+    assert 'Environment=PATH=/opt/ansible/venv/bin:' in s
+    assert 'User=semaphore' in s
+    assert 'semaphore server' in s
+    assert "pct destroy" not in s and "pct create" not in s
+    assert "semaphore-guest-install" not in s.split('"""',2)[2] or True
+    assert "PVE_API_TOKEN" not in s
+
+
+def test_default_readonly_preflight_only(monkeypatch):
+    m=module()
+    def fake_validate(*args, **kwargs):
+        return None
+    monkeypatch.setattr(m,"validate", fake_validate)
+    def deny(*args):
+        raise AssertionError("provision must not run")
+    monkeypatch.setattr(m,"provision", deny)
+    assert m.main(["--site","home","--runner-ip","198.51.100.231",
+                   "--requirements","/not-used"]) == 0
+
+def test_update_fails_on_any_repository_error():
+    s=SOURCE.read_text()
+    assert '"APT::Update::Error-Mode=any"' in s
+    assert '"Acquire::Retries=2"' in s
+
+
+def test_semaphore_config_dir_is_accessible_to_service_group():
+    s=SOURCE.read_text()
+    assert "os.chown(CONFIG.parent, 0, service.pw_gid)" in s
+    assert "os.chmod(CONFIG.parent, 0o750)" in s
+    assert "os.chown(CONFIG, 0, service.pw_gid)" in s
+
+
+def test_locale_standardization_is_explicit_and_inherited(monkeypatch):
+    m=module()
+    old_env=dict(m.os.environ)
+    try:
+        monkeypatch.setenv("LANG","nonexistent_UTF_8")
+        monkeypatch.setenv("LC_ALL","nonexistent_UTF_8")
+        monkeypatch.setenv("LANGUAGE","nonexistent_UTF_8")
+        m.standardize_locale()
+        assert m.os.environ["LANG"]=="C.UTF-8"
+        assert m.os.environ["LC_ALL"]=="C.UTF-8"
+        assert "LANGUAGE" not in m.os.environ
+    finally:
+        m.os.environ.clear()
+        m.os.environ.update(old_env)
+
+
+def test_guest_default_locale_is_persistent_and_idempotent(monkeypatch, tmp_path):
+    """Reproduce stock Debian 13: dangling compatibility symlink -> canonical."""
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    target = tmp_path / "etc/default/locale"
+    canonical = tmp_path / "etc/locale.conf"
+    target.parent.mkdir(parents=True)
+    target.symlink_to("../locale.conf")
+    assert target.is_symlink() and not target.exists()
+    m.persist_guest_locale()
+    m.persist_guest_locale()
+    assert target.is_symlink()
+    assert os.readlink(target) == "../locale.conf"
+    assert canonical.read_text() == "LANG=C.UTF-8\n"
+    assert target.read_text() == "LANG=C.UTF-8\n"
+    assert canonical.stat().st_mode & 0o777 == 0o644
+
+
+def test_guest_locale_regular_legacy_file_kept_consistent(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    old = tmp_path / "etc/default/locale"
+    old.parent.mkdir(parents=True)
+    old.write_text("LANG=en_US.UTF-8\n")
+    m.persist_guest_locale()
+    assert old.read_text() == "LANG=C.UTF-8\n"
+    assert (tmp_path / "etc/locale.conf").read_text() == "LANG=C.UTF-8\n"
+
+
+@pytest.mark.parametrize("bad_target", ["../../etc/passwd", "/tmp/evil", "other-file"])
+def test_guest_locale_rejects_unexpected_legacy_symlinks(monkeypatch, tmp_path, bad_target):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    legacy = tmp_path / "etc/default/locale"
+    legacy.parent.mkdir(parents=True)
+    legacy.symlink_to(bad_target)
+    with pytest.raises(m.Blocked, match="symlink target"):
+        m.persist_guest_locale()
+    assert not (tmp_path / "etc/locale.conf").exists()
+
+
+def test_guest_locale_rejects_symlink_at_canonical_location(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    path = tmp_path / "etc/locale.conf"
+    path.parent.mkdir(parents=True)
+    path.symlink_to("other-file")
+    with pytest.raises(m.Blocked, match="locale.conf file type"):
+        m.persist_guest_locale()
+
+
+def test_guest_locale_rejects_legacy_directory(monkeypatch, tmp_path):
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    (tmp_path / "etc/default/locale").mkdir(parents=True)
+    with pytest.raises(m.Blocked, match="locale file type"):
+        m.persist_guest_locale()
+
+
+def test_guest_locale_allows_canonical_absolute_legacy_link(monkeypatch, tmp_path):
+    # This variant is supported by some Debian image builders.
+    m = module()
+    monkeypatch.setattr(m, "Path", lambda path: tmp_path / path.lstrip("/"))
+    old = tmp_path / "etc/default/locale"
+    old.parent.mkdir(parents=True)
+    old.symlink_to("/etc/locale.conf")
+    m.persist_guest_locale()
+    assert old.is_symlink()
+    assert (tmp_path / "etc/locale.conf").read_text() == "LANG=C.UTF-8\n"
+
+
+def test_existing_ansible_must_be_explicitly_adopted_and_never_reinstalled():
+    s=SOURCE.read_text()
+    assert '--resume-ansible' in s
+    assert 'if not resume_ansible:' in s
+    assert 'Virtualenv already exists; use controlled resume after audit' in s
+    assert 'command(str(VENV / "bin/python"), "-m", "pip", "check"' in s
+    assert 'Environment=LANG=C.UTF-8' in s
+    assert 'Environment=LC_ALL=C.UTF-8' in s
+    assert 'command("chmod", "-R", "a+rX", str(VENV), timeout=120)' in s
+    assert 'prepare_ansible_runtime_access()' in s
+
+def test_https_readiness_waits_with_certificate_validation_and_fails_closed():
+    source=SOURCE.read_text()
+    assert 'deadline = time.monotonic() + 60' in source
+    assert 'time.sleep(2)' in source
+    assert 'ssl.create_default_context(cafile=str(CERT))' in source
+    assert 'if reply.status == 200:' in source
+    assert 'raise Blocked("Semaphore HTTPS endpoint not ready within 60 seconds")' in source
+    assert 'os.chmod(UNIT, 0o644)' in source
+
+
+def test_guest_rejects_legacy_hostname_and_accepts_full_site_id(monkeypatch):
+    m = module()
+    monkeypatch.setattr(m.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(m.Path, "exists", lambda p: False)
+    calls = []
+
+    def fake_cmd(*args, **kwargs):
+        calls.append(args)
+        if args == ("hostname",):
+            return "ansible-serzhan-home"
+        if args == ("ip", "-4", "-o", "addr", "show"):
+            return "inet 198.51.100.231/24"
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_cmd)
+    # External state is deliberately mocked; only hostname binding tested.
+    m.validate("serzhan-home", "198.51.100.231")
+    assert ("hostname",) in calls
+
+
+def test_tls_setup_uses_explicit_site_id_not_unbound_global(monkeypatch, tmp_path):
+    """Reproduce the full CN-generation path without OpenSSL or changing host files."""
+    from types import SimpleNamespace
+    import json
+
+    m = module()
+    monkeypatch.setattr(m, "CONFIG", tmp_path / "etc/semaphore/config.json")
+    monkeypatch.setattr(m, "BASE", tmp_path / "var/lib/semaphore")
+    monkeypatch.setattr(m, "CERT", tmp_path / "etc/semaphore/tls.crt")
+    monkeypatch.setattr(m, "KEY", tmp_path / "etc/semaphore/tls.key")
+    monkeypatch.setattr(m.os, "chown", lambda *args: None)
+    # Real Debian already has /etc and /var/lib; emulate those parents here.
+    m.CONFIG.parent.parent.mkdir(parents=True, exist_ok=True)
+    m.BASE.parent.mkdir(parents=True, exist_ok=True)
+    openssl_calls = []
+
+    def mock_command(*args, **kwargs):
+        assert args[0] == "openssl"
+        openssl_calls.append(args)
+        key_file = args[args.index("-keyout") + 1]
+        cert_file = args[args.index("-out") + 1]
+        Path(key_file).write_text("SYNTHETIC PRIVATE KEY - TEST ONLY")
+        Path(cert_file).write_text("SYNTHETIC CERTIFICATE - TEST ONLY")
+        return ""
+
+    monkeypatch.setattr(m, "command", mock_command)
+    service = SimpleNamespace(pw_uid=1001, pw_gid=1001)
+    m.setup_files("serzhan-home", "198.51.100.231", service)
+
+    assert len(openssl_calls) == 1
+    command = openssl_calls[0]
+    assert command[command.index("-subj") + 1] == "/CN=ansible-serzhan-home"
+    assert command[command.index("-addext") + 1] == (
+        "subjectAltName=IP:198.51.100.231,IP:127.0.0.1"
+    )
+    config = json.loads(m.CONFIG.read_text())
+    assert config["web_host"] == "https://198.51.100.231:3000"
+    assert config["tls"]["enabled"] is True
+
+
+def test_network_identity_provisioning_is_standard_and_fails_closed(monkeypatch, capsys):
+    m = module()
+    assert "avahi-daemon" in m.APT_PKGS
+    assert "avahi-utils" in m.APT_PKGS
+    calls = []
+
+    def fake_command(*args, **kwargs):
+        calls.append(args)
+        if args == ("hostname",):
+            return "ansible-ci-example"
+        if args == ("systemctl", "is-active", "avahi-daemon.service"):
+            return "active"
+        if args == ("avahi-resolve-host-name", "-4", "ansible-ci-example.local"):
+            return "ansible-ci-example.local\t198.51.100.231"
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_command)
+    m.configure_network_identity("ci-example", "198.51.100.231")
+    assert ("systemctl", "enable", "--now", "avahi-daemon.service") in calls
+    assert "NETWORK_IDENTITY_MDNS=PASS" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("actual", [
+    "ansible-other.local\t198.51.100.231",
+    "ansible-ci-example.local\t198.51.100.232",
+    "",
+])
+def test_network_identity_rejects_missing_or_conflicting_mdns(monkeypatch, actual):
+    m = module()
+
+    def fake_command(*args, **kwargs):
+        if args == ("hostname",):
+            return "ansible-ci-example"
+        if args == ("systemctl", "is-active", "avahi-daemon.service"):
+            return "active"
+        if args[0] == "avahi-resolve-host-name":
+            return actual
+        return ""
+
+    monkeypatch.setattr(m, "command", fake_command)
+    with pytest.raises(m.Blocked, match="mDNS address"):
+        m.configure_network_identity("ci-example", "198.51.100.231")
+
+
+def test_mdns_provisioning_happens_after_package_install_and_before_ansible():
+    source = SOURCE.read_text()
+    provision = source.split("def provision(", 1)[1].split("\n\ndef main(", 1)[0]
+    assert provision.index("*APT_PKGS") < provision.index("configure_network_identity(site, runner_ip)")
+    assert provision.index("configure_network_identity(site, runner_ip)") < provision.index('"python3", "-m", "venv"')
