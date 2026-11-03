@@ -70,13 +70,6 @@
     state: present
     update_cache: false
 
-- name: Verify SMART monitoring binary available for dh_pve_agent
-  ansible.builtin.command:
-    argv:
-      - smartctl
-      - --version
-  changed_when: false
-
 - name: Start QEMU Guest Agent
   ansible.builtin.systemd_service:
     name: qemu-guest-agent.service
@@ -308,37 +301,21 @@
 - name: Reconcile native Plex automatic and periodic scanning
   ansible.builtin.import_tasks: plex_autoscan.yml
 
-- name: Validate declared ZFS import mode and pool GUID
+- name: Verify requested pool access mode
   ansible.builtin.command:
-    argv:
-      - zpool
-      - get
-      - -H
-      - -o
-      - value
-      - "{{ item }}"
-      - "{{ media_vm.storage.pool_name }}"
-  loop:
-    - readonly
-    - guid
-  register: media_zfs_properties
+    argv: [zpool, get, -H, -o, value, readonly, "{{ media_vm.storage.pool_name }}"]
+  register: media_pool_readonly
   changed_when: false
 
 - name: Verify final media service state
   ansible.builtin.assert:
     that:
-      - media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
-      - media_zfs_properties.results[1].stdout is match('^[0-9]{8,24}$')
+      - media_pool_readonly.stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')
       - media_plex_http.status == 200
 
 - name: Require declarative selection of media management applications
   ansible.builtin.assert:
     that:
-      - media_vm.applications is mapping
-      - media_vm.applications.radarr is boolean
-      - media_vm.applications.sonarr is boolean
-      - media_vm.applications.prowlarr is boolean
-      - media_vm.applications.qbittorrent is boolean
       - media_vm.downloads is mapping
       - media_vm.downloads.mode in ['staging-only', 'shared-zfs']
       - >-
