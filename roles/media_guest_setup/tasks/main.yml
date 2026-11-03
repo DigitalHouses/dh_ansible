@@ -5,11 +5,8 @@
       - media_vm.storage is mapping
       - media_vm.storage.mode in ['readonly', 'readwrite']
       - media_vm.storage.pool_name is match('^[a-zA-Z][a-zA-Z0-9_-]+$')
-      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.guid is match('^[0-9]{8,24}$')
-      - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
       - media_raw_disk_action is defined
       - media_raw_disk_action in ['import', 'erase']
-      - media_vm.storage.legacy_pool is not defined or media_vm.storage.legacy_pool.partition_partuuid is match('^[0-9a-f-]{36}$')
       - media_vm.storage.media_dataset is match('^[a-zA-Z][a-zA-Z0-9_-]+(/[a-zA-Z0-9_.-]+)+$')
       - media_vm.storage.media_dataset.split('/')[0] == media_vm.storage.pool_name
       - media_vm.os.distribution == 'debian'
@@ -181,7 +178,17 @@
 
 - name: Render exact declarative ZFS configuration
   ansible.builtin.copy:
-    content: "{{ media_vm.storage | to_nice_json }}"
+    content: >-
+      {{
+        media_vm.storage
+        | combine({
+            'sata_controller': {
+              'vendor': media_sata_pci_vendor,
+              'device': media_sata_pci_device
+            }
+          }, recursive=True)
+        | to_nice_json
+      }}
     dest: /etc/digitalhouses/media-storage.json
     owner: root
     group: root
