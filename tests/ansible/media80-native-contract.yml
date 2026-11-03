@@ -17,6 +17,26 @@
         media80_zfs_tasks: "{{ media80_zfs_source | from_yaml }}"
         media80_guest_tasks: "{{ media80_guest_source | from_yaml }}"
 
+    - name: Validate all Task 80 YAML when clauses are string expressions
+      ansible.builtin.assert:
+        that:
+          - >-
+            item.when is string or
+            (item.when is sequence and item.when is not mapping
+             and (item.when | reject('string') | list | length) == 0)
+        fail_msg: "MEDIA80_INVALID_YAML_WHEN_TYPE: {{ item.name }}"
+      loop: "{{ media80_vm_tasks + media80_zfs_tasks + media80_guest_tasks + media80_plays[0].tasks + media80_plays[1].tasks + media80_plays[2].tasks + media80_plays[3].pre_tasks }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: item.when is defined
+
+    - name: Require VM protection condition remains a YAML string
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media80_vm_tasks | selectattr('name', 'equalto',
+             'Restore configured VM deletion protection when missing') | first)['when'][1] is string
+
     - name: Check the real Task 80 dispatch path
       ansible.builtin.assert:
         that:
