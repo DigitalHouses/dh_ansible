@@ -35,6 +35,33 @@
     fail_msg: MEDIA_VM_FOREIGN_OR_LOCKED
   when: media_vm_present.stat.exists
 
+- name: List configured QEMU guests to avoid foreign SATA ownership
+  ansible.builtin.find:
+    paths: /etc/pve/qemu-server
+    patterns: '*.conf'
+    file_type: file
+  register: media_qemu_config_files
+
+- name: Inspect PCI assignments of other QEMU guests
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ media_qemu_config_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: media_other_qemu_configs
+  when: item.path != '/etc/pve/qemu-server/' ~ (media_vm.vmid | string) ~ '.conf'
+
+- name: Require dedicated SATA PCI function to have no other QEMU owner
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_other_qemu_configs.results
+         | selectattr('content', 'defined')
+         | map(attribute='content') | map('b64decode')
+         | select('search', media_vm.pci.sata_controller | regex_escape)
+         | list | length) == 0
+    fail_msg: MEDIA_SATA_CONTROLLER_ASSIGNED_TO_ANOTHER_VM
+
 # Only recreate removes VM disks. The passed-through SATA HDD is not a VM disk.
 - name: Require recreate to remove only own virtual disks
   ansible.builtin.assert:
@@ -352,10 +379,49 @@
   register: media_vm_power
   changed_when: false
 
-- name: Start VM when not running
+- name: Check whether kept guest already has QGA
+  ansible.builtin.command:
+    argv: [qm, guest, cmd, "{{ media_vm.vmid }}", ping]
+  register: media_keep_qga_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - media_vm_action == 'keep'
+    - media_vm_power.stdout == 'status: running'
+
+- name: Reboot kept managed VM once only if first-boot QGA was missing
+  ansible.builtin.command:
+    argv: [qm, shutdown, "{{ media_vm.vmid }}", --timeout, '120']
+  when:
+    - media_vm_action == 'keep'
+    - media_vm_power.stdout == 'status: running'
+    - media_keep_qga_probe.rc | default(0) != 0
+    - media_vm_settings.cicustom is not defined
+
+- name: Confirm controlled shutdown of first-boot QGA recovery
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_qga_recovery_stopped
+  changed_when: false
+  retries: 20
+  delay: 3
+  until: media_qga_recovery_stopped.stdout == 'status: stopped'
+  when:
+    - media_vm_action == 'keep'
+    - media_vm_power.stdout == 'status: running'
+    - media_keep_qga_probe.rc | default(0) != 0
+    - media_vm_settings.cicustom is not defined
+
+- name: Read effective VM power state before normal start
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_effective_power
+  changed_when: false
+
+- name: Start VM only when stopped
   ansible.builtin.command:
     argv: [qm, start, "{{ media_vm.vmid }}"]
-  when: media_vm_power.stdout == 'status: stopped'
+  when: media_vm_effective_power.stdout == 'status: stopped'
 
 - name: Inspect protection after provisioning
   ansible.builtin.command:
