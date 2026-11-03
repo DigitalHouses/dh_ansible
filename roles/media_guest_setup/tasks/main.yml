@@ -143,7 +143,7 @@
   register: media_plex_groups
 
 # Legacy worker path remains temporarily available to non-80 callers.
-- name: Create shared DigitalHouses configuration directory for native and legacy media apps
+- name: Create site storage configuration directory
   ansible.builtin.file:
     path: /etc/digitalhouses
     state: directory
