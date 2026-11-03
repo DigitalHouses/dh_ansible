@@ -302,11 +302,15 @@ def guest_exec(vmid, *args):
 
 
 def old_guest_matches(vmid, site, data, *, managed=False):
-    """Read-only, exact disk and pool identity check before VM deletion."""
-    storage = data["storage"]
+    """Verify only the exact managed VM before deleting its virtual boot disk.
+
+    The physical SATA disk is invisible on PVE after PCI passthrough. Its
+    identity is proved by the guest independently before erase/import.
+    """
     state = config(vmid)
-    need(state.get("name") in ("media-server-" + site, data["name"]),
+    need(managed and state.get("description") == MANAGED_MEDIA_DESCRIPTION,
          "FOREIGN_VM_BLOCKED")
+    need(state.get("name") == data["name"], "FOREIGN_VM_BLOCKED")
     need(state.get("scsi0", "").startswith(
         "local-lvm:vm-" + str(vmid) + "-disk-"), "FOREIGN_BOOT_VOLUME")
     need(state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1",
@@ -318,86 +322,7 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     for slot in ("scsi1", "scsi2", "sata0", "sata1", "virtio0",
                  "virtio1", "ide0", "ide1", "unused0", "unused1"):
         need(slot not in state, "UNEXPECTED_VM_DISK_" + slot)
-    devices = json.loads(guest_exec(vmid, "/usr/bin/lsblk",
-                                    "-J", "-b", "-d", "-o",
-                                    "NAME,PATH,TYPE,MODEL,SERIAL,WWN,SIZE"))
-    disks = devices.get("blockdevices", [])
-    matches = [d for d in disks if
-               d.get("type") == "disk"
-               and str(d.get("serial", "")).strip() == storage["disk"]["serial"]
-               and str(d.get("wwn", "")).lower() == storage["disk"]["wwn"].lower()
-               and int(d.get("size") or 0) == int(storage["disk"]["size_bytes"])]
-    need(len(matches) == 1 and matches[0].get("name") != "sda",
-         "LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH")
-    if managed:
-        need(state.get("description") == MANAGED_MEDIA_DESCRIPTION,
-             "MANAGED_VM_MARKER_MISSING")
-        # A recreated managed guest may still hold the previous pool name.
-        # The new pool name is used only *after* erase. Never infer or
-        # silently accept a foreign pool: the source must be Fleet-pinned
-        # by exact name and GUID, and the vdev must match the approved SSD.
-        available = {}
-        for line in guest_exec(vmid, "/usr/sbin/zpool", "list",
-                               "-H", "-o", "name,guid").splitlines():
-            parts = line.split()
-            need(len(parts) == 2 and parts[1].isdecimal(),
-                 "MANAGED_ZFS_INVENTORY_INVALID")
-            available[parts[0]] = parts[1]
-        desired = storage["pool_name"]
-        previous = storage.get("recreate_source_pool")
-        if desired in available:
-            # Imported data pool identity must be Fleet-pinned even when
-            # name and physical WWN already match.
-            pinned_guid = storage.get("import_pool_guid")
-            need(isinstance(pinned_guid, str) and pinned_guid.isdecimal()
-                 and available[desired] == pinned_guid,
-                 "MANAGED_ZFS_IMPORT_GUID_DRIFT")
-            pool, expected_guid = desired, pinned_guid
-        else:
-            need(isinstance(previous, dict)
-                 and set(previous) == {"name", "guid"}
-                 and isinstance(previous["name"], str)
-                 and re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
-                                  previous["name"]) is not None
-                 and isinstance(previous["guid"], str)
-                 and previous["guid"].isdecimal()
-                 and previous["name"] != desired
-                 and available.get(previous["name"]) == previous["guid"],
-                 "MANAGED_ZFS_SOURCE_NOT_APPROVED")
-            pool, expected_guid = previous["name"], previous["guid"]
-    else:
-        old = storage["legacy_pool"]
-        pool = old["name"]
-        expected_guid = str(old["guid"])
-    observed = guest_exec(vmid, "/usr/sbin/zpool", "get",
-                          "-H", "-o", "value", "guid", pool)
-    need(observed.isdecimal() and (expected_guid is None or observed == expected_guid),
-         "LEGACY_ZFS_GUID_MISMATCH")
-    # The guest has exactly one approved physical HDD in addition to its
-    # QEMU system disk, and its imported pool GUID is pinned in private site
-    # inventory. No destructive system volume can be selected by /dev/sdX.
-    physical_disks = [d for d in disks if d.get("type") == "disk"
-                      and d.get("name") != "sda"]
-    need(len(physical_disks) == 1
-         and physical_disks[0]["name"] == matches[0]["name"],
-         "MEDIA_PHYSICAL_DISK_TOPOLOGY_MISMATCH")
-    # A matching pool GUID and a matching attached HDD do not prove that
-    # the pool actually resides on that HDD. Inspect the sole real ZFS vdev
-    # before any VM deletion, and resolve partition/by-id paths to the
-    # underlying disk. Unknown or multi-vdev topologies fail closed.
-    status = guest_exec(vmid, "/usr/sbin/zpool", "status", "-P", pool)
-    vdevs = re.findall(
-        r"(?m)^\s+(/dev/\S+)\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b",
-        status,
-    )
-    need(len(vdevs) == 1, "LEGACY_ZFS_VDEV_COUNT_INVALID")
-    vdev_parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o",
-                             "PKNAME", vdevs[0]).strip()
-    if not vdev_parent:
-        vdev_parent = guest_exec(vmid, "/usr/bin/lsblk", "-n", "-o",
-                                 "NAME", vdevs[0]).strip()
-    need(vdev_parent == matches[0]["name"], "LEGACY_ZFS_ON_FOREIGN_DISK")
-    print("DESTRUCTIVE_PREFLIGHT=PASS", flush=True)
+    print("MANAGED_VM_IDENTITY=PASS", flush=True)
 
 
 def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
@@ -424,14 +349,8 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
             print("MEDIA_VM=RENAMED_VERIFIED_LEGACY", flush=True)
         print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
-    need(qm("status", vmid) == "status: running",
-         "VM_RECREATE_REQUIRES_RUNNING_VERIFIABLE_GUEST")
     managed = state.get("description") == MANAGED_MEDIA_DESCRIPTION
-    # A managed marker is insufficient: use QGA to verify both the approved
-    # SSD and sole ZFS vdev before touching a VM's local-lvm system disk.
     old_guest_matches(vmid, site, data, managed=managed)
-    if not managed:
-        need(disk_action == "erase", "LEGACY_POOL_REQUIRES_EXPLICIT_ERASE")
     if disk_action == "erase":
         need(data["storage"].get("destructive_without_backup") is True,
              "DISK_ERASE_NOT_APPROVED_IN_FLEET")
