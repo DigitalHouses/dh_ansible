@@ -54,77 +54,47 @@ class StorageLifecycle(unittest.TestCase):
         with self.assertRaisesRegex(self.m.Blocked, "INVALID_DIRECTORY_PATH"):
             self.m.validate_layout(data)
 
-    def test_malformed_layout_rejected_before_wipe(self):
-        m = self.m
+    def test_malformed_layout_rejected_without_device_lookups(self):
         data = configuration()
         data["layout"]["directories"] = ["bad/.."]
-        with patch.object(m, "find_disk", side_effect=AssertionError("disk touched")):
-            with self.assertRaises(m.Blocked):
-                m.validate_layout(data)
+        with patch.object(self.m, "find_disk", side_effect=AssertionError("disk touched")):
+            with self.assertRaises(self.m.Blocked):
+                self.m.validate_layout(data)
 
-    def test_wrong_legacy_guid_blocks_destructive_commands(self):
-        m = self.m
-        data = configuration()
-        with patch.object(m, "get_pool", side_effect=lambda name: None if name == "demo-home-pool" else "999999"), \
-             patch.object(m, "imported_guid_visible", return_value=None), \
-             patch.object(m, "command", side_effect=AssertionError("write attempted")):
-            with self.assertRaisesRegex(m.Blocked, "LEGACY_POOL_GUID_MISMATCH"):
-                m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb", "erase")
-
-    def test_unknown_existing_partitions_fail_closed(self):
-        m = self.m
-        data = configuration()
-        def command(*args, **kwargs):
-            if args[:2] == ("/usr/bin/lsblk", "-J"):
-                return json.dumps({"blockdevices": [{"children": [{"type": "part"}]}]})
-            raise AssertionError("unexpected device write or command: " + str(args))
-        with patch.object(m, "get_pool", return_value=None), \
-             patch.object(m, "imported_guid_visible", return_value=None), \
-             patch.object(m, "command", side_effect=command):
-            with self.assertRaisesRegex(m.Blocked, "UNKNOWN_EXISTING_PARTITIONS"):
-                m.ensure_create(data, "/dev/disk/by-id/wwn-0x1234567890abcdef", "/dev/sdb")
-
-
-    def test_existing_legacy_pool_is_preserved_without_erase(self):
-        m = self.m
-        data = configuration()
-        with (patch.object(m, "get_pool", side_effect=lambda name:
-                           None if name == "demo-home-pool" else "123456789012345"),
-              patch.object(m, "imported_guid_visible", return_value=None),
-              patch.object(m, "command", side_effect=AssertionError("write attempted"))):
-            with self.assertRaisesRegex(m.Blocked, "LEGACY_POOL_ERASE_NOT_AUTHORIZED"):
-                m.ensure_create(data, "/dev/disk/by-id/verified", "/dev/sdb", "preserve")
-
-    def test_canonical_pool_erase_needs_fleet_permission(self):
-        m = self.m
-        data = configuration()
-        data["destructive_without_backup"] = False
-        with (patch.object(m, "get_pool", return_value="445566778899"),
-              patch.object(m, "ensure_import", return_value=("445566778899", False)),
-              patch.object(m, "command", side_effect=AssertionError("disk write attempted"))):
-            with self.assertRaisesRegex(m.Blocked, "DESTRUCTIVE_APPROVAL_MISSING"):
-                m.ensure_create(data, "/dev/disk/by-id/verified", "/dev/sdb", "erase")
-
-    def test_import_has_no_create_wipe_or_destroy(self):
+    def test_import_only_verifies_existing_pool_on_selected_disk(self):
         m = self.m
         with patch.object(m, "get_pool", return_value="445566778899"), \
              patch.object(m, "verify_pool_disk") as verify, \
-             patch.object(m, "command", side_effect=AssertionError("unexpected write")):
-            self.assertEqual(
-                m.ensure_import("demo-home-pool", "/dev/disk/by-id/wwn-0x1234567890abcdef",
-                                "/dev/sdb", "readwrite"),
-                ("445566778899", False))
-            verify.assert_called_once_with("demo-home-pool", "/dev/sdb")
+             patch.object(m, "command", side_effect=AssertionError("disk write attempted")):
+            assert m.ensure_import("demo-home-pool", "/dev/sdb",
+                                   "/dev/sdb", "readwrite") == ("445566778899", False)
+        verify.assert_called_once_with("demo-home-pool", "/dev/sdb")
 
-    def test_canonical_create_is_repeatable_without_wipe(self):
+    def test_erase_requires_approval_before_disk_inspection(self):
         m = self.m
-        with patch.object(m, "get_pool", return_value="445566778899"), \
-             patch.object(m, "ensure_import", return_value=("445566778899", False)) as imp, \
-             patch.object(m, "command", side_effect=AssertionError("unexpected write")):
+        data = configuration()
+        data["destructive_without_backup"] = False
+        with patch.object(m, "active_pools", side_effect=AssertionError("disk inspected")), \
+             patch.object(m, "command", side_effect=AssertionError("disk write attempted")):
+            with self.assertRaisesRegex(m.Blocked, "DISK_ERASE_NOT_APPROVED"):
+                m.erase_disk(data, "/dev/sdb")
+
+    def test_explicit_erase_recreates_canonical_pool_regardless_of_previous_layout(self):
+        m = self.m
+        calls = []
+        def cmd(*args, **kw):
+            calls.append(args)
+            return ""
+        with patch.object(m, "active_pools", return_value=[]), \
+             patch.object(m, "scan_devices", return_value=["/dev/sdb", "/dev/sdb1"]), \
+             patch.object(m, "get_pool", return_value="445566778899"), \
+             patch.object(m, "verify_pool_disk"), \
+             patch.object(m, "command", side_effect=cmd):
             with redirect_stdout(io.StringIO()):
-                result = m.ensure_create(configuration(), "/dev/disk/by-id/example", "/dev/sdb")
-            self.assertEqual(result, ("445566778899", False))
-            imp.assert_called_once()
+                assert m.erase_disk(configuration(), "/dev/sdb") == ("445566778899", True)
+        assert ("/usr/sbin/sgdisk", "--zap-all", "/dev/sdb") in calls
+        assert ("/usr/sbin/wipefs", "--all", "--force", "/dev/sdb1") in calls
+        assert any(a[:2] == ("/usr/sbin/zpool", "create") for a in calls)
 
 
 class GuestLifecycle(unittest.TestCase):
@@ -207,18 +177,18 @@ class GuestLifecycle(unittest.TestCase):
             self.assertIn("shutdown", calls)
             self.assertIn("destroy", calls)
 
-    def test_unmanaged_vm_can_only_be_recreated_with_explicit_erase(self):
+    def test_unmanaged_vm_recreate_is_always_blocked(self):
         m = self.m
         data = {"name": "mediaserver-demo-home", "storage": configuration()}
         state = {"name": "media-server-demo-home", "description": "legacy"}
         with (patch.object(m.Path, "exists", return_value=True),
               patch.object(m, "config", return_value=state),
-              patch.object(m, "old_guest_matches"),
-              patch.object(m, "qm", return_value="status: running")):
-            with self.assertRaisesRegex(m.Blocked,
-                                        "LEGACY_POOL_REQUIRES_EXPLICIT_ERASE"):
+              patch.object(m, "old_guest_matches",
+                           side_effect=m.Blocked("FOREIGN_VM_BLOCKED")),
+              patch.object(m, "qm", side_effect=AssertionError("VM mutated"))):
+            with self.assertRaisesRegex(m.Blocked, "FOREIGN_VM_BLOCKED"):
                 m.reconcile_media_vm_lifecycle(2238, "demo-home", data,
-                                                "recreate", "import")
+                                                "recreate", "erase")
 
     def test_invalid_vm_or_disk_selects_fail_closed(self):
         m = self.m
@@ -230,7 +200,7 @@ class GuestLifecycle(unittest.TestCase):
                 m.reconcile_media_vm_lifecycle(2238, "demo-home", {},
                                                 vm_choice, disk_choice)
 
-    def test_legacy_vdev_must_be_on_approved_ssd(self):
+    def test_managed_vm_requires_exact_sata_pci_controller(self):
         m = self.m
         data = {
             "name": "mediaserver-demo-home",
@@ -238,29 +208,17 @@ class GuestLifecycle(unittest.TestCase):
             "storage": configuration(),
         }
         state = {
-            "name": "media-server-demo-home",
+            "name": "mediaserver-demo-home",
+            "description": m.MANAGED_MEDIA_DESCRIPTION,
             "scsi0": "local-lvm:vm-2238-disk-0,size=64G",
             "hostpci0": "0000:00:02.0,pcie=1",
-            "hostpci1": "0000:00:17.0,pcie=1",
+            "hostpci1": "0000:00:19.0,pcie=1",
         }
-        def guest(_vmid, *args):
-            if args[0].endswith("/lsblk") and "-J" in args:
-                return json.dumps({"blockdevices": [
-                    {"name": "sdb", "path": "/dev/sdb", "type": "disk",
-                     "serial": "ABCDEFGHI123", "wwn": "0x1234567890abcdef",
-                     "size": 1000204886016}]})
-            if args[0].endswith("/zpool") and "get" in args:
-                return "123456789012345"
-            if args[0].endswith("/zpool") and "status" in args:
-                return "config:\n    /dev/sdc1 ONLINE 0 0 0"
-            if args[0].endswith("/lsblk") and "-n" in args:
-                return "sdc"
-            raise AssertionError("unexpected guest command")
         with (patch.object(m, "config", return_value=state),
-              patch.object(m, "guest_exec", side_effect=guest)):
-            with self.assertRaisesRegex(m.Blocked, "LEGACY_ZFS_ON_FOREIGN_DISK"):
-                m.old_guest_matches(2238, "demo-home", data)
-
+              patch.object(m, "guest_exec",
+                           side_effect=AssertionError("guest should not be probed"))):
+            with self.assertRaisesRegex(m.Blocked, "SATA_CONFIG_DRIFT"):
+                m.old_guest_matches(2238, "demo-home", data, managed=True)
 
 if __name__ == "__main__":
     unittest.main()
