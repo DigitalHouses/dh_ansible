@@ -37,6 +37,19 @@
             (media80_vm_tasks | selectattr('name', 'equalto',
              'Restore configured VM deletion protection when missing') | first)['when'][1] is string
 
+    - name: Require lsblk column lists to be single argv elements
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+             'List physical disks without vendor, WWN or NTFS assumptions') | first)
+            ['ansible.builtin.command'].argv == ['lsblk', '-J', '-o', 'NAME,PATH,TYPE']
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+             'Read partitions of the selected physical disk only') | first)
+            ['ansible.builtin.command'].argv ==
+            ['lsblk', '-J', '-o', 'PATH,TYPE', '{{ media_sata_disk }}']
+
     - name: Check the real Task 80 dispatch path
       ansible.builtin.assert:
         that:
