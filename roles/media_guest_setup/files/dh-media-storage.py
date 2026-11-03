@@ -152,7 +152,7 @@ def importable_report(physical):
 
 
 def ensure_import(pool, disk, physical, access, expected_guid=None):
-    """Only import the selected SATA disk; never wipe/destroy on this path."""
+    """Import the declared pool from the sole selected SATA disk."""
     guid = get_pool(pool)
     if guid:
         verify_pool_disk(pool, physical)
