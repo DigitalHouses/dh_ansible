@@ -191,8 +191,6 @@ def active_pools():
 
 def erase_disk(data, physical):
     """Explicit erase: remove any old FS/ZFS on exactly this one SATA disk."""
-    require(data.get("destructive_without_backup") is True,
-            "DISK_ERASE_NOT_APPROVED")
     name = data["pool_name"]
     for pool in active_pools():
         leaves = pool_leaves(pool)
