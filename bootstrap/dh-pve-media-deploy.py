@@ -285,7 +285,7 @@ def ensure_local_snippets_storage():
          "QGA_CLOUDINIT_STORAGE_CONFIG_MISSING")
     content = path.read_text()
     sections = list(re.finditer(
-        r"(?m)^([a-z][a-z0-9]*):[ \\t]+([A-Za-z0-9_.-]+)[ \\t]*$",
+        r"(?m)^([a-z][a-z0-9]*):[ \t]+([A-Za-z0-9_.-]+)[ \t]*$",
         content))
     matches = []
     for i, section in enumerate(sections):
@@ -313,8 +313,14 @@ def ensure_local_snippets_storage():
     if "snippets" not in enabled:
         run("/usr/sbin/pvesm", "set", "local", "--content",
             ",".join(sorted(enabled | {"snippets"})))
-        # Fail closed if the supported PVE config API did not persist changes.
-        return ensure_local_snippets_storage()
+        updated = path.read_text()
+        local_blocks = list(re.finditer(
+            r"(?m)^dir:[ \\t]+local[ \\t]*$",
+            updated))
+        need(len(local_blocks) == 1
+             and re.search(r"(?m)^\\s+content[ \\t]+[^\\n]*\\bsnippets\\b",
+                           updated[local_blocks[0].end():]) is not None,
+             "QGA_CLOUDINIT_SNIPPETS_NOT_PERSISTED")
     print("MEDIA_QGA_SNIPPETS_STORAGE=READY", flush=True)
 
 
