@@ -77,7 +77,7 @@
 
 - name: Read partitions of the selected physical disk only
   ansible.builtin.command:
-    argv: [lsblk, -J, -o, 'PATH,TYPE', "{{ media_sata_disk }}"]
+    argv: [lsblk, -J, -o, 'NAME,PATH,TYPE', "{{ media_sata_disk }}"]
   register: media_sata_partitions_raw
   changed_when: false
 
