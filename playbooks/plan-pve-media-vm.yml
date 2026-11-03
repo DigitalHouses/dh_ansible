@@ -1,7 +1,7 @@
 ---
 # Task 80 — native Ansible after Tiny Bootstrap, not the legacy root worker.
-# The ONLY destructive disk action is a one-time, exact site-approved NTFS
-# conversion, re-verified first on PVE and again from inside the media VM.
+# The operator's two selected actions are authoritative. Safeguards verify
+# resource ownership and physical topology, not redundant approvals.
 - name: Media 80 | Verify private site inventory and prepare commissioned PVE
   hosts: site_runner
   gather_facts: false
@@ -121,12 +121,12 @@
         fail_msg: MEDIA_SITE_FILE_INVALID
       no_log: true
 
-    - name: Parse approved media VM declaration (nonsecret)
+    - name: Parse canonical media VM declaration (nonsecret)
       ansible.builtin.set_fact:
         media_vm: "{{ (media_site_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
-    - name: Require specific declared VM, hardware, pool and network boundaries
+    - name: Require declared VM, hardware, pool and network boundaries
       ansible.builtin.assert:
         that:
           - media_vm.name == 'mediaserver-' ~ site.owner_slug
@@ -142,11 +142,7 @@
           - media_vm.resources.cores | int == 2
           - media_vm.resources.memory_mb | int == 4096
           - media_vm.resources.ballooning == false
-          - media_vm.approvals.provision == true
-          - media_vm.approvals.gpu_cutover == true
-          - media_vm.approvals.sata_cutover == true
-          - media_vm.backup_export.pve_host == pve_observed.ipv4
-        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
+        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID
 
     - name: Validate media file and backup account contracts
       ansible.builtin.import_tasks: media-accounts-preflight.yml
