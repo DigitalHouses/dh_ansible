@@ -43,7 +43,7 @@ def test_erase_ignores_previous_partition_format_and_guid(old_partitions):
          patch.object(m, "verify_pool_disk") as verified, \
          patch.object(m, "command", side_effect=fake_command):
         assert m.erase_disk(config(), "/dev/sdb") == ("123456", True)
-    assert [args[2] for args in calls
+    assert [args[3] for args in calls
             if args[:2] == ("/usr/sbin/wipefs", "--all")] == list(
                 reversed(old_partitions))
     assert ("/usr/sbin/sgdisk", "--zap-all", "/dev/sdb") in calls
