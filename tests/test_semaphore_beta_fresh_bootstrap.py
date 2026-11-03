@@ -28,7 +28,9 @@ class FreshBetaBootstrap(unittest.TestCase):
         self.assertIn("--unprivileged 1", INSTALL)
 
     def test_pinned_four_stage_install_seeds_only_task_zero(self):
-        self.assertRegex(INSTALL, r'CODE_RELEASE="[0-9a-f]{40}"')
+        self.assertIn('git clone -q --depth 1 --single-branch --branch main', INSTALL)
+        self.assertIn('checkout -q --detach "$CODE_RELEASE"', INSTALL)
+        self.assertIn('CODE_GIT_SHA=PASS $ACTUAL', INSTALL)
         self.assertIn('bash /opt/digitalhouses/src/bootstrap/task-00-setup.sh', INSTALL)
         self.assertIn("BOOTSTRAP_FRESH_DONE=PASS", INSTALL)
         self.assertEqual(re.findall(r'=== ([1-4])/4', INSTALL), ["1", "2", "3", "4"])

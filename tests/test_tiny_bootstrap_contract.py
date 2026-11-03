@@ -12,7 +12,13 @@ def test_bootstrap_is_small_and_has_exactly_four_stages():
     assert re.findall(r"=== ([1-4])/4", INSTALLER) == ["1", "2", "3", "4"]
     assert "bootstrap/semaphore-guest-install.py" in INSTALLER
     assert "bootstrap/task-00-setup.sh" in INSTALLER
-    assert re.search(r'CODE_RELEASE="[0-9a-f]{40}"', INSTALLER)
+    assert 'git clone -q --depth 1 --single-branch --branch main' in INSTALLER
+    assert 'CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/digitalhouses/src rev-parse HEAD)"' in INSTALLER
+    assert '[[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]]' in INSTALLER
+    assert 'checkout -q --detach "$CODE_RELEASE"' in INSTALLER
+    assert '[[ $ACTUAL == "$CODE_RELEASE" ]]' in INSTALLER
+    assert 'CODE_GIT_SHA=PASS $ACTUAL' in INSTALLER
+    assert 'CODE_RELEASE="7e77a108' not in INSTALLER
 
 
 def test_pve_is_only_used_for_fresh_container_creation():

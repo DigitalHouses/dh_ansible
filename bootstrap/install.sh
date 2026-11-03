@@ -3,8 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-# Immutable public code revision; the standard installation command pins this file.
-CODE_RELEASE="7e77a108ff3785f5be59482de85a6b2e10b24c2b"
+# Fetch public main and pin its exact commit within this single Bootstrap run.
 CTID=1231
 GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 [[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
@@ -54,7 +53,7 @@ print(f"{runner}/24 {gw}")
 PY
 )
 RUNNER_IP="${RUNNER_CIDR%/*}"
-echo "SITE=$SITE PVE=$HOST_CIDR RUNNER=$RUNNER_CIDR CODE=$CODE_RELEASE"
+echo "SITE=$SITE PVE=$HOST_CIDR RUNNER=$RUNNER_CIDR CODE_SOURCE=main/latest"
 # An existing CT/VM is never reused, overwritten or destroyed by Bootstrap.
 if pct config "$CTID" >/dev/null 2>&1 || qm config "$CTID" >/dev/null 2>&1; then
   echo "BLOCKED: guest ID $CTID already exists; fresh Bootstrap only" >&2; exit 2
@@ -80,7 +79,6 @@ fi
 pct config "$CTID" | grep -Fxq 'onboot: 1'
 pct config "$CTID" | grep -Fxq 'startup: order=2'
 echo "RUNNER_PVE_BOOT_ORDER=PASS order=2 onboot=1"
-# The Debian 13 template may ship /etc mode 0700, which breaks guest D-Bus.
 pct mount "$CTID"
 MOUNTED=1
 ETC="/var/lib/lxc/$CTID/rootfs/etc"
@@ -98,12 +96,14 @@ pct start "$CTID"
 }
 echo "CT_CREATE=PASS"
 
-echo "=== 2/4 · PINNED GITHUB CHECKOUT ==="
+echo "=== 2/4 · LATEST MAIN / IMMUTABLE GITHUB CHECKOUT ==="
 pct exec "$CTID" -- apt-get update -o APT::Update::Error-Mode=any
 pct exec "$CTID" -- env DEBIAN_FRONTEND=noninteractive apt-get install -y \
   --no-install-recommends git python3 iproute2 ca-certificates
 pct exec "$CTID" -- install -d -o root -g root -m 0700 /opt/digitalhouses
-pct exec "$CTID" -- git clone -q "$GIT_URL" /opt/digitalhouses/src
+pct exec "$CTID" -- git clone -q --depth 1 --single-branch --branch main "$GIT_URL" /opt/digitalhouses/src
+CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/digitalhouses/src rev-parse HEAD)"
+[[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]] || { echo "BLOCKED: invalid checkout SHA" >&2; exit 2; }
 pct exec "$CTID" -- git -C /opt/digitalhouses/src checkout -q --detach "$CODE_RELEASE"
 ACTUAL="$(pct exec "$CTID" -- git -C /opt/digitalhouses/src rev-parse HEAD)"
 [[ $ACTUAL == "$CODE_RELEASE" ]] || { echo "BLOCKED: Git revision mismatch" >&2; exit 2; }
