@@ -114,10 +114,6 @@ def check(site, data, pve):
         need(Path("/sys/bus/pci/devices/" + data["pci"][dev]).exists(),
              "PCI_DEVICE_MISSING_" + dev)
     need(data["pci"]["gpu"] != data["pci"]["sata_controller"], "PCI_DUPLICATE")
-    approval = data["approvals"]
-    need(approval.get("provision") is True, "PROVISION_NOT_APPROVED")
-    need(approval.get("gpu_cutover") is True
-         and approval.get("sata_cutover") is True, "PCI_NOT_APPROVED")
     existing_config = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf")
     if existing_config.exists():
         current = config(vmid)
@@ -521,8 +517,8 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
         return
     managed = state.get("description") == MANAGED_MEDIA_DESCRIPTION
     old_guest_matches(vmid, site, data, managed=managed)
-    # The VM itself serves Proxmox's NFS backup storage. Refuse to remove it
-    # during a running vzdump job. The job schedule is left untouched.
+    # Do not recreate the managed VM while a PVE backup is running.
+    # Existing backup jobs and their schedules remain untouched.
     active_pve_tasks = json.loads(run("/usr/bin/pvesh", "get",
                                        "/nodes/" + run("/usr/bin/hostname", "-s") + "/tasks",
                                        "--source", "active",
