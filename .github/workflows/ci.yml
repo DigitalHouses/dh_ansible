@@ -85,6 +85,9 @@ jobs:
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements/collections.yml
 
+      - name: Validate Media 80 Ansible syntax before legacy regression tests
+        run: ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
+
       - name: Validate repository policies
         # These integration fixtures exercise root-owned 0600 files and root-only
         # helper entrypoints. Run in the disposable CI VM as root; the separate
