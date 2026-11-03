@@ -47,8 +47,12 @@
           - >-
             (media80_zfs_tasks | selectattr('name', 'equalto',
              'Read partitions of the selected physical disk only') | first)
-            ['ansible.builtin.command'].argv ==
-            ['lsblk', '-J', '-o', 'PATH,TYPE', '{{ media_sata_disk }}']
+            ['ansible.builtin.command'].argv[:4] ==
+            ['lsblk', '-J', '-o', 'PATH,TYPE']
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+             'Read partitions of the selected physical disk only') | first)
+            ['ansible.builtin.command'].argv | length == 5
 
     - name: Check the real Task 80 dispatch path
       ansible.builtin.assert:
