@@ -33,7 +33,7 @@ def test_native_media80_has_four_phase_site_and_target_flow():
                      "StrictHostKeyChecking=yes", "site-" + "{{ site.id }}",
                      "/contents/.digitalhouses/site.json",
                      "DH_GITHUB_PROVISION_TOKEN", "DH_MQTT_PASSWORD",
-                     "one_time_ntfs_erase", "destructive_without_backup",
+                     "media_sata_pci_vendor", "destructive_without_backup",
                      "ansible.builtin.script", "ansible.builtin.wait_for_connection"):
         assert required in source
 
@@ -49,13 +49,11 @@ def test_hardware_preflight_is_in_front_of_deployment():
         "Provision only the declared PVE media VM by native Ansible SSH")])
     source = PREFLIGHT.read_text(encoding="utf-8")
     ast.parse(source)
-    for required in ("DISK_HARDWARE_IDENTITY_DRIFT",
-                     "NTFS_PARTITION_LAYOUT_DRIFT",
-                     "NTFS_RESERVED_PARTITION_DRIFT",
-                     "NTFS_DATA_PARTITION_DRIFT",
-                     "DISK_NOT_ON_APPROVED_SATA_CONTROLLER",
-                     "TARGET_VMID_OCCUPIED", "MANAGED_RECREATE_VERIFIED",
-                     "MEDIA_ERASE_SOURCE_POOL_GUID_MISMATCH"):
+    for required in ("SATA_CONTROLLER_NOT_ATTACHED",
+                     "SATA_CONTROLLER_NOT_AHCI",
+                     "MEDIA_VM_PROVISION_NOT_APPROVED",
+                     "TARGET_VMID_OCCUPIED",
+                     "MANAGED_MEDIA_VM_IDENTITY_MISMATCH"):
         assert required in source
     assert all(cmd not in source for cmd in ('"wipefs"', '"sgdisk"', '"destroy"', '"mkfs"', '"dd"'))
 
