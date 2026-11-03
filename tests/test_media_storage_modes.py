@@ -65,9 +65,9 @@ def test_system_disk_is_never_erasable_even_if_attached_to_sata():
 
 
 def test_no_vendor_device_ids_blocks_even_with_one_disk():
-    with pytest.raises(m.Blocked, match="SATA_CONTROLLER_PCI_ID_NOT_COMMISSIONED"):
-        discover(["sdb"], parents={"sdb": ("0x1234", "0xabcd")}) if False else (
-            lambda: m.find_disk({"sata_controller": {"vendor": "", "device": ""}}))()
+    with patch.object(m.Path, "exists", return_value=False), \
+         pytest.raises(m.Blocked, match="SATA_CONTROLLER_PCI_ID_NOT_COMMISSIONED"):
+        m.find_disk({"sata_controller": {"vendor": "", "device": ""}})
 
 
 def test_pve_recreate_keeps_vm_identity_boundaries_not_old_pool_guids():
