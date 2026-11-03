@@ -209,6 +209,18 @@
       register: media_sata_pci_device_read
       changed_when: false
 
+    - name: Read SATA controller PCI class on actual PVE
+      ansible.builtin.slurp:
+        src: "/sys/bus/pci/devices/{{ media_vm.pci.sata_controller }}/class"
+      register: media_sata_pci_class_read
+      changed_when: false
+
+    - name: Require selected PCI device to be an AHCI SATA controller
+      ansible.builtin.assert:
+        that:
+          - (media_sata_pci_class_read.content | b64decode | trim | lower) is match('^0x0106[0-9a-f]{2}$')
+        fail_msg: MEDIA_SELECTED_PCI_DEVICE_NOT_AHCI
+
     - name: Record PCI identity for guest-side SATA disk discovery
       ansible.builtin.set_fact:
         media_sata_pci_vendor: "{{ media_sata_pci_vendor_read.content | b64decode | trim | lower }}"
