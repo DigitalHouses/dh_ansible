@@ -117,12 +117,19 @@
 
         fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID
 
-    - name: Validate media file and backup account contracts
-      ansible.builtin.import_tasks: media-accounts-preflight.yml
-      vars:
-        pve:
-          host: "{{ pve_observed.ipv4 }}"
-          node: "{{ pve_observed.node }}"
+    - name: Require declared media owner and administrator without legacy NFS gate
+      ansible.builtin.assert:
+        that:
+          - media_vm.storage.mode == 'readwrite'
+          - media_vm.file_access.accounts is sequence
+          - media_vm.file_access.accounts | length == 2
+          - (media_vm.file_access.accounts | map(attribute='name') | unique | list | length) == 2
+          - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+          - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first) == site.owner_slug ~ '_admin'
+          - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first) == site.owner_slug
+          - (media_vm.file_access.accounts | selectattr('password', 'defined') | list | length) == 0
+        fail_msg: MEDIA_80_ACCOUNTS_INVALID
+      no_log: true
 
     - name: Read runner key's public half for VM cloud-init
       ansible.builtin.command:
