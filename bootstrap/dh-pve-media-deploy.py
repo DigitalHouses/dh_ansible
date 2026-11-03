@@ -254,6 +254,73 @@ def ensure_lifecycle(vmid, data):
          "MEDIA_PVE_RESOURCE_POLICY_NOT_APPLIED")
 
 
+def ensure_qga_cloud_init(vmid, data):
+    """Vendor-data installs QGA BEFORE native Ansible ever needs QGA.
+
+    A fixed NoCloud instance-id also permits recovering a fresh managed VM
+    which was previously booted without vendor-data. No VM/disk recreation,
+    passwords, SSH private keys, or access-control changes are involved.
+    """
+    local = run("/usr/sbin/pvesm", "config", "local")
+    need(re.search(r"(?m)^dir:\s+local\s*$", local) is not None,
+         "QGA_CLOUDINIT_LOCAL_STORAGE_NOT_DIRECTORY")
+    need(re.search(r"(?m)^\s*path\s+/var/lib/vz\s*$", local) is not None,
+         "QGA_CLOUDINIT_LOCAL_STORAGE_PATH_UNEXPECTED")
+    found = re.search(r"(?m)^\s*content\s+([a-z,]+)\s*$", local)
+    need(found is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
+    permitted = set(found[1].split(","))
+    need(permitted.issubset({"backup", "iso", "vztmpl", "images", "rootdir", "snippets"}),
+         "QGA_CLOUDINIT_LOCAL_CONTENT_UNEXPECTED")
+    if "snippets" not in permitted:
+        run("/usr/sbin/pvesm", "set", "local", "--content",
+            ",".join(sorted(permitted | {"snippets"})))
+    root = Path("/var/lib/vz/snippets")
+    need(not root.is_symlink(), "QGA_CLOUDINIT_SNIPPET_DIR_UNSAFE")
+    root.mkdir(mode=0o750, exist_ok=True)
+    need(root.is_dir() and not root.is_symlink(),
+         "QGA_CLOUDINIT_SNIPPET_DIR_UNSAFE")
+    vendor_name = "dh-media-" + str(vmid) + "-qga-v1.yaml"
+    meta_name = "dh-media-" + str(vmid) + "-qga-meta-v1.yaml"
+    vendor = ("#cloud-config\n"
+              "package_update: true\n"
+              "packages:\n"
+              "  - qemu-guest-agent\n"
+              "runcmd:\n"
+              "  - [systemctl, enable, --now, qemu-guest-agent.service]\n")
+    meta = ("instance-id: dh-media-" + str(vmid) + "-qga-v1\n"
+            "local-hostname: " + data["name"] + "\n")
+    for filename, payload in ((vendor_name, vendor), (meta_name, meta)):
+        file = root / filename
+        need(not file.is_symlink(), "QGA_CLOUDINIT_SNIPPET_SYMLINK")
+        if file.exists():
+            need(file.is_file() and file.read_text() == payload,
+                 "QGA_CLOUDINIT_SNIPPET_DRIFT")
+            continue
+        fd = os.open(file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+    wanted = ("vendor=local:snippets/" + vendor_name
+              + ",meta=local:snippets/" + meta_name)
+    current = config(vmid).get("cicustom")
+    need(current in (None, wanted), "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+    if current is None:
+        qm("set", vmid, "--cicustom", wanted)
+    qm("cloudinit", "update", vmid)
+    print("MEDIA_QGA_CLOUDINIT=CONFIGURED", flush=True)
+
+
+def qga_running(vmid):
+    try:
+        response = subprocess.run(
+            ["/usr/sbin/qm", "guest", "cmd", str(vmid), "ping"],
+            capture_output=True, text=True, check=False, timeout=12)
+        return response.returncode == 0
+    except subprocess.TimeoutExpired:
+        return False
+
+
 def ensure_config(vmid, site, data):
     state = config(vmid)
     need(state.get("name") == data["name"], "VM_NAME_DRIFT")
@@ -290,7 +357,7 @@ def ensure_config(vmid, site, data):
     ensure_lifecycle(vmid, data)
     if data.get("lifecycle", {}).get("protection", True):
         qm("set", vmid, "--protection", "1")
-    qm("cloudinit", "update", vmid)
+    ensure_qga_cloud_init(vmid, data)
 
 
 def guest_exec(vmid, *args):
@@ -388,7 +455,28 @@ def apply(site, vm_action, disk_action):
         need(config(vmid).get("name") == name, "EXISTING_VM_MISMATCH")
         if qm("status", vmid) == "status: running":
             ensure_lifecycle(vmid, data)
-            print("MEDIA_VM=ALREADY_RUNNING", flush=True)
+            if qga_running(vmid):
+                print("MEDIA_QGA=READY_ALREADY_RUNNING", flush=True)
+                print("MEDIA_VM=ALREADY_RUNNING", flush=True)
+                return
+            # Resume the just-created VM from an interrupted Task 80.
+            # Only a VM commissioned by DigitalHouses with the canonical
+            # boot volume and expected hostpci assignments may be restarted.
+            old_guest_matches(vmid, site, data, managed=(
+                config(vmid).get("description") == MANAGED_MEDIA_DESCRIPTION))
+            need(config(vmid).get("cicustom") in (None,
+                 "vendor=local:snippets/dh-media-" + str(vmid) + "-qga-v1.yaml,"
+                 "meta=local:snippets/dh-media-" + str(vmid) + "-qga-meta-v1.yaml"),
+                 "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+            ensure_qga_cloud_init(vmid, data)
+            qm("shutdown", vmid, "--timeout", "120", timeout=135)
+            need(qm("status", vmid) == "status: stopped",
+                 "QGA_RECOVERY_ACPI_SHUTDOWN_FAILED")
+            qm("start", vmid, timeout=120)
+            need(qm("status", vmid) == "status: running",
+                 "QGA_RECOVERY_RESTART_FAILED")
+            print("MEDIA_QGA=RECOVERY_CLOUDINIT_RESTARTED", flush=True)
+            print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
             return
     print("TARGET_VMID=" + str(vmid), flush=True)
     print("GUEST_IP=" + ip, flush=True)
