@@ -458,6 +458,7 @@ def staged_guest_matches(vmid, data):
     need(state.get("name") == data["name"]
          and state.get("description") == MANAGED_MEDIA_DESCRIPTION,
          "PARTIAL_MEDIA_VM_IDENTITY_MISMATCH")
+    need(state.get("lock") is None, "PARTIAL_MEDIA_VM_LOCKED")
     need(state.get("ostype") == "l26"
          and state.get("machine") == "q35"
          and state.get("bios", "seabios") == "seabios"
