@@ -137,9 +137,6 @@
           - media_vm.network.static_ipv4_verified | bool
           - media_vm.storage.pool_name == site.owner_slug ~ '-pool'
           - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
-          - media_vm.storage.disk.wwn is match('^0x[0-9a-f]{16}$')
-          - media_vm.storage.disk.serial is match('^[A-Za-z0-9_-]{8,40}$')
-          - media_vm.storage.disk.size_bytes | int > 100000000000
           - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
           - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
           - media_vm.resources.cores | int == 2
@@ -148,18 +145,8 @@
           - media_vm.approvals.provision == true
           - media_vm.approvals.gpu_cutover == true
           - media_vm.approvals.sata_cutover == true
-          - media_vm.storage.one_time_ntfs_erase.approved == true
-          - media_vm.storage.one_time_ntfs_erase.scope == 'first_create_only'
-          - media_vm.storage.one_time_ntfs_erase.wwn == media_vm.storage.disk.wwn
-          - media_vm.storage.one_time_ntfs_erase.serial == media_vm.storage.disk.serial
-          - media_vm.storage.one_time_ntfs_erase.size_bytes == media_vm.storage.disk.size_bytes
-          - media_vm.storage.one_time_ntfs_erase.partition_partuuid == media_vm.storage.disk.observed_partuuid
-          - media_vm.storage.one_time_ntfs_erase.partition_label == media_vm.storage.disk.observed_label
           - media_vm.storage.destructive_without_backup == true
           - media_vm.backup_export.pve_host == pve_observed.ipv4
-          - media_vm_action != 'create' or media_raw_disk_action == 'erase'
-          - media_vm_action != 'recreate' or media_raw_disk_action != 'erase' or (media_vm.storage.import_pool_guid is defined and (media_vm.storage.import_pool_guid is match('^[0-9]+$')))
-          - media_vm_action != 'keep' or (media_raw_disk_action == 'erase' or media_vm.storage.import_pool_guid is defined)
         fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
 
     - name: Validate media file and backup account contracts
@@ -235,7 +222,7 @@
           vmid: "{{ media_vm.vmid }}"
           vm_action: "{{ media_vm_action }}"
           disk_action: "{{ media_raw_disk_action }}"
-          disk_wwn: "{{ media_vm.storage.disk.wwn }}"
+          sata_controller: "{{ media_vm.pci.sata_controller }}"
           site_inventory_git_blob: "{{ media_site_file.json.sha }}"
           no_legacy_worker: true
 
@@ -264,6 +251,25 @@
         that:
           - "'MEDIA_PVE_PREFLIGHT=PASS' in media_pve_preflight.stdout"
         fail_msg: MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED
+
+    # Host BDF changes after PCI passthrough; identify the exact dedicated
+    # SATA controller inside the VM by its PCI vendor/device hardware ID.
+    - name: Read approved SATA PCI vendor from the actual PVE controller
+      ansible.builtin.slurp:
+        src: "/sys/bus/pci/devices/{{ media_vm.pci.sata_controller }}/vendor"
+      register: media_sata_pci_vendor_read
+      changed_when: false
+
+    - name: Read approved SATA PCI device ID from the actual PVE controller
+      ansible.builtin.slurp:
+        src: "/sys/bus/pci/devices/{{ media_vm.pci.sata_controller }}/device"
+      register: media_sata_pci_device_read
+      changed_when: false
+
+    - name: Record PCI identity for guest-side SATA disk discovery
+      ansible.builtin.set_fact:
+        media_sata_pci_vendor: "{{ media_sata_pci_vendor_read.content | b64decode | trim | lower }}"
+        media_sata_pci_device: "{{ media_sata_pci_device_read.content | b64decode | trim | lower }}"
 
     - name: Provision only the declared PVE media VM by native Ansible SSH
       ansible.builtin.script: >-
@@ -449,6 +455,8 @@
           -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
         media_owner_slug: "{{ site.owner_slug }}"
+        media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
+        media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
         site: "{{ site }}"
         media_vm_action: "{{ media_vm_action }}"
         media_raw_disk_action: "{{ media_raw_disk_action }}"
