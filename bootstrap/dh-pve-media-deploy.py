@@ -274,6 +274,50 @@ def qga_cicustom_expected(vmid):
     }
 
 
+def ensure_local_snippets_storage():
+    """Read PVE's real pmxcfs storage config, never invoke nonexistent pvesm config.
+
+    Preserve every already-enabled local content type when adding snippets.
+    No VM/disk object is altered by this operation.
+    """
+    path = Path("/etc/pve/storage.cfg")
+    need(path.is_file() and not path.is_symlink(),
+         "QGA_CLOUDINIT_STORAGE_CONFIG_MISSING")
+    content = path.read_text()
+    sections = list(re.finditer(
+        r"(?m)^([a-z][a-z0-9]*):[ \\t]+([A-Za-z0-9_.-]+)[ \\t]*$",
+        content))
+    matches = []
+    for i, section in enumerate(sections):
+        if section.group(2) != "local":
+            continue
+        end = sections[i + 1].start() if i + 1 < len(sections) else len(content)
+        matches.append((section.group(1), content[section.end():end]))
+    need(len(matches) == 1 and matches[0][0] == "dir",
+         "QGA_CLOUDINIT_LOCAL_STORAGE_NOT_DIRECTORY")
+    attrs = {}
+    for line in matches[0][1].splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(None, 1)
+        need(len(fields) == 2 and fields[0] not in attrs,
+             "QGA_CLOUDINIT_LOCAL_STORAGE_MALFORMED")
+        attrs[fields[0]] = fields[1]
+    need(attrs.get("path") == "/var/lib/vz",
+         "QGA_CLOUDINIT_LOCAL_STORAGE_PATH_UNEXPECTED")
+    types = attrs.get("content", "")
+    need(re.fullmatch(r"[a-z][a-z0-9]*(?:,[a-z][a-z0-9]*)*", types)
+         is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
+    enabled = set(types.split(","))
+    if "snippets" not in enabled:
+        run("/usr/sbin/pvesm", "set", "local", "--content",
+            ",".join(sorted(enabled | {"snippets"})))
+        # Fail closed if the supported PVE config API did not persist changes.
+        return ensure_local_snippets_storage()
+    print("MEDIA_QGA_SNIPPETS_STORAGE=READY", flush=True)
+
+
 def ensure_qga_cloud_init(vmid, data):
     """Vendor-data installs QGA BEFORE native Ansible ever needs QGA.
 
@@ -281,19 +325,7 @@ def ensure_qga_cloud_init(vmid, data):
     which was previously booted without vendor-data. No VM/disk recreation,
     passwords, SSH private keys, or access-control changes are involved.
     """
-    local = run("/usr/sbin/pvesm", "config", "local")
-    need(re.search(r"(?m)^dir:\s+local\s*$", local) is not None,
-         "QGA_CLOUDINIT_LOCAL_STORAGE_NOT_DIRECTORY")
-    need(re.search(r"(?m)^\s*path\s+/var/lib/vz\s*$", local) is not None,
-         "QGA_CLOUDINIT_LOCAL_STORAGE_PATH_UNEXPECTED")
-    found = re.search(r"(?m)^\s*content\s+([a-z,]+)\s*$", local)
-    need(found is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
-    permitted = set(found[1].split(","))
-    need(permitted.issubset({"backup", "iso", "vztmpl", "images", "rootdir", "snippets"}),
-         "QGA_CLOUDINIT_LOCAL_CONTENT_UNEXPECTED")
-    if "snippets" not in permitted:
-        run("/usr/sbin/pvesm", "set", "local", "--content",
-            ",".join(sorted(permitted | {"snippets"})))
+    ensure_local_snippets_storage()
     root = Path("/var/lib/vz/snippets")
     need(not root.is_symlink(), "QGA_CLOUDINIT_SNIPPET_DIR_UNSAFE")
     root.mkdir(mode=0o750, exist_ok=True)
