@@ -438,7 +438,20 @@
     argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
   when:
     - media_vm.lifecycle.protection | default(true) | bool
-    - media_vm_protection_readback.stdout is not search('(?m)^protection: 1$')
+    - "media_vm_protection_readback.stdout is not search('(?m)^protection: 1
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - "media_vm_result.stdout == 'status: running'"
+    fail_msg: MEDIA_VM_NOT_RUNNING
+)"
 
 - name: Observe result of requested VM action
   ansible.builtin.command:
