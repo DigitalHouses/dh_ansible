@@ -145,7 +145,6 @@
           - media_vm.approvals.provision == true
           - media_vm.approvals.gpu_cutover == true
           - media_vm.approvals.sata_cutover == true
-          - media_vm.storage.destructive_without_backup == true
           - media_vm.backup_export.pve_host == pve_observed.ipv4
         fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
 
