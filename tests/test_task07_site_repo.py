@@ -189,7 +189,10 @@ def test_site_ed25519_generated_in_memory_imported_to_native_semaphore_key_store
     assert "mktemp" not in txt
     assert "copy:" not in txt
     assert "write_file" not in txt
-    assert "method: DELETE" not in txt
+    # The only permitted GitHub deletion is scoped revocation of the
+    # exact obsolete read-only key after a verified fresh runner reset.
+    assert txt.count("method: DELETE") == 1
+    assert 'url: "{{ dh_git_api }}/keys/{{ dh_site_named_deploy_keys[0].id }}"' in txt
 
 
 def test_ed25519_generation_round_trip_matches_ssh_public_key_without_file():
@@ -227,9 +230,10 @@ def test_public_ssh_key_is_declarative_site_data_and_not_secret():
     assert "private_key" not in api["body"]["content"]
     assert save["no_log"] is True
 
-    incomplete = next(t for t in ts if t["name"].startswith("Refuse an incomplete Ed25519"))
-    assert "dh_site_pub_before.status == 404" in str(incomplete)
-    assert "GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION" in str(incomplete)
+    guarded = next(t for t in ts if t["name"].startswith("Refuse unverified, foreign"))
+    assert "dh_site_old_public_key" in str(guarded)
+    assert "dh_site_old_deploy_keys[0].read_only == true" in str(guarded)
+    assert "GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION" in str(guarded)
 
     play = yaml.safe_load(P.read_text())[0]
     assert play["vars"]["dh_site_public_file"] == ".digitalhouses/semaphore-deploy-ed25519.pub"
@@ -243,7 +247,7 @@ def test_site_deploy_key_is_strict_read_only_and_idempotent():
     assert api["method"] == "POST"
     assert api["url"] == "{{ dh_git_api }}/keys"
     assert api["body"]["read_only"] is True
-    assert deploy["when"] == "dh_site_named_deploy_keys | length == 0"
+    assert deploy["when"] == "dh_site_named_deploy_keys | length == 0 or dh_site_recover_fresh_runner"
     assert deploy["no_log"] is True
     for prefix in (
         "Read current deploy keys",
@@ -302,5 +306,49 @@ def test_task07_uses_native_semaphore_git_ls_remote_and_clone_before_success():
     assert ts.index(ts[-1]) > ts.index(clone_check)
     assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "VERIFIED_NATIVE_SSH_CLONE"
     # GitHub source and private site files are left untouched on every repeat.
-    assert "method: DELETE" not in RO.read_text()
+    # Only the precisely verified previous deploy key may be revoked after a
+    # fresh runner reset. Repository and unrelated-key deletion stay forbidden.
+    assert RO.read_text().count("method: DELETE") == 1
+    assert 'url: "{{ dh_git_api }}/keys/{{ dh_site_named_deploy_keys[0].id }}"' in RO.read_text()
     assert "GIT_SSH_COMMAND" not in RO.read_text()
+
+
+def test_clean_runner_rotation_requires_exact_old_site_key_before_revocation():
+    ts = yaml.safe_load(RO.read_text())
+    find = lambda start: next(i for i, t in enumerate(ts) if t["name"].startswith(start))
+    early = find("Inspect existing deploy keys before")
+    prior = find("Classify prior site public")
+    gate = find("Refuse unverified, foreign")
+    gen = find("Generate a fresh Ed25519")
+    store = find("Store Ed25519 SSH private key")
+    update = find("Commit only the nonsecret public key")
+    verify = find("Verify native Semaphore SSH identity")
+    revoke = find("Revoke only the verified former")
+    deploy = find("Register one read-only deploy key")
+    assert early < prior < gate < gen < store < update < verify < revoke < deploy
+
+    checks = ts[gate]["ansible.builtin.assert"]["that"]
+    assert any("dh_site_old_deploy_keys | length <= 1" in c for c in checks)
+    assert any("dh_site_old_public_key.split()[:2]" in c for c in checks)
+    assert any("dh_site_old_deploy_keys[0].read_only == true" in c for c in checks)
+    assert any("dh_site_named_keys | length == 0" in c for c in checks)
+
+    public = ts[update]
+    assert public["ansible.builtin.uri"]["method"] == "PUT"
+    assert public["ansible.builtin.uri"]["status_code"] == [200, 201]
+    assert "dh_site_pub_before.json.sha" in public["ansible.builtin.uri"]["body"]["sha"]
+    assert public["when"] == "dh_site_named_keys | length == 0"
+    assert public["no_log"] is True
+
+    delete = ts[revoke]
+    assert delete["ansible.builtin.uri"]["method"] == "DELETE"
+    assert delete["ansible.builtin.uri"]["status_code"] == 204
+    assert delete["ansible.builtin.uri"]["url"] == (
+        "{{ dh_git_api }}/keys/{{ dh_site_named_deploy_keys[0].id }}")
+    assert delete["when"] == [
+        "dh_site_recover_fresh_runner",
+        "dh_site_named_deploy_keys | length == 1",
+    ]
+    assert delete["no_log"] is True
+    assert not any(t.get("ansible.builtin.uri", {}).get("method") == "DELETE"
+                   and t is not delete for t in ts)
