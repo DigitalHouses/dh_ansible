@@ -49,14 +49,14 @@
 
 ## Единая точка входа · Tiny Bootstrap
 
-**Версия на 03.11.2026:** свежий Bootstrap закреплён на commit `e9f7f53`, гостевой checkout — на release `7e77a108`. Принятый Fresh E2E 03.11.2026 завершился `BOOTSTRAP_FRESH_DONE=PASS` и `RESULT_RC=0`, но использовал старую ссылку, из-за чего CT1231 был создан без нового порядка загрузки. Актуальный Bootstrap сам задаёт и проверяет **`onboot=1, startup=order=2`**; медиасервер устанавливает **`startup=order=1`** через №80. Bootstrap не обновляет существующий CT1231 и не удаляет его. Для нового E2E сначала требуется отдельное разрешённое удаление CT1231; повторный запуск поверх существующего гостя запрещён.
+**Версия на 03.11.2026:** свежий Bootstrap закреплён на commit `53167ce`, гостевой checkout — на release `7e77a108`. Принятый Fresh E2E 03.11.2026 завершился `BOOTSTRAP_FRESH_DONE=PASS` и `RESULT_RC=0`, но использовал старую ссылку, из-за чего CT1231 был создан без нового порядка загрузки. Актуальный Bootstrap сам задаёт и проверяет **`onboot=1, startup=order=2`**; медиасервер устанавливает **`startup=order=1`** через №80. Bootstrap не обновляет существующий CT1231 и не удаляет его. Для нового E2E сначала требуется отдельное разрешённое удаление CT1231; повторный запуск поверх существующего гостя запрещён.
 
 
 
 Стандартная установка с чистого PVE: **одна команда** под `root` на выбранном Proxmox VE. Релиз этого пилота — **Semaphore 2.20.16-beta9**, закреплённый SHA256. Перед запуском CT/VM 1231 должен отсутствовать; автоматического удаления нет. Для этого пилота указать Site ID `serzhan-home`.
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/e9f7f53f1aaa6bec982b56e906c44c4f70d7d4cc/bootstrap/install.sh)
+bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/dh_ansible/53167ce1a00fc4ef84a5063dd5a7a09555c4e6cf/bootstrap/install.sh)
 ```
 
 Установщик запрашивает и подтверждает Site ID, затем выполняет ровно четыре этапа:
