@@ -1,40 +1,12 @@
 #!/usr/bin/env bash
-# Import only the declared pool; never format on boot.
+# Re-import ONLY the known ZFS pool on the sole verified SATA disk after boot.
+# Boot always uses the read-only import operation (never disk provisioning).
 set -Eeuo pipefail
 
-POOL={{ media_vm.storage.pool_name | quote }}
-WWN={{ media_vm.storage.disk.wwn | quote }}
-SERIAL={{ media_vm.storage.disk.serial | quote }}
-ACCESS={{ media_vm.storage.mode | quote }}
-DEVICE="/dev/disk/by-id/wwn-$WWN"
+/usr/local/sbin/dh-media-storage \
+  --config /etc/digitalhouses/media-storage.json \
+  --action import \
+  --owner {{ media_owner_slug | quote }}
 
-for attempt in $(seq 1 30); do
-  [[ -b "$DEVICE" ]] && break
-  sleep 1
-done
-[[ -b "$DEVICE" ]] || { echo "MEDIA_ZFS=DISK_MISSING"; exit 2; }
-[[ "$(lsblk -dn -o SERIAL "$DEVICE" | xargs)" == "$SERIAL" ]] ||
-  { echo "MEDIA_ZFS=DISK_IDENTITY_MISMATCH"; exit 2; }
-
-modprobe zfs
-if ! zpool list -H -o name "$POOL" >/dev/null 2>&1; then
-  OPTIONS=(-N -d /dev/disk/by-id)
-  if [[ "$ACCESS" == readonly ]]; then OPTIONS+=(-o readonly=on); fi
-  zpool import "${OPTIONS[@]}" "$POOL"
-fi
-[[ "$(zpool list -H -o health "$POOL")" == ONLINE ]] ||
-  { echo "MEDIA_ZFS=POOL_NOT_ONLINE"; exit 2; }
-EXPECTED=off
-[[ "$ACCESS" == readonly ]] && EXPECTED=on
-[[ "$(zpool get -H -o value readonly "$POOL")" == "$EXPECTED" ]] ||
-  { echo "MEDIA_ZFS=IMPORT_MODE_MISMATCH"; exit 2; }
-
-{% for dataset in media_vm.storage.layout.datasets %}
-DATASET={{ (media_vm.storage.pool_name ~ '/' ~ dataset) | quote }}
-zfs list -H -o name "$DATASET" >/dev/null
-if [[ "$(zfs get -H -o value mounted "$DATASET")" != yes ]]; then
-  zfs mount "$DATASET"
-fi
-{% endfor %}
 test -d {{ ('/' ~ media_vm.storage.media_dataset) | quote }}
-echo "MEDIA_ZFS=READY_${ACCESS^^}"
+echo "MEDIA_ZFS=READY"

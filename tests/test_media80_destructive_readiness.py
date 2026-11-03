@@ -15,18 +15,20 @@ def test_recreate_declares_hard_cpu_and_memory_policy_on_vm_create_and_keep():
     for literal in ("cpu_limit", "cpu_units", "ballooning", "zfs_arc_max_mb",
                     "transcode_cpu_limit", "MEDIA_PROTECTED_RESOURCE_POLICY_INVALID",
                     '"--cpulimit"', '"--cpuunits"', '"--balloon"', 
-                    "MANAGED_ZFS_IMPORT_GUID_DRIFT"):
+                    "MANAGED_VM_IDENTITY=PASS"):
         assert literal in source
     assert source.index("old_guest_matches(vmid, site, data, managed=managed)") < source.index('qm("destroy", vmid')
     assert '"/usr/bin/pvesh"' in source and '"/usr/sbin/pvesh"' not in source
     assert source.index('need(all(actual.get(key) == val for key, val in wanted.items())') < source.index("def ensure_config")
 
 
-def test_import_guards_original_pool_guid_before_any_import():
+def test_import_scans_only_the_discovered_sata_disk_and_never_wipes():
     source=(ROOT/"roles/media_guest_setup/files/dh-media-storage.py").read_text()
-    assert '"IMPORT_POOL_GUID_NOT_PINNED"' in source
-    assert '"IMPORT_POOL_GUID_MISMATCH"' in source
-    assert source.index("require(expected_guid is None or importable == expected_guid") < source.index("if command(*args, allow_failure=True) is None")
+    assert "def scan_devices(physical):" in source
+    assert 'argv += ["-d", dev]' in source
+    assert 'verify_pool_disk(pool, physical)' in source
+    imported = source.split("def ensure_import(", 1)[1].split("def active_pools(", 1)[0]
+    assert all(term not in imported for term in ("wipefs", "sgdisk", '"destroy"', '"create"'))
 
 
 def test_shared_transcoder_limited_to_100_percent():

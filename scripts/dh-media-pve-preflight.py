@@ -1,34 +1,34 @@
 #!/usr/bin/env python3
-"""Read-only PVE physical disk/VM identity check before native media VM apply.
+"""Read-only PVE/VM/SATA-controller ownership gate for Task 80.
 
-This is a short-lived Ansible script, NOT a daemon or privileged worker. The
-site-scoped inventory is read directly from the commissioned CT1231. It must
-never erase a filesystem, modify a guest or acquire secrets.
+Physical disks behind a passed-through controller are invisible to the PVE
+host. Their presence and sole-disk identity are checked inside the media VM,
+after hostpci attachment, by dh-media-storage.py.
 """
 import argparse
-import json
 import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
+import yaml
+
 
 class Blocked(Exception):
     pass
 
 
-def need(ok, name):
+def need(ok, reason):
     if not ok:
-        raise Blocked(name)
+        raise Blocked(reason)
 
 
 def command(*argv):
-    result = subprocess.run(argv, text=True, capture_output=True,
-                            timeout=25, check=False)
-    if result.returncode:
-        raise Blocked("PREFLIGHT_COMMAND_FAILED_" + Path(argv[0]).name)
-    return result.stdout.strip()
+    p = subprocess.run(argv, text=True, capture_output=True,
+                       timeout=25, check=False)
+    need(p.returncode == 0, "PREFLIGHT_COMMAND_FAILED_" + Path(argv[0]).name)
+    return p.stdout.strip()
 
 
 def inventory(site):
@@ -38,168 +38,75 @@ def inventory(site):
          "SITE_ID_INVALID")
     need(command("/usr/sbin/pct", "exec", "1231", "--", "hostname")
          == "ansible-" + site, "RUNNER_IDENTITY_DRIFT")
-    source = "/var/lib/ansible/site-data/" + site + "/media_vm.yml"
-    raw = command("/usr/sbin/pct", "exec", "1231", "--", "cat", source)
-    import yaml
-    data = yaml.safe_load(raw)["media_vm"]
-    return data
+    path = "/var/lib/ansible/site-data/" + site + "/media_vm.yml"
+    return yaml.safe_load(command("/usr/sbin/pct", "exec", "1231", "--",
+                                  "cat", path))["media_vm"]
 
 
-def verify_actual_data_disk(data):
-    spec = data["storage"]["disk"]
-    approval = data["storage"]["one_time_ntfs_erase"]
-    need(approval.get("approved") is True
-         and approval.get("scope") == "first_create_only"
-         and data["storage"].get("destructive_without_backup") is True
-         and spec["serial"] == approval["serial"]
-         and spec["wwn"] == approval["wwn"]
-         and spec["size_bytes"] == approval["size_bytes"]
-         and approval["partition_filesystem"] == "ntfs"
-         and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", approval["partition_label"])
-         and approval.get("reserved_size_bytes", 0) > 0
-         and approval["partition_partuuid"] == spec["observed_partuuid"]
-         and approval["reserved_partuuid"] == spec["observed_reserved_partuuid"],
-         "DISK_APPROVAL_NOT_EXACT")
-    link = Path("/dev/disk/by-id/wwn-" + spec["wwn"])
-    need(link.is_symlink(), "DISK_WWN_NOT_ATTACHED")
-    disk = link.resolve(strict=True)
-    need(disk.name.startswith("sd") and disk.is_block_device(),
-         "DISK_DEVICE_UNEXPECTED")
-    info = json.loads(command("/usr/bin/lsblk", "-J", "-T", "-b", "-o",
-                              "PATH,TYPE,MODEL,SERIAL,WWN,SIZE,FSTYPE,LABEL,PARTUUID,MOUNTPOINTS",
-                              str(disk)))
-    devices = info.get("blockdevices", [])
-    need(len(devices) == 1, "DISK_TOPOLOGY_AMBIGUOUS")
-    actual = devices[0]
-    need(actual.get("path") == str(disk)
-         and actual.get("type") == "disk"
-         and str(actual.get("serial") or "") == spec["serial"]
-         and str(actual.get("wwn") or "").lower() == spec["wwn"].lower()
-         and int(actual.get("size") or 0) == spec["size_bytes"]
-         and not any(actual.get("mountpoints") or []),
-         "DISK_HARDWARE_IDENTITY_DRIFT")
-    need(not actual.get("fstype"), "DATA_DISK_IS_ALREADY_FORMATTED")
-    children = actual.get("children", [])
-    need(len(children) == 2, "NTFS_PARTITION_LAYOUT_DRIFT")
-    first, second = children
-    need(first.get("path") == str(disk) + "1"
-         and first.get("type") == "part"
-         and first.get("partuuid", "").lower() == approval["reserved_partuuid"]
-         and not first.get("fstype")
-         and int(first.get("size") or 0) == approval["reserved_size_bytes"]
-         and not any(first.get("mountpoints") or []),
-         "NTFS_RESERVED_PARTITION_DRIFT")
-    need(second.get("path") == str(disk) + "2"
-         and second.get("type") == "part"
-         and second.get("partuuid", "").lower() == approval["partition_partuuid"]
-         and second.get("fstype") == "ntfs"
-         and second.get("label") == approval["partition_label"]
-         and not any(second.get("mountpoints") or [])
-         and not second.get("children"),
-         "NTFS_DATA_PARTITION_DRIFT")
-    controller = data["pci"]["sata_controller"]
-    path = Path("/sys/class/block/" + disk.name + "/device").resolve()
-    need("/" + controller + "/" in str(path),
-         "DISK_NOT_ON_APPROVED_SATA_CONTROLLER")
-    root = command("/usr/bin/findmnt", "-n", "-o", "SOURCE", "/")
-    root_devices = command("/usr/bin/lsblk", "-s", "-n", "-o", "KNAME", root).split()
-    need(disk.name not in root_devices, "DISK_APPEARS_SYSTEM_DEVICE")
-    return disk.name
+def verify_controller(data):
+    bdf = data["pci"]["sata_controller"]
+    need(re.fullmatch(r"[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]", bdf),
+         "SATA_CONTROLLER_ADDRESS_INVALID")
+    pci = Path("/sys/bus/pci/devices") / bdf
+    need(pci.is_dir(), "SATA_CONTROLLER_NOT_ATTACHED")
+    need((pci / "class").read_text().strip().lower().startswith("0x0106"),
+         "SATA_CONTROLLER_NOT_AHCI")
+    for field in ("vendor", "device"):
+        need(re.fullmatch(r"0x[0-9a-f]{4}",
+                          (pci / field).read_text().strip().lower()),
+             "SATA_CONTROLLER_PCI_ID_INVALID")
+    return bdf
+
+
+def verify_vm(data, vm_action):
+    vmid = int(data["vmid"])
+    need(2200 <= vmid <= 2254, "MEDIA_VMID_INVALID")
+    need(int(data["network"]["ipv4"].split("/")[0].split(".")[-1]) + 2000
+         == vmid, "MEDIA_VMID_IP_MISMATCH")
+    cfg = Path("/etc/pve/qemu-server") / (str(vmid) + ".conf")
+    if vm_action == "create":
+        need(not cfg.exists(), "TARGET_VMID_OCCUPIED")
+        return "VM_ABSENT"
+    need(cfg.is_file(), "MEDIA_VM_NOT_FOUND")
+    lines = command("/usr/sbin/qm", "config", str(vmid)).splitlines()
+    state = dict(line.split(": ", 1) for line in lines if ": " in line)
+    need(state.get("name") == data["name"]
+         and state.get("description") == "DigitalHouses managed media guest v2"
+         and state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1"
+         and state.get("hostpci1") in (
+             data["pci"]["sata_controller"],
+             data["pci"]["sata_controller"] + ",pcie=1")
+         and state.get("scsi0", "").startswith(
+             "local-lvm:vm-" + str(vmid) + "-disk-"),
+         "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
+    return "MANAGED_VM"
 
 
 def main():
-    p = argparse.ArgumentParser()
-    p.add_argument("--site", required=True)
-    p.add_argument("--vm-action", choices=("create", "keep", "recreate"), required=True)
-    p.add_argument("--disk-action", choices=("import", "erase"), required=True)
-    args = p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--site", required=True)
+    parser.add_argument("--vm-action", choices=("create", "keep", "recreate"),
+                        required=True)
+    parser.add_argument("--disk-action", choices=("import", "erase"),
+                        required=True)
+    args = parser.parse_args()
     data = inventory(args.site)
     need(data["name"] == "mediaserver-" + args.site.rsplit("-", 1)[0],
          "MEDIA_VM_NAME_MISMATCH")
-    vmid = int(data["vmid"])
-    need(2200 <= vmid <= 2254, "MEDIA_VMID_INVALID")
-    need(int(data["network"]["ipv4"].split("/")[0].split(".")[-1]) + 2000 == vmid,
-         "MEDIA_VMID_IP_MISMATCH")
-    existing = Path("/etc/pve/qemu-server/" + str(vmid) + ".conf")
-    if args.vm_action == "create":
-        need(not existing.exists(), "TARGET_VMID_OCCUPIED")
-        need(args.disk_action == "erase", "FIRST_CREATE_REQUIRES_ERASE")
-        need(data["approvals"]["provision"]
-             and data["approvals"]["gpu_cutover"]
-             and data["approvals"]["sata_cutover"],
-             "PROVISION_NOT_APPROVED")
-        disk = verify_actual_data_disk(data)
-        print("MEDIA_PVE_PREFLIGHT=PASS VM_ABSENT DISK_EXACT_NTFS gpu="
-              + data["pci"]["gpu"] + " sata=" + data["pci"]["sata_controller"]
-              + " device=" + disk)
-    else:
-        need(existing.is_file(), "MEDIA_VM_NOT_FOUND")
-        conf = command("/usr/sbin/qm", "config", str(vmid))
-        need("name: " + data["name"] in conf
-             and "description: DigitalHouses managed media guest v2" in conf
-             and "hostpci0: " + data["pci"]["gpu"] + ",pcie=1" in conf
-             and any("hostpci1: " + data["pci"]["sata_controller"] + suffix in conf.splitlines()
-                     for suffix in ("", ",pcie=1"))
-             and "scsi0: local-lvm:vm-" + str(vmid) + "-disk-" in conf,
-             "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
-        need(data["approvals"].get("provision") is True
-             and data["approvals"].get("sata_cutover") is True,
-             "MEDIA_VM_PROVISION_NOT_APPROVED")
-        if args.vm_action == "recreate":
-            # A running managed VM allows us to verify real PCI HDD identity
-            # and existing pool GUID without guessing from obsolete NTFS data.
-            # Operator chose 'recreate'; no policy-level veto of that choice.
-            need(command("/usr/sbin/qm", "status", str(vmid)) == "status: running",
-                 "MEDIA_VM_START_REQUIRED_FOR_IDENTITY_VERIFICATION")
-            def guest(*argv):
-                res = json.loads(command("/usr/sbin/qm", "guest", "exec",
-                                         str(vmid), "--", *argv))
-                need(res.get("exited") == 1 and res.get("exitcode") == 0,
-                     "MEDIA_GUEST_AGENT_IDENTITY_QUERY_FAILED")
-                return res.get("out-data", "").strip()
-            block_devices = json.loads(guest("/usr/bin/lsblk", "-J", "-b", "-d",
-                                             "-o", "NAME,TYPE,SERIAL,WWN,SIZE"))
-            physical = [d for d in block_devices.get("blockdevices", [])
-                        if d.get("type") == "disk"
-                        and d.get("serial") == data["storage"]["disk"]["serial"]
-                        and str(d.get("wwn") or "").lower()
-                           == data["storage"]["disk"]["wwn"].lower()
-                        and int(d.get("size") or 0)
-                           == int(data["storage"]["disk"]["size_bytes"])]
-            need(len(physical) == 1 and physical[0].get("name") != "sda",
-                 "MEDIA_PHYSICAL_HDD_IDENTITY_MISMATCH")
-            imported = dict(line.split()
-                            for line in guest("/usr/sbin/zpool", "list",
-                                              "-H", "-o", "name,guid").splitlines())
-            if args.disk_action == "erase":
-                expected = data["storage"].get("import_pool_guid")
-                need(isinstance(expected, str) and expected.isdecimal()
-                     and imported.get(data["storage"]["pool_name"]) == expected,
-                     "MEDIA_ERASE_SOURCE_POOL_GUID_MISMATCH")
-                need(data["storage"].get("destructive_without_backup") is True,
-                     "MEDIA_ERASE_NOT_SELECTED_IN_SITE_POLICY")
-            else:
-                need(imported.get(data["storage"]["pool_name"])
-                     == data["storage"].get("import_pool_guid"),
-                     "MEDIA_IMPORT_SOURCE_POOL_GUID_MISMATCH")
-            print("MEDIA_PVE_PREFLIGHT=PASS MANAGED_RECREATE_VERIFIED"
-                  " DISK_IDENTITY_AND_POOL_GUID", flush=True)
-        else:
-            need(
-                (args.disk_action == "import"
-                 and isinstance(data["storage"].get("import_pool_guid"), str))
-                or (args.disk_action == "erase"
-                    and data["storage"].get("destructive_without_backup") is True),
-                "MEDIA_KEEP_REQUIRES_EXPLICIT_DISK_ACTION")
-            print("MEDIA_PVE_PREFLIGHT=PASS EXISTING_MANAGED_VM")
-
+    need(data["approvals"]["provision"]
+         and data["approvals"]["sata_cutover"],
+         "MEDIA_VM_PROVISION_NOT_APPROVED")
+    bdf = verify_controller(data)
+    vm = verify_vm(data, args.vm_action)
+    print("MEDIA_PVE_PREFLIGHT=PASS " + vm + " SATA_CONTROLLER=" + bdf,
+          flush=True)
 
 
 if __name__ == "__main__":
     try:
         main()
     except (Blocked, KeyError, ValueError, TypeError, OSError,
-            subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+            subprocess.TimeoutExpired) as exc:
         print("MEDIA_PVE_PREFLIGHT=BLOCKED:" +
               (str(exc) if isinstance(exc, Blocked) else type(exc).__name__),
               file=sys.stderr)

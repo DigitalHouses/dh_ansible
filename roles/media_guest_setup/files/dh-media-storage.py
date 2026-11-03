@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Idempotent DigitalHouses media storage resource reconciler.
+"""Media ZFS disk lifecycle: one disk on the commissioned SATA controller.
 
-The program never selects a disk by /dev/sdX name. It receives declarative
-disk and pool identities and a one-run create/import choice from Semaphore.
-All irreversible writes require exactly identified legacy ZFS or an empty disk.
+The user chooses *action*, not drive identity. The controller's host-side
+PCI vendor/device ID is measured by Task 80 on PVE and passed to this guest.
+The guest verifies which disks have that SATA PCI parent in Linux sysfs.
+No manufacturer, serial, WWN, old filesystem, partition GUID or ZFS pool
+GUID is an erase prerequisite. This script never operates on the PVE host.
 """
 from __future__ import annotations
 
@@ -16,406 +18,214 @@ import subprocess
 import sys
 
 
-NTFS_ERASE_MARKER = Path("/etc/digitalhouses/.dh-initial-ntfs-erase.json")
-
-
 class Blocked(Exception):
     pass
 
 
-def require(condition, reason):
-    if not condition:
+def require(ok, reason):
+    if not ok:
         raise Blocked(reason)
 
 
 def command(*argv, allow_failure=False):
-    p = subprocess.run(argv, text=True, capture_output=True, timeout=120,
-                       check=False)
-    if p.returncode and not allow_failure:
-        raise Blocked("COMMAND_FAILED_" + Path(argv[0]).name + "_" + str(p.returncode))
-    return p.stdout.strip() if p.returncode == 0 else None
+    result = subprocess.run(argv, text=True, capture_output=True,
+                            timeout=120, check=False)
+    if result.returncode:
+        if allow_failure:
+            return None
+        raise Blocked("COMMAND_FAILED_" + Path(argv[0]).name
+                      + "_" + str(result.returncode))
+    return result.stdout.strip()
 
 
 def get_pool(name):
-    output = command("/usr/sbin/zpool", "list", "-H", "-o", "name,guid",
-                     allow_failure=True)
-    pools = {}
-    for line in (output or "").splitlines():
-        fields = line.split()
-        if len(fields) == 2:
-            pools[fields[0]] = fields[1]
-    return pools.get(name)
+    output = command("/usr/sbin/zpool", "list", "-H", "-o",
+                     "name,guid", allow_failure=True) or ""
+    for line in output.splitlines():
+        tokens = line.split()
+        if len(tokens) == 2 and tokens[0] == name:
+            return tokens[1]
+    return None
 
 
-def find_disk(spec):
-    devices = json.loads(command("/usr/bin/lsblk", "-J", "-b", "-d", "-o",
-                                 "NAME,PATH,TYPE,MODEL,SERIAL,WWN,SIZE"))
-    matches = [d for d in devices["blockdevices"] if
-               d.get("type") == "disk"
-               and str(d.get("serial") or "").strip() == spec["serial"]
-               and str(d.get("wwn") or "").lower() == spec["wwn"].lower()
-               and int(d.get("size") or 0) == int(spec["size_bytes"])]
-    require(len(matches) == 1, "DATA_DISK_IDENTITY_MISMATCH")
-    disk = matches[0]["path"]
-    link = Path("/dev/disk/by-id/wwn-" + spec["wwn"].lower())
-    require(link.is_symlink() and link.resolve() == Path(disk).resolve(),
-            "DATA_DISK_WWN_SYMLINK_MISMATCH")
-    root_source = command("/usr/bin/findmnt", "-no", "SOURCE", "/")
-    root_parent = command("/usr/bin/lsblk", "-no", "PKNAME", root_source) or ""
-    require(root_parent and disk != "/dev/" + root_parent,
-            "DATA_DISK_IS_SYSTEM_DISK")
+def commissioned_controller(ids):
+    """Require one guest PCI SATA function with the PVE-measured IDs."""
+    matches = []
+    for pci in Path("/sys/bus/pci/devices").iterdir():
+        if not pci.is_dir():
+            continue
+        cls = (pci / "class").read_text().strip().lower()
+        vendor = (pci / "vendor").read_text().strip().lower()
+        device = (pci / "device").read_text().strip().lower()
+        if cls.startswith("0x0106") and (vendor, device) == (
+                ids["vendor"], ids["device"]):
+            matches.append(str(pci.resolve()))
+    require(len(matches) == 1, "SATA_CONTROLLER_NOT_UNIQUE_IN_GUEST")
+    return matches[0]
+
+
+def sata_pci_parent(name):
+    """Find the actual parent AHCI PCI function of one Linux block device."""
+    dev = Path("/sys/class/block") / name / "device"
+    require(dev.is_symlink(), "SATA_DISK_SYSFS_NOT_AVAILABLE")
+    node = dev.resolve(strict=True)
+    for ancestor in (node, *node.parents):
+        class_file = ancestor / "class"
+        if class_file.is_file() and class_file.read_text().strip().lower().startswith("0x0106"):
+            return str(ancestor)
+    return None
+
+
+def find_disk(data):
     require(Path("/etc/pve/user.cfg").exists() is False,
             "PVE_HOST_MUST_NOT_RUN_MEDIA_STORAGE")
-    return str(link), str(Path(disk).resolve())
+    ids = data.get("sata_controller")
+    require(isinstance(ids, dict)
+            and re.fullmatch(r"0x[0-9a-f]{4}", ids.get("vendor", "")) is not None
+            and re.fullmatch(r"0x[0-9a-f]{4}", ids.get("device", "")) is not None,
+            "SATA_CONTROLLER_PCI_ID_NOT_COMMISSIONED")
+    sata_controller = commissioned_controller(ids)
+    block = json.loads(command("/usr/bin/lsblk", "-J", "-b", "-d",
+                               "-o", "NAME,PATH,TYPE,TRAN"))
+    require(isinstance(block.get("blockdevices"), list),
+            "SATA_BLOCK_DEVICE_LIST_INVALID")
+    matches = []
+    for dev in block["blockdevices"]:
+        if dev.get("type") != "disk":
+            continue
+        name = dev.get("name", "")
+        path = dev.get("path", "")
+        if not re.fullmatch(r"sd[a-z]+", name):
+            continue
+        if path != "/dev/" + name or not Path(path).is_block_device():
+            continue
+        # The controller-class ancestor is authoritative; Linux transport
+        # alone could also be reported for a disk on a DIFFERENT controller.
+        if sata_pci_parent(name) == sata_controller:
+            matches.append(path)
+    print("MEDIA_SATA_DISKS_FOUND=" + str(len(matches)), flush=True)
+    require(matches, "SATA_NO_DISKS")
+    require(len(matches) == 1, "SATA_MULTIPLE_DISKS")
+    disk = matches[0]
+    root = command("/usr/bin/findmnt", "-n", "-o", "SOURCE", "/")
+    ancestors = command("/usr/bin/lsblk", "-s", "-n", "-o", "KNAME",
+                        root).split()
+    require(Path(disk).name not in ancestors, "SATA_DISK_IS_SYSTEM_DISK")
+    return disk, disk
 
 
 def leaf_disk(path):
+    """Resolve a ZFS leaf /dev/sdX1 to its physical parent /dev/sdX."""
     resolved = str(Path(path).resolve())
-    if resolved.startswith("/dev/"):
-        parent = command("/usr/bin/lsblk", "-n", "-o", "PKNAME", resolved,
-                         allow_failure=True)
-        return "/dev/" + parent if parent else resolved
-    return ""
+    nodes = command("/usr/bin/lsblk", "-s", "-n", "-o",
+                    "NAME,TYPE", resolved).splitlines()
+    disks = [row.split()[0] for row in nodes
+             if len(row.split()) == 2 and row.split()[1] == "disk"]
+    require(len(disks) == 1, "ZFS_VDEV_PARENT_AMBIGUOUS")
+    return "/dev/" + disks[0]
 
 
-def verify_pool_disk(name, expected_path):
-    status = command("/usr/sbin/zpool", "status", "-LP", name)
-    leaves = []
-    for line in status.splitlines():
-        part = line.strip().split()
-        if part and part[0].startswith("/dev/"):
-            leaves.append(leaf_disk(part[0]))
-    require(len(leaves) == 1 and leaves[0] == expected_path,
-            "ZFS_VDEV_NOT_THE_DECLARED_SINGLE_DATA_DISK")
+def pool_leaves(name):
+    report = command("/usr/sbin/zpool", "status", "-LP", name)
+    return [leaf_disk(m.group(1)) for m in re.finditer(
+        r"(?m)^\s+(/dev/\S+)\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b",
+        report)]
 
 
-def imported_guid_visible(name):
-    report = command("/usr/sbin/zpool", "import", "-d", "/dev/disk/by-id",
-                     allow_failure=True) or ""
-    sections = re.split(r"(?=^\s*pool:\s*)", report, flags=re.MULTILINE)
-    matches = []
-    for section in sections:
-        pool_match = re.search(r"^\s*pool:\s*(\S+)", section, re.MULTILINE)
-        guid_match = re.search(r"^\s*id:\s*(\d+)", section, re.MULTILINE)
-        if pool_match and pool_match.group(1) == name and guid_match:
-            matches.append(guid_match.group(1))
-    require(len(matches) <= 1, "DUPLICATE_IMPORTABLE_POOL")
-    return matches[0] if matches else None
+def verify_pool_disk(name, physical):
+    leaves = pool_leaves(name)
+    require(len(leaves) == 1 and leaves[0] == physical,
+            "ZFS_VDEV_NOT_THE_SOLE_SATA_DISK")
 
 
-def allow_force_import_of_sole_verified_vdev(pool, disk):
-    """Permit -f only for an exported prior-VM pool on the exact approved WWN.
+def scan_devices(physical):
+    """Only the selected SATA disk and its direct partitions, never /dev/*."""
+    tree = json.loads(command("/usr/bin/lsblk", "-J", "-T",
+                              "-o", "PATH,TYPE", physical))
+    roots = tree.get("blockdevices", [])
+    require(len(roots) == 1 and roots[0].get("path") == physical
+            and roots[0].get("type") == "disk",
+            "SATA_DISK_TOPOLOGY_INVALID")
+    children = roots[0].get("children", [])
+    require(isinstance(children, list), "SATA_DISK_TOPOLOGY_INVALID")
+    result = [physical]
+    for part in children:
+        require(part.get("type") == "part"
+                and part.get("path", "").startswith(physical)
+                and not part.get("children"),
+                "SATA_DISK_PARTITION_TOPOLOGY_INVALID")
+        result.append(part["path"])
+    return result
 
-    Recreating a VM changes the hostid recorded by ZFS. An ordinary import
-    may then fail even though PCI ownership has moved to the new sole guest.
-    Reject unknown topologies and all other import failures rather than
-    blindly forcing an import from a potentially active foreign system.
-    """
-    report = command("/usr/sbin/zpool", "import", "-d", "/dev/disk/by-id",
-                     allow_failure=True) or ""
-    sections = re.split(r"(?=^\s*pool:\s*)", report, flags=re.MULTILINE)
-    matches = [section for section in sections
-               if re.search(r"^\s*pool:\s*" + re.escape(pool) + r"\s*$",
-                            section, flags=re.MULTILINE)]
-    require(len(matches) == 1, "FORCE_IMPORT_POOL_NOT_UNIQUE")
-    section = matches[0]
-    require(re.search(r"^\s*id:\s*\d+\s*$", section,
-                      flags=re.MULTILINE) is not None,
-            "FORCE_IMPORT_GUID_NOT_VISIBLE")
-    require("The pool was last accessed by another system." in section,
-            "FORCE_IMPORT_REQUIRES_PREVIOUS_HOSTID_WARNING")
-    require(re.search(r"^\s*state:\s*ONLINE\s*$", section,
-                      flags=re.MULTILINE) is not None,
-            "FORCE_IMPORT_POOL_NOT_ONLINE")
-    leaves = re.findall(
-        r"^\s*(wwn-0x[0-9a-f]{16}(?:-part[0-9]+)?)\s+"
-        r"(?:ONLINE|DEGRADED|FAULTED|UNAVAIL|OFFLINE)\b",
-        section, flags=re.MULTILINE | re.IGNORECASE)
-    require(len(leaves) == 1 and leaves[0].lower() == Path(disk).name.lower(),
-            "FORCE_IMPORT_VDEV_NOT_EXACT_DECLARED_WWN")
+
+def importable_report(physical):
+    argv = ["/usr/sbin/zpool", "import"]
+    for dev in scan_devices(physical):
+        argv += ["-d", dev]
+    return command(*argv, allow_failure=True) or ""
 
 
 def ensure_import(pool, disk, physical, access, expected_guid=None):
+    """Import the declared pool from the sole selected SATA disk."""
     guid = get_pool(pool)
     if guid:
-        require(expected_guid is None or guid == expected_guid,
-                "IMPORT_POOL_GUID_MISMATCH")
         verify_pool_disk(pool, physical)
         return guid, False
-    importable = imported_guid_visible(pool)
-    require(importable is not None, "REQUESTED_POOL_NOT_FOUND")
-    require(expected_guid is None or importable == expected_guid,
-            "IMPORT_POOL_GUID_MISMATCH")
-    args = ["/usr/sbin/zpool", "import", "-N", "-d", "/dev/disk/by-id"]
+    report = importable_report(physical)
+    sections = re.split(r"(?=^\s*pool:\s*)", report, flags=re.MULTILINE)
+    matches = [chunk for chunk in sections if re.search(
+        r"(?m)^\s*pool:\s*" + re.escape(pool) + r"\s*$", chunk)]
+    require(len(matches) == 1, "REQUESTED_POOL_NOT_FOUND_OR_AMBIGUOUS")
+    section = matches[0]
+    require(re.search(r"(?m)^\s*state:\s*ONLINE\s*$", section),
+            "REQUESTED_POOL_NOT_ONLINE")
+    argv = ["/usr/sbin/zpool", "import", "-N"]
+    for dev in scan_devices(physical):
+        argv += ["-d", dev]
     if access == "readonly":
-        args += ["-o", "readonly=on"]
-    args.append(pool)
-    if command(*args, allow_failure=True) is None:
-        allow_force_import_of_sole_verified_vdev(pool, disk)
-        command(*args[:-1], "-f", pool)
-        print("POOL=FORCE_IMPORTED_AFTER_VERIFIED_VM_REPLACEMENT", flush=True)
+        argv += ["-o", "readonly=on"]
+    if "last accessed by another system" in section:
+        # PCI passthrough grants the VM exclusive controller ownership.
+        # Never force a non-ONLINE or ambiguous pool.
+        argv.append("-f")
+    argv.append(pool)
+    command(*argv)
     guid = get_pool(pool)
     require(guid is not None, "POOL_IMPORT_UNCONFIRMED")
-    require(expected_guid is None or guid == expected_guid,
-            "IMPORT_POOL_GUID_MISMATCH")
     verify_pool_disk(pool, physical)
+    print("POOL=IMPORTED", flush=True)
     return guid, True
 
 
-def physical_partitions(physical):
-    """Read verified disk's partition tree; never guess from flat lsblk JSON.
-
-    Util-linux lsblk -J without --tree returns sibling disk/partition
-    records when NAME is not among selected columns. Force --tree and reject
-    any ambiguous/unexpected topology before modifying a disk.
-    """
-    topology = json.loads(command("/usr/bin/lsblk", "-J", "-T", "-o",
-                                  "PATH,PARTUUID,TYPE", physical))
-    roots = topology.get("blockdevices")
-    require(isinstance(roots, list) and len(roots) == 1,
-            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
-    root = roots[0]
-    require(isinstance(root, dict),
-            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
-    children = root.get("children", [])
-    require(isinstance(children, list),
-            "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
-    if root.get("type") != "disk" or root.get("path") != physical:
-        # Unknown partitions on an incompletely described disk are still
-        # UNKNOWN_EXISTING_PARTITIONS, never treated as an empty disk.
-        require(not children, "UNKNOWN_EXISTING_PARTITIONS")
-        raise Blocked("DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
-    for part in children:
-        require(isinstance(part, dict)
-                and part.get("type") == "part"
-                and isinstance(part.get("path"), str)
-                and part["path"].startswith("/dev/"),
-                "DATA_DISK_PARTITION_TOPOLOGY_UNVERIFIED")
-    return children
+def active_pools():
+    text = command("/usr/sbin/zpool", "list", "-H", "-o",
+                   "name", allow_failure=True) or ""
+    return [name for name in text.splitlines() if name]
 
 
-def verify_prior_managed_partitions(physical):
-    """Allow only the two GPT partitions made by a ZFS whole-disk pool.
-
-    These are on an already serial/WWN/size-verified physical SSD. A foreign
-    partition table, extra partition, or unknown filesystem still blocks erase.
-    """
-    children = physical_partitions(physical)
-    require(len(children) == 2
-            and [p["path"] for p in children] ==
-                [physical + "1", physical + "9"]
-            and all(isinstance(p.get("partuuid"), str)
-                    and re.fullmatch(r"[0-9a-fA-F-]{36}", p["partuuid"])
-                    for p in children)
-            and children[0]["partuuid"].lower() !=
-                children[1]["partuuid"].lower(),
-            "RECREATE_SOURCE_PARTITION_LAYOUT_MISMATCH")
-    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
-                    children[0]["path"]) == "zfs_member",
-            "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
-    # blkid returns exit 0 with empty stdout for the reserved sdb9
-    # partition on the installed util-linux version. Neither empty output
-    # nor absent signature is a filesystem; any named type is rejected.
-    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
-                    children[1]["path"], allow_failure=True) in (None, ""),
-            "RECREATE_SOURCE_PARTITION_SIGNATURE_MISMATCH")
-
-
-
-def verify_one_time_ntfs_erase(data, physical):
-    """Permit EXACTLY the site-approved Hitachi-style NTFS layout once.
-
-    An imported ZFS pool is handled before this function and never wiped by
-    this first-create authorization. This is not a general foreign-FS eraser.
-    On an interrupted first wipe the root-only marker permits retry on the
-    same empty serial/WWN/size-pinned disk, never on a new populated volume.
-    """
-    approval = data.get("one_time_ntfs_erase")
-    spec = data["disk"]
-    require(isinstance(approval, dict)
-            and approval.get("approved") is True
-            and approval.get("scope") == "first_create_only"
-            and approval.get("partition_filesystem") == "ntfs"
-            and re.fullmatch(r"[A-Za-z0-9_-]{1,32}", approval.get("partition_label", "")) is not None
-            and approval.get("wwn") == spec["wwn"]
-            and approval.get("serial") == spec["serial"]
-            and approval.get("size_bytes") == spec["size_bytes"]
-            and approval.get("partition_partuuid") == spec.get("observed_partuuid")
-            and approval.get("reserved_partuuid") == spec.get("observed_reserved_partuuid")
-            and approval.get("partition_label") == spec.get("observed_label")
-            and approval.get("partition_filesystem") == spec.get("observed_filesystem"),
-            "ONE_TIME_NTFS_APPROVAL_IDENTITY_MISMATCH")
-    require(re.fullmatch(r"[0-9a-f-]{36}",
-                         approval["partition_partuuid"]) is not None
-            and re.fullmatch(r"[0-9a-f-]{36}",
-                             approval["reserved_partuuid"]) is not None,
-            "ONE_TIME_NTFS_PARTUUID_INVALID")
-    children = physical_partitions(physical)
-    marker = NTFS_ERASE_MARKER
-    marker_value = {
-        "schema": 1, "scope": "first_create_only",
-        "serial": spec["serial"], "wwn": spec["wwn"],
-        "size_bytes": spec["size_bytes"],
-        "partuuid": approval["partition_partuuid"],
-        "reserved_partuuid": approval["reserved_partuuid"],
-    }
-    if not children:
-        # Recovery only for an interrupted initial erase that already passed
-        # BOTH identity and partition checks; no generic blank-disk bypass.
-        require(marker.is_file() and not marker.is_symlink()
-                and marker.stat().st_uid == 0
-                and (marker.stat().st_mode & 0o777) == 0o600,
-                "EMPTY_DISK_NOT_PREVIOUSLY_VERIFIED")
-        require(json.loads(marker.read_text()) == marker_value,
-                "NTFS_RECOVERY_MARKER_IDENTITY_MISMATCH")
-        require(command("/usr/sbin/blkid", "-o", "value", "-s",
-                        "TYPE", physical, allow_failure=True) in (None, ""),
-                "ERASE_RECOVERY_DISK_NOT_EMPTY")
-        return
-
-    require(len(children) == 2
-            and [p["path"] for p in children]
-                == [physical + "1", physical + "2"],
-            "NTFS_APPROVED_PARTITION_TOPOLOGY_MISMATCH")
-    require(children[0].get("partuuid", "").lower()
-                == approval["reserved_partuuid"]
-            and children[1].get("partuuid", "").lower()
-                == approval["partition_partuuid"],
-            "NTFS_APPROVED_PARTUUID_MISMATCH")
-    require(command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
-                    children[0]["path"], allow_failure=True) in (None, "")
-            and command("/usr/sbin/blkid", "-o", "value", "-s", "TYPE",
-                        children[1]["path"]) == "ntfs"
-            and command("/usr/sbin/blkid", "-o", "value", "-s", "LABEL",
-                        children[1]["path"]) == approval["partition_label"],
-            "NTFS_APPROVED_FILESYSTEM_LABEL_MISMATCH")
-    for path in (physical, children[0]["path"], children[1]["path"]):
-        require(command("/usr/bin/findmnt", "-rn", "--source", path,
-                        allow_failure=True) in (None, ""),
-                "NTFS_DISK_IN_USE_MOUNTED")
-    require(not marker.exists() or (
-                marker.is_file() and not marker.is_symlink()
-                and marker.stat().st_uid == 0
-                and (marker.stat().st_mode & 0o777) == 0o600
-                and json.loads(marker.read_text()) == marker_value),
-            "NTFS_ERASE_RECOVERY_MARKER_CONFLICT")
-    if not marker.exists():
-        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-        fd = os.open(str(marker), flags, 0o600)
-        try:
-            with os.fdopen(fd, "w") as stream:
-                stream.write(json.dumps(marker_value, sort_keys=True) + "\n")
-                stream.flush()
-                os.fsync(stream.fileno())
-        except BaseException:
-            marker.unlink(missing_ok=True)
-            raise
-    print("ONE_TIME_NTFS_ERASE_PREFLIGHT=PASS", flush=True)
-
-
-def ensure_create(data, disk, physical, disk_policy="preserve"):
-    """Rebuild an empty or exactly identified approved pool (erase only at CLI)."""
-    require(disk_policy in ("preserve", "erase"), "DISK_POLICY_INVALID")
+def erase_disk(data, physical):
+    """Explicit erase: remove any old FS/ZFS on exactly this one SATA disk."""
     name = data["pool_name"]
-    target_active = get_pool(name)
-    target_importable = imported_guid_visible(name) if not target_active else None
-    if target_active or target_importable:
-        guid, modified = ensure_import(name, disk, physical, data["mode"])
-        if disk_policy == "preserve":
-            # Preserve an existing pool only when the operator explicitly
-            # selected import/preserve. An explicit erase is never rewritten
-            # into preserve merely because an old NTFS approval exists.
-            print("POOL=ALREADY_CANONICAL", flush=True)
-            return guid, modified
-        require(data.get("destructive_without_backup") is True,
-                "DESTRUCTIVE_APPROVAL_MISSING")
-        verify_pool_disk(name, physical)
-        command("/usr/sbin/zpool", "destroy", name)
-        require(get_pool(name) is None, "CANONICAL_POOL_STILL_ACTIVE")
-        print("CANONICAL_POOL=DESTROYED_EXPLICITLY", flush=True)
-        # The previously verified ZFS layout may have partitioned the SSD.
-        # Continue only with the same strict WWN-verified disk path.
-    else:
-        prior = data.get("recreate_source_pool")
-        require(prior is None or
-                (isinstance(prior, dict) and set(prior) == {"name", "guid"}
-                 and isinstance(prior["name"], str)
-                 and re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
-                                  prior["name"]) is not None
-                 and prior["name"] != name
-                 and isinstance(prior["guid"], str)
-                 and prior["guid"].isdecimal()),
-                "RECREATE_SOURCE_FLEET_INVALID")
-        prior_active = get_pool(prior["name"]) if prior else None
-        prior_importable = (imported_guid_visible(prior["name"])
-                            if prior and not prior_active else None)
-        if prior_active or prior_importable:
-            require(disk_policy == "erase", "RECREATE_SOURCE_ERASE_NOT_AUTHORIZED")
-            require(data.get("destructive_without_backup") is True,
-                    "DESTRUCTIVE_APPROVAL_MISSING")
-            require((prior_active or prior_importable) == prior["guid"],
-                    "RECREATE_SOURCE_GUID_MISMATCH")
-            # An OpenZFS whole-disk vdev creates partitions 1 (ZFS) and 9
-            # (reserved). Validate their exact shape and signatures first.
-            verify_prior_managed_partitions(physical)
-            if not prior_active:
-                command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
-                        "/dev/disk/by-id", prior["name"])
-            require(get_pool(prior["name"]) == prior["guid"],
-                    "RECREATE_SOURCE_IMPORTED_GUID_DRIFT")
-            verify_pool_disk(prior["name"], physical)
-            command("/usr/sbin/zpool", "destroy", prior["name"])
-            require(get_pool(prior["name"]) is None,
-                    "RECREATE_SOURCE_STILL_ACTIVE")
-            print("RECREATE_SOURCE_POOL=DESTROYED_EXPLICITLY", flush=True)
-        else:
-            legacy = data.get("legacy_pool")
-            legacy_active = get_pool(legacy["name"]) if legacy else None
-            legacy_importable = imported_guid_visible(legacy["name"]) if legacy else None
-            if legacy_active or legacy_importable:
-                require(disk_policy == "erase", "LEGACY_POOL_ERASE_NOT_AUTHORIZED")
-                require(data.get("destructive_without_backup") is True,
-                        "DESTRUCTIVE_APPROVAL_MISSING")
-                observed = legacy_active or legacy_importable
-                require(observed == str(legacy["guid"]), "LEGACY_POOL_GUID_MISMATCH")
-                children = physical_partitions(physical)
-                require(len(children) == 1
-                        and isinstance(children[0].get("partuuid"), str)
-                        and children[0]["partuuid"].lower()
-                        == legacy["partition_partuuid"].lower(), "LEGACY_PARTUUID_MISMATCH")
-                if not legacy_active:
-                    command("/usr/sbin/zpool", "import", "-N", "-f", "-d",
-                            "/dev/disk/by-id", legacy["name"])
-                require(get_pool(legacy["name"]) == str(legacy["guid"]),
-                        "LEGACY_POOL_IMPORTED_GUID_DRIFT")
-                verify_pool_disk(legacy["name"], physical)
-                command("/usr/sbin/zpool", "destroy", legacy["name"])
-                print("LEGACY_POOL=DESTROYED_EXPLICITLY", flush=True)
-            else:
-                # A foreign NTFS disk is only accepted through an EXACT
-                # site-scoped, one-time approval; all other formats still block.
-                if data.get("one_time_ntfs_erase") is not None:
-                    require(disk_policy == "erase"
-                            and data.get("destructive_without_backup") is True,
-                            "NTFS_ERASE_ACTION_OR_PERMISSION_MISSING")
-                    verify_one_time_ntfs_erase(data, physical)
-                else:
-                    children = physical_partitions(physical)
-                    require(not children, "UNKNOWN_EXISTING_PARTITIONS")
-                    require(command("/usr/sbin/blkid", physical, allow_failure=True) is None,
-                            "UNKNOWN_EXISTING_SIGNATURE")
-                    print("DATA_DISK=EMPTY", flush=True)
-    # The physical disk was previously identified from serial+WWN+size.
-    command("/usr/sbin/wipefs", "--all", physical)
+    for pool in active_pools():
+        leaves = pool_leaves(pool)
+        if physical in leaves:
+            require(len(leaves) == 1 and leaves[0] == physical,
+                    "SATA_DISK_PART_OF_MULTI_VDEV_POOL")
+            command("/usr/sbin/zpool", "destroy", "-f", pool)
+            print("SATA_POOL=DESTROYED_" + pool, flush=True)
+        elif pool == name:
+            raise Blocked("TARGET_POOL_NAME_ACTIVE_ON_OTHER_DISK")
+    for dev in reversed(scan_devices(physical)):
+        mounted = command("/usr/bin/findmnt", "-rn", "--source", dev,
+                          allow_failure=True)
+        require(not mounted, "SATA_DISK_BUSY_MOUNTED")
+        command("/usr/sbin/wipefs", "--all", "--force", dev)
     command("/usr/sbin/sgdisk", "--zap-all", physical)
     command("/usr/bin/udevadm", "settle")
-    legacy = data.get("legacy_pool")
-    if legacy:
-        require(not get_pool(legacy["name"]), "LEGACY_POOL_STILL_ACTIVE")
     command("/usr/sbin/zpool", "create", "-f", "-o", "ashift=12",
             "-O", "compression=zstd", "-O", "atime=off",
             "-O", "xattr=sa", "-O", "acltype=posixacl",
-            name, disk)
+            name, physical)
     guid = get_pool(name)
     require(guid is not None, "POOL_CREATE_UNCONFIRMED")
     verify_pool_disk(name, physical)
@@ -489,18 +299,24 @@ def reconcile_layout(data):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--action", choices=("import", "erase"), required=True)
-    parser.add_argument("--owner", required=True)
+    parser.add_argument("--action", choices=("import", "erase"))
+    parser.add_argument("--owner")
+    parser.add_argument("--discover-only", action="store_true")
     args = parser.parse_args()
     require(os.geteuid() == 0, "ROOT_REQUIRED")
-    require(args.config.is_file() and not args.config.is_symlink(), "CONFIG_MISSING")
+    require(args.config.is_file() and not args.config.is_symlink(),
+            "CONFIG_MISSING")
     data = json.loads(args.config.read_text())
-    require(re.fullmatch(r"[a-z][a-z0-9_-]{1,62}", data["pool_name"]) is not None,
-            "POOL_NAMING_INVALID")
-    require(re.fullmatch(r"[a-z][a-z0-9-]{1,30}", args.owner) is not None,
+    require(re.fullmatch(r"[a-z][a-z0-9_-]{1,62}",
+                         data["pool_name"]) is not None, "POOL_NAMING_INVALID")
+    if args.discover_only:
+        _, physical = find_disk(data)
+        print("MEDIA_SATA_DEVICE=" + physical, flush=True)
+        return
+    require(args.action in ("import", "erase"), "DISK_ACTION_REQUIRED")
+    require(isinstance(args.owner, str)
+            and re.fullmatch(r"[a-z][a-z0-9-]{1,30}", args.owner),
             "OWNER_SLUG_INVALID")
-    # Only actual pool creation/destruction uses the canonical owner name.
-    # Import of a legacy pool must retain its exact Fleet-declared identity.
     if args.action == "erase":
         require(data["pool_name"] == args.owner + "-pool",
                 "NEW_POOL_OWNER_NAMING_REQUIRED")
@@ -509,25 +325,20 @@ def main():
     validate_layout(data)
     require(args.action != "erase" or data["mode"] == "readwrite",
             "ERASE_REQUIRES_READWRITE")
-    require(args.action != "erase"
-            or data.get("destructive_without_backup") is True,
-            "DISK_ERASE_NOT_APPROVED_IN_FLEET")
-    disk, physical = find_disk(data["disk"])
+    disk, physical = find_disk(data)
     command("/usr/sbin/modprobe", "zfs")
     if args.action == "erase":
-        guid, changed = ensure_create(data, disk, physical, "erase")
+        print("MEDIA_DISK_ACTION=ERASE", flush=True)
+        guid, changed = erase_disk(data, physical)
     else:
-        expected = data.get("import_pool_guid")
-        require(isinstance(expected, str) and expected.isdecimal(),
-                "IMPORT_POOL_GUID_NOT_PINNED")
+        print("MEDIA_DISK_ACTION=IMPORT", flush=True)
         guid, changed = ensure_import(data["pool_name"], disk, physical,
-                                      data["mode"], expected)
-        print("POOL=IMPORTED", flush=True)
+                                      data["mode"])
     expected_access = "on" if data["mode"] == "readonly" else "off"
     require(command("/usr/sbin/zpool", "get", "-H", "-o", "value",
                     "readonly", data["pool_name"]) == expected_access,
             "POOL_ACCESS_MODE_MISMATCH")
-    require(reconcile_layout(data) is not None, "STORAGE_LAYOUT_ERROR")
+    reconcile_layout(data)
     print("POOL_GUID=" + guid, flush=True)
     print("MEDIA_STORAGE_RECONCILED=PASS", flush=True)
 
