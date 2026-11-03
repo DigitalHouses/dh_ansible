@@ -269,7 +269,8 @@
 
 # Task 80 uses only native Ansible disk operations.
 - name: Reconcile physical SATA disk and ZFS using native Ansible
-  ansible.builtin.include_tasks: zfs_storage.yml
+  ansible.builtin.include_role:
+    name: media_native_zfs
   when: media80_native | default(false) | bool
 
 - name: Refuse ordinary Ansible apply during unfinished customer password rotation
