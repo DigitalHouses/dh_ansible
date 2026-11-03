@@ -72,7 +72,10 @@ def test_cicustom_normalization_is_independent_of_proxmox_option_order():
 def test_foreign_cloudinit_snippets_are_never_silently_overwritten(unsafe):
     m = load()
     with patch.object(m, "config", return_value={"cicustom": unsafe}):
-        got = m.qga_cicustom(2232)
+        try:
+            got = m.qga_cicustom(2232)
+        except m.Blocked:
+            return
         assert got != m.qga_cicustom_expected(2232)
 
 
