@@ -71,6 +71,10 @@ jobs:
       - name: Validate site, credential and Task 80 contracts as Ansible tasks
         run: ansible-playbook -i localhost, -c local tests/ansible/native-ci-contract.yml
 
+      - name: Validate Semaphore installer release safety contracts with native Ansible
+        run: ansible-playbook -i localhost, -c local tests/ansible/installer-ci-contract.yml
+      - name: Syntax-check native Semaphore live API acceptance
+        run: ansible-playbook --syntax-check -i localhost, tests/ansible/semaphore-live-api.yml
       - name: Validate Cloudflare root worker Python syntax
         run: |
           python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
