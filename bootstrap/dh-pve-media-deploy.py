@@ -254,6 +254,26 @@ def ensure_lifecycle(vmid, data):
          "MEDIA_PVE_RESOURCE_POLICY_NOT_APPLIED")
 
 
+def qga_cicustom(vmid):
+    """Normalize Proxmox's canonical order for cicustom options."""
+    raw = config(vmid).get("cicustom")
+    if raw is None:
+        return None
+    parts = [pair.split("=", 1) for pair in raw.split(",")]
+    need(len(parts) == 2 and all(len(p) == 2 for p in parts),
+         "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+    need(len(set(p[0] for p in parts)) == 2,
+         "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+    return dict(parts)
+
+
+def qga_cicustom_expected(vmid):
+    return {
+        "vendor": "local:snippets/dh-media-" + str(vmid) + "-qga-v1.yaml",
+        "meta": "local:snippets/dh-media-" + str(vmid) + "-qga-meta-v1.yaml",
+    }
+
+
 def ensure_qga_cloud_init(vmid, data):
     """Vendor-data installs QGA BEFORE native Ansible ever needs QGA.
 
@@ -301,12 +321,13 @@ def ensure_qga_cloud_init(vmid, data):
             stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-    wanted = ("vendor=local:snippets/" + vendor_name
-              + ",meta=local:snippets/" + meta_name)
-    current = config(vmid).get("cicustom")
-    need(current in (None, wanted), "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+    wanted = qga_cicustom_expected(vmid)
+    current = qga_cicustom(vmid)
+    need(current is None or current == wanted,
+         "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
     if current is None:
-        qm("set", vmid, "--cicustom", wanted)
+        qm("set", vmid, "--cicustom",
+           ",".join(k + "=" + wanted[k] for k in ("vendor", "meta")))
     qm("cloudinit", "update", vmid)
     print("MEDIA_QGA_CLOUDINIT=CONFIGURED", flush=True)
 
@@ -464,10 +485,16 @@ def apply(site, vm_action, disk_action):
             # boot volume and expected hostpci assignments may be restarted.
             old_guest_matches(vmid, site, data, managed=(
                 config(vmid).get("description") == MANAGED_MEDIA_DESCRIPTION))
-            need(config(vmid).get("cicustom") in (None,
-                 "vendor=local:snippets/dh-media-" + str(vmid) + "-qga-v1.yaml,"
-                 "meta=local:snippets/dh-media-" + str(vmid) + "-qga-meta-v1.yaml"),
+            current_custom = qga_cicustom(vmid)
+            need(current_custom is None
+                 or current_custom == qga_cicustom_expected(vmid),
                  "QGA_CLOUDINIT_FOREIGN_CUSTOM_CONFIG")
+            if current_custom is not None:
+                # An earlier run already queued cloud-init bootstrap. Do not
+                # disrupt an in-progress apt install with another reboot.
+                print("MEDIA_QGA=BOOTSTRAP_ALREADY_CONFIGURED", flush=True)
+                print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
+                return
             ensure_qga_cloud_init(vmid, data)
             qm("shutdown", vmid, "--timeout", "120", timeout=135)
             need(qm("status", vmid) == "status: stopped",
