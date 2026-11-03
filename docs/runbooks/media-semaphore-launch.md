@@ -14,6 +14,35 @@
 **Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).
 **Статус:** новая controller-scoped реализация, live E2E ожидает проверки.
 
+## QEMU Guest Agent · Fresh Bootstrap recovery · 03.11.2026
+
+Реальный №80 Task #11: `create + erase` успешно создала/запустила
+управляемую VM2232, но остановилась до доступа к физическому диску на
+`qm guest exec 2232 -- /bin/cat /etc/ssh/ssh_host_ed25519_key.pub`
+с `QEMU guest agent is not running` (60 попыток). Debian 13 official
+cloud images **не включают** `qemu-guest-agent`; старая №80 ошибочно
+пыталась прочитать ключ через него раньше установки пакета в гостевой роли.
+
+**Исправление:** `bootstrap/dh-pve-media-deploy.py` готовит минимальные
+Cloud-Init `vendor` (установка/запуск `qemu-guest-agent`) и стабильные
+`meta` (instance-id) в `local:snippets` до первой загрузки.
+Стандартные автоматически генерируемые PVE `user` (пользователь
+`debian`, авторизованный SSH public key) и `network` не заменяются.
+При установленном агенте сценарий `keep` не изменяет VM и не перезапускает её.
+
+**Продолжение частично созданной VM2232:** один запуск **`keep + erase`**
+после публикации фикса: проверка, что VM наша и физический SATA PCI
+контроллер совпадает; если QGA отсутствует и штатные Cloud-Init snippets
+ещё не заданы — добавление `vendor + meta`, один контролируемый
+ACPI shutdown/start *только* VM2232, затем обычный QGA readback SSH key.
+Если snippets уже заданы, перезапуск повторно не производится, чтобы
+не прервать установку пакетов. Никакого ручного изменения VM, удаления
+VM2232, ослабления SSH host key trust или замены credentials.
+
+**Опасность:** при достижении шага ZFS действие `keep + erase`
+стирает содержимое **единственного диска выделенного SATA-контроллера**.
+Пока Task #11 остановилась на QGA, ZFS на этом HDD ею не стирался.
+
 ## LIVE · Автоматическое обнаружение новых медиа · 02.11.2026
 
 В Debian VM2232 проверено: Plex 1.43.5 имеет включённые
