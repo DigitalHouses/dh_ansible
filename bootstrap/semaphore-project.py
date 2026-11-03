@@ -509,6 +509,9 @@ def read_public_catalog():
                             "DH_INPUT_MQTT_USERNAME": "text",
                             "DH_INPUT_MQTT_PASSWORD": "secret",
                             "DH_INPUT_PVE_ROOT_PASSWORD": "secret",
+                            "DH_INPUT_PBS_ADMIN_PASSWORD": "secret",
+                            "DH_INPUT_B2_KEY_ID": "secret",
+                            "DH_INPUT_B2_APPLICATION_KEY": "secret",
                             "DH_INPUT_CLOUDFLARE_API_TOKEN": "secret",
                         }
                         if (variable["name"] not in allowed
@@ -591,7 +594,7 @@ def equivalent_task05_survey(title, existing, wanted):
     if (title != "05-Ввести credentials объекта"
             or not isinstance(existing, list)
             or not isinstance(wanted, list)
-            or len(existing) != len(wanted) or len(wanted) not in (5, 6)):
+            or len(existing) != len(wanted) or len(wanted) not in (5, 6, 7, 8, 9)):
         return False
     for actual, desired in zip(existing, wanted):
         if not isinstance(actual, dict) or not isinstance(desired, dict):
@@ -619,17 +622,30 @@ def allowed_survey_upgrade(title, existing, wanted):
         return True
     if equivalent_task05_survey(title, existing, wanted):
         return True
-    # Known append-only site parameter upgrade: insert one nonsecret MQTT
-    # endpoint field next to existing username/password. Protect every
-    # pre-existing field (including title/description/hidden secret types).
-    if (title == "05-Ввести credentials объекта"
-            and isinstance(existing, list)
-            and isinstance(wanted, list) and len(wanted) == 6
-            and len(existing) == 5
-            and [v.get("name") for v in wanted if isinstance(v, dict)].count(
-                "DH_INPUT_MQTT_BROKER_HOST") == 1):
-        old_wanted = [v for v in wanted
-                      if v.get("name") != "DH_INPUT_MQTT_BROKER_HOST"]
+    # Task 05 is an append-only credential survey. Permit migration only
+    # when every old field survives unchanged and newly introduced names are
+    # a known set. The existing template ID, history and secret bindings stay.
+    if title == "05-Ввести credentials объекта":
+        if not isinstance(existing, list) or not isinstance(wanted, list):
+            return False
+        old_names = [v.get("name") for v in existing if isinstance(v, dict)]
+        new_names = [v.get("name") for v in wanted if isinstance(v, dict)]
+        if len(old_names) != len(existing) or len(new_names) != len(wanted):
+            return False
+        if len(set(old_names)) != len(old_names) or len(set(new_names)) != len(new_names):
+            return False
+        allowed_new = {
+            "DH_INPUT_MQTT_BROKER_HOST",
+            "DH_INPUT_PBS_ADMIN_PASSWORD",
+            "DH_INPUT_B2_KEY_ID",
+            "DH_INPUT_B2_APPLICATION_KEY",
+        }
+        added = set(new_names) - set(old_names)
+        if (not added or not added.issubset(allowed_new)
+                or not set(old_names).issubset(new_names)
+                or [name for name in new_names if name in old_names] != old_names):
+            return False
+        old_wanted = [item for item in wanted if item["name"] in old_names]
         return equivalent_task05_survey(title, existing, old_wanted)
     if title != "80-Медиасервер · Развёртывание":
         return False
