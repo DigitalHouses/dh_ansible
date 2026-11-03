@@ -58,8 +58,8 @@ def test_image_download_and_host_compatibility():
     assert 'reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action)' in code
     assert '"VM_CREATE_REQUIRES_ABSENT_VM"' in code
     assert 'VM_" + vm_action.upper() + "_REQUIRES_EXISTING_VM' in code
-    assert 'LEGACY_ZFS_GUID_MISMATCH' in code
-    assert 'LEGACY_PHYSICAL_DISK_IDENTITY_MISMATCH' in code
+    assert 'MANAGED_VM_IDENTITY=PASS' in code
+    assert 'SATA_CONFIG_DRIFT' in code
     assert 'qm("destroy", vmid' in code
     for forbidden in ("qm stop 501", "qm stop 700",
                       "wipefs", "mkfs", "sgdisk", "dd if="):
@@ -167,14 +167,14 @@ def test_two_select_contract_has_no_legacy_cli_flags():
     disk_source = (ROOT / "roles/media_guest_setup/files/dh-media-storage.py").read_text()
     assert 'parser.add_argument("--vm-action", choices=("create", "recreate", "keep"), required=True)' in deploy
     assert 'parser.add_argument("--raw-disk-action", choices=("import", "erase"), required=True)' in deploy
-    assert 'parser.add_argument("--action", choices=("import", "erase"), required=True)' in disk_source
+    assert 'parser.add_argument("--action", choices=("import", "erase"))' in disk_source
     for stale in ('--storage-action', '--vm-policy', '--disk-policy',
                   'media_storage_action', 'media_vm_policy', 'media_disk_policy'):
         assert stale not in deploy
         assert stale not in worker
         assert stale not in guest_tasks
     assert 'media_raw_disk_action' in guest_tasks
-    assert 'ensure_create(data, disk, physical, "erase")' in disk_source
+    assert 'erase_disk(data, physical)' in disk_source
 
 
 
