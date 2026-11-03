@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Re-import ONLY the known ZFS pool on the sole verified SATA disk after boot.
-# No erase, wipefs, sgdisk, or ZFS create operation is possible on this path.
+# Boot always uses the read-only import operation (never disk provisioning).
 set -Eeuo pipefail
 
 /usr/local/sbin/dh-media-storage \
