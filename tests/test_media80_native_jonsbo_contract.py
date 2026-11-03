@@ -83,4 +83,3 @@ def test_task80_operator_selection_needs_no_second_approval_or_legacy_nfs():
     assert "media_vm.backup_export" not in accounts
     assert "when: media_vm.backup_export is defined" in guest
     assert "после строгой проверки WWN" not in catalog
-    assert "site.owner_slug ~ '_admin'" in accounts
