@@ -22,7 +22,7 @@ def media():
         "vmid": 2232,
         "name": "mediaserver-serzhan",
         "os": {"distribution": "debian", "major_version": 13},
-        "network": {"bridge": "vmbr0", "ipv4": "192.168.11.232/24"},
+        "network": {"bridge": "vmbr0", "ipv4": "198.51.100.232/24"},
         "resources": {
             "cores": 2, "memory_mb": 4096, "disk_gb": 64,
             "cpu_limit": 1.5, "cpu_units": 50, "ballooning": False,
@@ -66,6 +66,6 @@ def test_pve_provision_contract_does_not_require_manifest_approval_flags():
         patch.object(Path, "glob", return_value=[]),
         patch.object(m, "run", return_value="local-lvm active"),
     ):
-        assert m.check("serzhan-home", data, {"host": "192.168.11.6"}) == (
-            2232, "mediaserver-serzhan", "192.168.11.232/24"
+        assert m.check("serzhan-home", data, {"host": "198.51.100.6"}) == (
+            2232, "mediaserver-serzhan", "198.51.100.232/24"
         )
