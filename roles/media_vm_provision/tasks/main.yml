@@ -246,23 +246,29 @@
     argv: [qm, set, "{{ media_vm.vmid }}", --ide2, 'local-lvm:cloudinit']
   when: media_boot_disk.ide2 is not defined
 
-- name: Inspect local PVE snippets content
-  ansible.builtin.slurp:
-    src: /etc/pve/storage.cfg
-  register: media_storage_cfg
+- name: Read local storage from native Proxmox API
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage, --output-format, json]
+  register: media_pve_storage_list
+  changed_when: false
 
-- name: Read PVE local storage stanza, not unrelated storages
+- name: Select standard local directory storage
   ansible.builtin.set_fact:
-    media_local_storage_lines: >-
-      {{ (media_storage_cfg.content | b64decode
-          | regex_findall('(?ms)^dir: local[ \t]*\n((?:(?!^[a-z][a-z0-9-]*: ).|\n)*)'))
-          | first | default('') }}
+    media_local_storage: >-
+      {{ (media_pve_storage_list.stdout | from_json
+          | selectattr('storage', 'equalto', 'local') | list)
+          | first | default({}) }}
 
-- name: Extract local storage content types
+- name: Require standard PVE local storage before enabling snippets
+  ansible.builtin.assert:
+    that:
+      - media_local_storage.type | default('') == 'dir'
+      - media_local_storage.path | default('') == '/var/lib/vz'
+    fail_msg: MEDIA_LOCAL_STORAGE_NOT_DIRECTORY
+
+- name: Preserve existing local content types
   ansible.builtin.set_fact:
-    media_local_contents: >-
-      {{ (media_local_storage_lines
-          | regex_findall('(?m)^[ \t]+content[ \t]+([a-z,]+)\s*
+    media_local_contents: "{{ media_local_storage.content | default('') }}"
 
 - name: Enable snippets on existing PVE local dir storage
   ansible.builtin.command:
