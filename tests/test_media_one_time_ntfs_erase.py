@@ -87,14 +87,20 @@ def test_erase_refuses_same_pool_name_active_on_another_disk():
             m.erase_disk(config(), "/dev/sdb")
 
 
-def test_erase_requires_explicit_policy_without_any_write():
+def test_erase_does_not_require_a_second_approval_from_site_inventory():
     m = load()
-    bad = config()
-    bad["destructive_without_backup"] = False
-    with patch.object(m, "active_pools", side_effect=AssertionError("disk inspected")), \
-         patch.object(m, "command", side_effect=AssertionError("disk write")):
-        with pytest.raises(m.Blocked, match="DISK_ERASE_NOT_APPROVED"):
-            m.erase_disk(bad, "/dev/sdb")
+    data = {"pool_name": "serzhan-pool"}
+    calls = []
+    def fake_command(*args, **kwargs):
+        calls.append(args)
+        return ""
+    with patch.object(m, "active_pools", return_value=[]), \
+         patch.object(m, "scan_devices", return_value=["/dev/sdb"]), \
+         patch.object(m, "get_pool", return_value="123"), \
+         patch.object(m, "verify_pool_disk"), \
+         patch.object(m, "command", side_effect=fake_command):
+        assert m.erase_disk(data, "/dev/sdb") == ("123", True)
+    assert ("/usr/sbin/sgdisk", "--zap-all", "/dev/sdb") in calls
 
 
 def test_erase_never_wipes_an_actively_mounted_partition():
