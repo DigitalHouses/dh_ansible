@@ -1,0 +1,340 @@
+---
+# Disk action is independent of VM action. Only controller-scoped target can be touched.
+- name: Inspect SATA PCI functions in guest
+  ansible.builtin.command:
+    argv: [lspci, -D, -n]
+  register: media_guest_pci
+  changed_when: false
+
+- name: Identify unique passed-through AHCI controller by the PVE-measured PCI ID
+  ansible.builtin.set_fact:
+    media_guest_sata_controllers: >-
+      {{ media_guest_pci.stdout | lower
+         | regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+0106:\s+'
+           ~ media_sata_pci_vendor[2:] ~ ':' ~ media_sata_pci_device[2:] ~ '\b') }}
+
+- name: Require exactly one matching AHCI controller
+  ansible.builtin.assert:
+    that:
+      - media_guest_sata_controllers | length == 1
+    fail_msg: MEDIA_GUEST_SATA_CONTROLLER_NOT_UNIQUE
+
+- name: List physical disks without vendor, WWN or NTFS assumptions
+  ansible.builtin.command:
+    argv: [lsblk, -J, -o, NAME,PATH,TYPE]
+  register: media_guest_disks_raw
+  changed_when: false
+
+- name: Keep only physical block disks for sysfs inspection
+  ansible.builtin.set_fact:
+    media_guest_disk_candidates: >-
+      {{ (media_guest_disks_raw.stdout | from_json).blockdevices
+         | selectattr('type', 'equalto', 'disk') | list }}
+
+- name: Read physical bus ancestry for each disk
+  ansible.builtin.command:
+    argv: [readlink, -f, "/sys/class/block/{{ item.name }}/device"]
+  loop: "{{ media_guest_disk_candidates }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: media_guest_disk_parent
+  changed_when: false
+
+- name: Select only disks physically behind that AHCI controller
+  ansible.builtin.set_fact:
+    media_sata_disks: >-
+      {{ media_guest_disk_parent.results
+         | selectattr('stdout', 'search', '/' ~ media_guest_sata_controllers[0] ~ '/')
+         | map(attribute='item.path') | list }}
+
+- name: Protect against wrong controller or multiple SATA drives
+  ansible.builtin.assert:
+    that:
+      - media_sata_disks | length == 1
+    fail_msg: MEDIA_SATA_DISK_COUNT_MUST_EQUAL_ONE
+
+- name: Set sole controller-scoped physical disk
+  ansible.builtin.set_fact:
+    media_sata_disk: "{{ media_sata_disks[0] }}"
+
+- name: Observe mounted guest system disk
+  ansible.builtin.command:
+    argv: [findmnt, -rn, -o, SOURCE, /]
+  register: media_guest_root_source
+  changed_when: false
+
+- name: Observe all ancestors of the guest system volume
+  ansible.builtin.command:
+    argv: [lsblk, -srn, -o, PATH, "{{ media_guest_root_source.stdout }}"]
+  register: media_guest_root_parents
+  changed_when: false
+
+- name: Never allow physical media disk to be the guest system disk
+  ansible.builtin.assert:
+    that:
+      - media_sata_disk not in media_guest_root_parents.stdout_lines
+    fail_msg: MEDIA_SATA_DISK_IS_SYSTEM_DISK
+
+- name: Read partitions of the selected physical disk only
+  ansible.builtin.command:
+    argv: [lsblk, -J, -o, PATH,TYPE, "{{ media_sata_disk }}"]
+  register: media_sata_partitions_raw
+  changed_when: false
+
+- name: Derive only the selected disk and its direct partitions
+  ansible.builtin.set_fact:
+    media_sata_partitions: >-
+      {{ ((media_sata_partitions_raw.stdout | from_json).blockdevices[0].children
+           | default([])) | selectattr('type', 'equalto', 'part')
+           | map(attribute='path') | list }}
+
+- name: Observe active pool names
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name]
+  register: media_active_pool_names
+  changed_when: false
+  failed_when: false
+
+- name: Inspect only active ZFS pool topology
+  ansible.builtin.command:
+    argv: [zpool, status, -LP, "{{ item }}"]
+  loop: "{{ media_active_pool_names.stdout_lines | default([]) }}"
+  register: media_active_pool_statuses
+  changed_when: false
+
+- name: Identify active pool(s) physically using the selected SATA disk
+  ansible.builtin.set_fact:
+    media_sata_active_pools: >-
+      {{ media_active_pool_statuses.results | default([])
+         | selectattr('stdout', 'search',
+             '(?m)^\s+' ~ (media_sata_disk | regex_escape)
+             ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+         | list }}
+
+- name: Require no multi-vdev or competing active pool on target
+  ansible.builtin.assert:
+    that:
+      - media_sata_active_pools | length <= 1
+      - >-
+        media_sata_active_pools | length == 0 or
+        (media_sata_active_pools[0].stdout
+         | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+         | length == 1)
+    fail_msg: MEDIA_SATA_DISK_PART_OF_MULTI_VDEV_POOL
+
+# ERASE ONLY: no old-file-system identification and no second approval.
+- name: Read media service states before explicit erase
+  ansible.builtin.service_facts:
+  when: media_raw_disk_action == 'erase'
+
+- name: Stop installed consumers before explicitly erasing the media disk
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - plexmediaserver.service
+    - jellyfin.service
+    - radarr.service
+    - sonarr.service
+    - prowlarr.service
+    - qbittorrent.service
+    - filestash.service
+    - docker.service
+    - smbd.service
+    - nmbd.service
+    - nfs-server.service
+    - nginx.service
+  when:
+    - media_raw_disk_action == 'erase'
+    - item in ansible_facts.services
+
+- name: Destroy only an active single-disk ZFS pool on the selected SATA drive
+  ansible.builtin.command:
+    argv: [zpool, destroy, -f, "{{ media_sata_active_pools[0].item }}"]
+  when:
+    - media_raw_disk_action == 'erase'
+    - media_sata_active_pools | length == 1
+
+- name: Verify direct partition or disk is not mounted outside ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -rn, --source, "{{ item }}"]
+  loop: "{{ media_sata_partitions + [media_sata_disk] }}"
+  register: media_sata_mount_checks
+  changed_when: false
+  failed_when: false
+  when: media_raw_disk_action == 'erase'
+
+- name: Do not erase disks with other active filesystem mounts
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_sata_mount_checks.results
+        | selectattr('rc', 'equalto', 0) | list | length == 0
+    fail_msg: MEDIA_SATA_HAS_ACTIVE_MOUNTS
+  when: media_raw_disk_action == 'erase'
+
+- name: Wipe only the physical SATA disk and its partitions
+  ansible.builtin.command:
+    argv: [wipefs, --all, --force, "{{ item }}"]
+  loop: "{{ media_sata_partitions + [media_sata_disk] }}"
+  when: media_raw_disk_action == 'erase'
+
+- name: Clear obsolete partition table on the explicitly selected SATA disk
+  ansible.builtin.command:
+    argv: [sgdisk, --zap-all, "{{ media_sata_disk }}"]
+  when: media_raw_disk_action == 'erase'
+
+- name: Settle disk device events after erase
+  ansible.builtin.command:
+    argv: [udevadm, settle]
+  changed_when: false
+  when: media_raw_disk_action == 'erase'
+
+- name: Create requested new ZFS pool from the sole SATA disk
+  ansible.builtin.command:
+    argv:
+      - zpool
+      - create
+      - -f
+      - -o
+      - ashift=12
+      - -O
+      - compression=zstd
+      - -O
+      - atime=off
+      - -O
+      - xattr=sa
+      - -O
+      - acltype=posixacl
+      - "{{ media_vm.storage.pool_name }}"
+      - "{{ media_sata_disk }}"
+  when: media_raw_disk_action == 'erase'
+
+# IMPORT ONLY: no operation below this branch can wipe or create a pool.
+- name: Check if requested pool is already imported
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name, "{{ media_vm.storage.pool_name }}"]
+  register: media_existing_target_pool
+  changed_when: false
+  failed_when: false
+  when: media_raw_disk_action == 'import'
+
+- name: Assemble explicit scan of selected disk and its partitions
+  ansible.builtin.set_fact:
+    media_import_scan: "{{ (media_import_scan | default([])) + ['-d', item] }}"
+  loop: "{{ [media_sata_disk] + media_sata_partitions }}"
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc != 0
+
+- name: Import requested pool only, without mounting during discovery
+  ansible.builtin.command:
+    argv: >-
+      {{ ['zpool', 'import', '-N', '-f']
+         + (['-o', 'readonly=on'] if media_vm.storage.mode == 'readonly' else [])
+         + media_import_scan + [media_vm.storage.pool_name] }}
+  when:
+    - media_raw_disk_action == 'import'
+    - media_existing_target_pool.rc != 0
+
+- name: Read final target pool topology and health
+  ansible.builtin.command:
+    argv: [zpool, status, -LP, "{{ media_vm.storage.pool_name }}"]
+  register: media_target_zpool_status
+  changed_when: false
+
+- name: Confirm pool belongs to precisely the selected SATA disk
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_target_zpool_status.stdout
+        | regex_findall('(?m)^\s+' ~ (media_sata_disk | regex_escape)
+                         ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+        | length == 1
+      - >-
+        media_target_zpool_status.stdout
+        | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+        | length == 1
+    fail_msg: MEDIA_ZFS_POOL_ON_WRONG_DISK
+
+- name: Read existing ZFS datasets
+  ansible.builtin.command:
+    argv: [zfs, list, -H, -o, name]
+  register: media_zfs_datasets
+  changed_when: false
+
+- name: Create only absent declared datasets
+  ansible.builtin.command:
+    argv: [zfs, create, "{{ media_vm.storage.pool_name }}/{{ item }}"]
+  loop: "{{ media_vm.storage.layout.datasets }}"
+  when: >-
+    (media_vm.storage.pool_name ~ '/' ~ item) not in media_zfs_datasets.stdout_lines
+
+- name: Read dataset mount states
+  ansible.builtin.command:
+    argv: [zfs, get, -H, -o, value, mounted, "{{ media_vm.storage.pool_name }}/{{ item }}"]
+  loop: "{{ media_vm.storage.layout.datasets }}"
+  register: media_zfs_mount_states
+  changed_when: false
+
+- name: Mount declared datasets that are not already mounted
+  ansible.builtin.command:
+    argv: [zfs, mount, "{{ media_vm.storage.pool_name }}/{{ item.item }}"]
+  loop: "{{ media_zfs_mount_states.results }}"
+  when: item.stdout != 'yes'
+
+- name: Check that directories have not been replaced by symlinks
+  ansible.builtin.stat:
+    path: "/{{ media_vm.storage.pool_name }}/{{ item }}"
+    follow: false
+  loop: "{{ media_vm.storage.layout.directories }}"
+  register: media_layout_paths
+  changed_when: false
+
+- name: Reject redirected media storage directories
+  ansible.builtin.assert:
+    that:
+      - not (item.stat.islnk | default(false))
+    fail_msg: MEDIA_LAYOUT_SYMLINK_BLOCKED
+  loop: "{{ media_layout_paths.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+
+- name: Ensure declared directories are present
+  ansible.builtin.file:
+    path: "/{{ media_vm.storage.pool_name }}/{{ item }}"
+    state: directory
+    mode: '2775'
+  loop: "{{ media_vm.storage.layout.directories }}"
+
+- name: Retire old Python-backed custom ZFS boot service when present
+  ansible.builtin.stat:
+    path: /etc/systemd/system/dh-media-zfs.service
+  register: media_old_zfs_service
+
+- name: Stop and disable old custom ZFS importer
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    enabled: false
+    state: stopped
+  when: media_old_zfs_service.stat.exists
+
+- name: Remove retired boot service definition
+  ansible.builtin.file:
+    path: /etc/systemd/system/dh-media-zfs.service
+    state: absent
+  when: media_old_zfs_service.stat.exists
+
+- name: Enable native ZFS import and mount at boot
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    daemon_reload: true
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+
+- name: Confirm requested pool is imported
+  ansible.builtin.command:
+    argv: [zpool, list, -H, -o, name, "{{ media_vm.storage.pool_name }}"]
+  changed_when: false
