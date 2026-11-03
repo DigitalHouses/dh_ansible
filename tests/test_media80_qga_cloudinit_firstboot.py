@@ -28,7 +28,9 @@ def test_cloudinit_agent_packages_are_commissioned_before_first_vm_start():
     body = script.split("def ensure_config(", 1)[1].split("def guest_exec(", 1)[0]
     assert "ensure_qga_cloud_init(vmid, data)" in body
     apply = script.split("def apply(site,", 1)[1].split("def ensure_backup_storage", 1)[0]
-    assert apply.index("ensure_config(vmid, site, data)") < apply.index('qm("start", vmid')
+    first_boot = apply.split('    print("TARGET_VMID="', 1)[1]
+    assert first_boot.index("ensure_config(vmid, site, data)") < (
+        first_boot.index('qm("start", vmid'))
     vendor = script.split("def ensure_qga_cloud_init(", 1)[1].split(
         "def qga_running(", 1)[0]
     for required in ("#cloud-config", "qemu-guest-agent", "systemctl",
