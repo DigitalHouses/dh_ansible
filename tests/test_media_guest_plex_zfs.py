@@ -27,9 +27,10 @@ def test_fixed_guest_playbook_and_role():
 
 def test_boot_importer_never_formats_disks():
     script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
-    for term in ("WWN=", "SERIAL=", "zpool import",
-                 "media_dataset", "MEDIA_ZFS=READY_${ACCESS^^}"):
+    for term in ("--action import", "dh-media-storage",
+                 "media_dataset", "MEDIA_ZFS=READY"):
         assert term in script
+    assert "WWN=" not in script and "SERIAL=" not in script
     for forbidden in ("zpool create", "zpool destroy", "zpool export",
                       "zfs destroy", "zfs set", "wipefs", "mkfs", "parted",
                       "zfs mount -a"):
@@ -195,8 +196,9 @@ def test_fully_automatic_arr_wiring_without_exposing_api_keys():
 def test_zfs_declared_readwrite_requires_matching_import_mode():
     script = (ROOT / "roles/media_guest_setup/templates/dh-media-zfs-mount.sh.j2").read_text()
     tasks = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text()
-    assert "EXPECTED=off" in script
-    assert "[[ \"$ACCESS\" == readonly ]] && EXPECTED=on" in script
-    assert "MEDIA_ZFS=IMPORT_MODE_MISMATCH" in script
+    storage = (ROOT / "roles/media_guest_setup/files/dh-media-storage.py").read_text()
+    assert "--action import" in script
+    assert 'expected_access = "on" if data["mode"] == "readonly" else "off"' in storage
+    assert "POOL_ACCESS_MODE_MISMATCH" in storage
     assert "media_vm.storage.mode in ['readonly', 'readwrite']" in tasks
     assert "media_zfs_properties.results[0].stdout == ('on' if media_vm.storage.mode == 'readonly' else 'off')" in tasks
