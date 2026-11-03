@@ -41,8 +41,8 @@
       ansible.builtin.assert:
         that:
           - "(dh_t80[0].survey_vars | map(attribute='name') | list) == ['media_vm_action', 'media_raw_disk_action']"
-          - "(dh_t80[0].survey_vars[0].values | map(attribute='value') | sort | list) == ['create', 'keep', 'recreate']"
-          - "(dh_t80[0].survey_vars[1].values | map(attribute='value') | sort | list) == ['erase', 'import']"
+          - "(dh_t80[0].survey_vars[0]['values'] | map(attribute='value') | sort | list) == ['create', 'keep', 'recreate']"
+          - "(dh_t80[0].survey_vars[1]['values'] | map(attribute='value') | sort | list) == ['erase', 'import']"
           - "'media_vm.approvals' not in task80"
           - "'dh-media-pve-preflight.py' not in task80"
           - "'dh-pve-media-deploy.py' not in task80"
