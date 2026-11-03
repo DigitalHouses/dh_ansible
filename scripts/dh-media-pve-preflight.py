@@ -71,15 +71,46 @@ def verify_vm(data, vm_action):
     lines = command("/usr/sbin/qm", "config", str(vmid)).splitlines()
     state = dict(line.split(": ", 1) for line in lines if ": " in line)
     need(state.get("name") == data["name"]
-         and state.get("description") == "DigitalHouses managed media guest v2"
-         and state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1"
-         and state.get("hostpci1") in (
-             data["pci"]["sata_controller"],
-             data["pci"]["sata_controller"] + ",pcie=1")
-         and state.get("scsi0", "").startswith(
-             "local-lvm:vm-" + str(vmid) + "-disk-"),
+         and state.get("description") == "DigitalHouses managed media guest v2",
          "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
-    return "MANAGED_VM"
+    prefix = "local-lvm:vm-" + str(vmid) + "-disk-"
+    fully_configured = (
+        state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1"
+        and state.get("hostpci1") in (
+            data["pci"]["sata_controller"],
+            data["pci"]["sata_controller"] + ",pcie=1")
+        and state.get("scsi0", "").startswith(prefix))
+    if fully_configured:
+        return "MANAGED_VM"
+    need(vm_action == "keep", "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
+    need(command("/usr/sbin/qm", "status", str(vmid)) == "status: stopped",
+         "PARTIAL_MEDIA_VM_MUST_BE_STOPPED")
+    need(state.get("ostype") == "l26"
+         and state.get("machine") == "q35"
+         and state.get("bios", "seabios") == "seabios"
+         and state.get("scsihw") == "virtio-scsi-single"
+         and state.get("net0", "").endswith("bridge=vmbr0"),
+         "PARTIAL_MEDIA_VM_HARDWARE_MISMATCH")
+    for key in state:
+        if re.fullmatch(r"(?:scsi|sata|virtio|ide|unused|hostpci)[0-9]+", key):
+            need(key in ("scsi0", "ide2", "unused0", "hostpci0", "hostpci1"),
+                 "PARTIAL_MEDIA_VM_UNEXPECTED_DEVICE")
+    need(state.get("hostpci0") in (None, data["pci"]["gpu"] + ",pcie=1")
+         and state.get("hostpci1") in (
+             None, data["pci"]["sata_controller"] + ",pcie=1"),
+         "PARTIAL_MEDIA_VM_PCI_MISMATCH")
+    need("scsi0" not in state or state["scsi0"].startswith(prefix),
+         "PARTIAL_MEDIA_VM_FOREIGN_DISK")
+    need("unused0" not in state or state["unused0"].startswith(prefix),
+         "PARTIAL_MEDIA_VM_FOREIGN_IMPORTED_DISK")
+    need(not ("scsi0" in state and "unused0" in state),
+         "PARTIAL_MEDIA_VM_EXTRA_DISK")
+    need("ide2" not in state or
+         state["ide2"].startswith("local-lvm:cloudinit"),
+         "PARTIAL_MEDIA_VM_FOREIGN_CLOUDINIT")
+    need("cicustom" not in state,
+         "PARTIAL_MEDIA_VM_CICUSTOM_NOT_YET_VERIFIED")
+    return "MANAGED_VM_STAGED_RESUMABLE"
 
 
 def main():
