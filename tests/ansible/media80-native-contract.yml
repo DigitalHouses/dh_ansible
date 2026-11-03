@@ -7,7 +7,7 @@
   vars:
     media80_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../playbooks/plan-pve-media-vm.yml') }}"
     media80_vm_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_vm_provision/tasks/main.yml') }}"
-    media80_zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_guest_setup/tasks/zfs_storage.yml') }}"
+    media80_zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_native_zfs/tasks/main.yml') }}"
     media80_guest_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_guest_setup/tasks/main.yml') }}"
   tasks:
     - name: Parse native Ansible task definitions
@@ -83,7 +83,7 @@
           - >-
             (media80_guest_tasks | selectattr('name', 'equalto',
             'Reconcile physical SATA disk and ZFS using native Ansible')
-            | first)['ansible.builtin.include_tasks'] == 'zfs_storage.yml'
+            | first)['ansible.builtin.include_role'].name == 'media_native_zfs'
           - >-
             (media80_guest_tasks | selectattr('name', 'equalto',
             'Reconcile physical ZFS pool and declared datasets')
