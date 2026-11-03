@@ -22,11 +22,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Verify launcher unit tests
+      - name: Install pinned Ansible runtime for native release contract
+        run: python -m pip install -r requirements/runner.txt
+
+      - name: Validate immutable Semaphore release contract without pytest
         run: |
-          python -m pip install 'pytest>=8,<10'
-          python -m pytest -q tests/test_semaphore_launcher.py tests/test_semaphore_host_install.py tests/test_semaphore_guest_install.py tests/test_semaphore_project.py tests/test_fleet_master_gate.py
+          ansible-playbook -i localhost, -c local tests/ansible/installer-ci-contract.yml
           bash -n bootstrap/semaphore-launch.sh
+
       - name: Test real Semaphore 2.19.16 HTTPS and project API
         shell: bash
         run: |
@@ -57,7 +60,7 @@ jobs:
           done
           export CI_SEMAPHORE_CERT="$WORK/tls.crt"
           export CI_SEMAPHORE_PASSWORD_FILE="$WORK/admin-password"
-          python3 .ci/semaphore_api_live.py
+          ansible-playbook -i localhost, -c local tests/ansible/semaphore-live-api.yml
       - name: Package immutable launcher
         run: |
           mkdir -p dist
