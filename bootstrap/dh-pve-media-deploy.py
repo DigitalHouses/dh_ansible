@@ -460,7 +460,7 @@ def staged_guest_matches(vmid, data):
          "PARTIAL_MEDIA_VM_IDENTITY_MISMATCH")
     need(state.get("ostype") == "l26"
          and state.get("machine") == "q35"
-         and state.get("bios") == "seabios"
+         and state.get("bios", "seabios") == "seabios"
          and state.get("net0", "").endswith("bridge=vmbr0")
          and state.get("scsihw") == "virtio-scsi-single",
          "PARTIAL_MEDIA_VM_HARDWARE_MISMATCH")
