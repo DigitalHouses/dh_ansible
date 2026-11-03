@@ -274,7 +274,7 @@ def qga_cicustom_expected(vmid):
     }
 
 
-def ensure_local_snippets_storage():
+def ensure_local_snippets_storage(allow_update=True):
     """Read PVE's real pmxcfs storage config, never invoke nonexistent pvesm config.
 
     Preserve every already-enabled local content type when adding snippets.
@@ -311,16 +311,10 @@ def ensure_local_snippets_storage():
          is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
     enabled = set(types.split(","))
     if "snippets" not in enabled:
+        need(allow_update, "QGA_CLOUDINIT_SNIPPETS_NOT_PERSISTED")
         run("/usr/sbin/pvesm", "set", "local", "--content",
             ",".join(sorted(enabled | {"snippets"})))
-        updated = path.read_text()
-        local_blocks = list(re.finditer(
-            r"(?m)^dir:[ \\t]+local[ \\t]*$",
-            updated))
-        need(len(local_blocks) == 1
-             and re.search(r"(?m)^\\s+content[ \\t]+[^\\n]*\\bsnippets\\b",
-                           updated[local_blocks[0].end():]) is not None,
-             "QGA_CLOUDINIT_SNIPPETS_NOT_PERSISTED")
+        return ensure_local_snippets_storage(False)
     print("MEDIA_QGA_SNIPPETS_STORAGE=READY", flush=True)
 
 
