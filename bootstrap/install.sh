@@ -4,7 +4,7 @@ set -Eeuo pipefail
 umask 077
 
 # Immutable public code revision; the standard installation command pins this file.
-CODE_RELEASE="ab95ec095ae7f9856e499b90fbac82747cdd98d5"
+CODE_RELEASE="7e77a108ff3785f5be59482de85a6b2e10b24c2b"
 CTID=1231
 GIT_URL="https://github.com/DigitalHouses/dh_ansible.git"
 [[ $# -eq 0 && $EUID -eq 0 && -f /etc/pve/user.cfg ]] || {
@@ -77,6 +77,9 @@ fi
   --unprivileged 1 --features nesting=1 \
   --net0 "name=eth0,bridge=vmbr0,ip=$RUNNER_CIDR,gw=$GATEWAY" \
   --onboot 1 --startup "order=2" --protection 1 --start 0)
+pct config "$CTID" | grep -Fxq 'onboot: 1'
+pct config "$CTID" | grep -Fxq 'startup: order=2'
+echo "RUNNER_PVE_BOOT_ORDER=PASS order=2 onboot=1"
 # The Debian 13 template may ship /etc mode 0700, which breaks guest D-Bus.
 pct mount "$CTID"
 MOUNTED=1

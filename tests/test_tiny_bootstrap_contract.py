@@ -32,6 +32,9 @@ def test_runner_autostarts_after_media_server():
     # CT startup order is host-level PVE metadata, not a Semaphore task.
     assert '--onboot 1 --startup "order=2"' in INSTALLER
     assert '--start 0' in INSTALLER
+    assert "pct config \"$CTID\" | grep -Fxq 'onboot: 1'" in INSTALLER
+    assert "pct config \"$CTID\" | grep -Fxq 'startup: order=2'" in INSTALLER
+    assert "RUNNER_PVE_BOOT_ORDER=PASS order=2 onboot=1" in INSTALLER
 
 def test_bootstrap_never_handles_private_fleet_or_media_workers():
     forbidden = ("gh auth", "GH_CONFIG_DIR", "FLEET_RELEASE",
