@@ -116,7 +116,7 @@ def test_media_pool_uses_owner_naming_and_reuses_one_zfs_reconciler():
     play = yaml.safe_load((ROOT / "playbooks/plan-pve-media-vm.yml").read_text())
     steps = play[0]["tasks"]
     gate = next(x for x in steps if x["name"] ==
-                "Require specific declared VM, hardware, pool and network boundaries")
+                "Require declared VM, hardware, pool and network boundaries")
     clauses = gate["ansible.builtin.assert"]["that"]
     assert "media_vm.storage.pool_name == site.owner_slug ~ '-pool'" in clauses
     assert "media_vm.storage.pool_name == site.id ~ '-pool'" not in clauses
