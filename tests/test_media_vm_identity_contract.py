@@ -16,7 +16,7 @@ def test_media_vm_80_requires_scoped_site_read_and_hardware_preflight():
     first = str(plays[0])
     assert "media_site_repo.json.private == true" in first
     assert "MEDIA_SITE_MARKER_MISMATCH" in first
-    assert "MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED" in first
+    assert "MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID" in first
     pve = str(plays[1])
     assert "infrastructure_access" in pve
     assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in pve
