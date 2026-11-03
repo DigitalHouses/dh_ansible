@@ -438,7 +438,7 @@
     argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
   when:
     - media_vm.lifecycle.protection | default(true) | bool
-    - "media_vm_protection_readback.stdout is not search('(?m)^protection: 1
+    - "media_vm_protection_readback.stdout is not search('(?m)^protection: 1$')"
 
 - name: Observe result of requested VM action
   ansible.builtin.command:
