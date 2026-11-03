@@ -133,7 +133,8 @@
           - "'media_pool_readonly.stdout' in media80_guest_source"
           - "'media_plex_http.status == 200' in media80_guest_source"
           - "'nfs_backups.yml' in media80_guest_source"
-          - "'when: media_vm.backup_export is defined' in media80_guest_source"
+          - "'Preserve legacy NFS export only for non-80 callers' in media80_guest_source"
+          - "'not (media80_native | default(false) | bool)' in media80_guest_source"
 
     - name: Verify legacy worker stays isolated and native import is conditional
       ansible.builtin.assert:
