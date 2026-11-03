@@ -1,16 +1,18 @@
 # Media Server: запуск Semaphore и прямой инженерный fallback
 
-> **Fresh Jonsbo site · 02.11.2026 · №80 BLOCKED BY ARCHITECTURE/INVENTORY (READ-ONLY AUDIT):** На новом PVE, несмотря на live PASS №10/№40, нет прежнего `dh-pve-access-audit.path` и нет старого private Fleet cache `/var/lib/semaphore/.dh-credentials/fleet`. Текущая №80 ожидает оба и не может выполнить новый native deployment. **НЕ устанавливать legacy root watcher в качестве обхода** — для №80/№81 требуется тот же reusable native Ansible PVE root SSH, что и №10, плюс site-owned inventory. Контракт сохранения данных обязателен.
+> **АКТУАЛЬНО · 03.11.2026 · №80:** владелец выбирает только действия `create / keep / recreate` и `erase / import`. Диск не выбирается по производителю, WWN, serial, старым PARTUUID или GUID. Целевое устройство — **единственный диск выделенного SATA-контроллера**, переданного Media VM через PCI Passthrough.
 >
-> Live hardware readback: target media VM отсутствует; есть другие рабочие guests, которые нельзя трогать. Фактическая SATA data drive имеет существующий NTFS volume (не ZFS), поэтому `import` невозможен, а `erase` является уничтожением пользовательских данных и **не разрешён по умолчанию**. Устаревший Fleet site inventory описывает иной диск/WWN, иные GPU/SATA BDF, VMID, IP и backups. **Нельзя подменять ими фактические hardware facts**. Для нового Jonsbo: read-only `qm/pct/lsblk/blkid/PCI/IOMMU` → обновить отдельную site inventory декларацию → получить явное approval на стирание именно распознанного NTFS-диска, если это задумано → только потом native VM/ZFS deploy. Без approval — можно готовить код и аудит, нельзя трогать HDD.
+> На PVE preflight проверяет управляемую VM и PCI SATA-контроллер, но не ищет HDD через `/dev/disk/by-id` на самом PVE (после PCI passthrough диск хосту недоступен). В Media VM через PCI sysfs class `0x0106` и vendor/device этого контроллера обнаруживаются физические диски: **0 → `SATA_NO_DISKS`**, **2+ → `SATA_MULTIPLE_DISKS`**, **ровно 1 → продолжить**. Системный диск исключается.
 >
-> Acceptance №80: native Ansible PVE target; pinned host key и actual PVE IP, no fixed worker; VM lifecycle create/keep/recreate отдельно от disk import/erase; strict WWN/serial/size/signatures; preservation of other guests; guest QGA/SSH, ZFS, apps, SMB/NFS, Plex/Jellyfin, GPU event, PVE backup after acceptance. №81 тоже не должна ссылаться на отсутствующий worker. **Текущую №80 на новом объекте не запускать до выпуска native реализации.**
+> **`erase`** без оглядки на прежнюю разметку/NTFS/ZFS полностью уничтожает данные на единственном SATA-диске и создаёт `<owner>-pool`. Повторного подтверждения в задаче нет: выбор `erase` — явное распоряжение. **`import`** подключает существующий ZFS-пул с того же диска без стирания и без автоматического перехода к `erase`. При замене единственного диска следующий явный `erase` сотрёт новый диск — сознательная controller-scoped политика. Другие VM, NVMe и SATA-контроллеры не затрагиваются.
+>
+> Реальное стирание производится исключительно внутри Media VM; boot importer допускает только `import`. CI и ревью не заменяют LIVE E2E №80 → №81.
 
-**Обязательная точка входа для AI:** [Единый операционный runbook](ai-agent-execution.md). Здесь только особенности медиасервера, прежние инциденты и проверки; команды, release-publishing и общий порядок исполнения поддерживаются **в одном документе**, не в истории чатов.
+**Обязательная точка входа для AI:** [Единый операционный runbook](ai-agent-execution.md). Только эта редакция правил №80 применяется к новым запускам; исторические записи ниже описывают старые инциденты.
 
-**Область:** задача `80-Медиасервер · Развёртывание`, runner Ansible/Semaphore и защищённый PVE worker.  
-**Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).  
-**Статус:** подтверждённый способ исполнения на пилотном site runner; **не** универсальное разрешение на операции с production.
+**Область:** задача `80-Медиасервер · Развёртывание`, runner Ansible/Semaphore и штатный root SSH к PVE.
+**Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).
+**Статус:** новая controller-scoped реализация, live E2E ожидает проверки.
 
 ## LIVE · Автоматическое обнаружение новых медиа · 02.11.2026
 
@@ -44,43 +46,18 @@ Read-only проверка показывает три библиотеки: `mo
 или удаления из этой автоматизации. Новые корректно названные импортированные
 файлы Plex обрабатывает штатной связкой сканирование→match→metadata.
 
-## Новая №80 · Native Ansible · свежий Jonsbo (02.11.2026)
+## №80 · Native Ansible · controller-scoped ZFS (03.11.2026)
 
-Старый `dh-pve-access-audit.path` **не устанавливается** Tiny Bootstrap. №80
-переведена на те же реальные root SSH credentials, pinned `known_hosts`
-и `infrastructure_access`, что успешно использовала №10. Код запрашивает
-**только** `media_vm.yml` из частного `site-<site.id>` по native Semaphore
-GitHub provisioning secret; проверяет что GitHub repo PRIVATE и site marker
-совпадает, материализует sanitized site inventory на runner, а PVE endpoint
-берёт **исключительно из локального bootstrap** `pve-runtime.yml`, а не из
-старого общего Fleet. Приватные passwords/token не выводятся в Git или логи.
+- `playbooks/plan-pve-media-vm.yml`: берёт актуальный site inventory из приватного `site-<site.id>`, сверяет маркер и PVE root SSH. VM action и disk action независимы. Защита чужих VM/CT остаётся.
+- `scripts/dh-media-pve-preflight.py`: проверяет SATA-контроллер и VM по PVE, без поиска HDD/WWN на хосте.
+- `roles/media_guest_setup/files/dh-media-storage.py`: внутри VM находит физические диски именно на переданном SATA-контроллере по sysfs PCI ancestor class и vendor/device, измеренным на PVE. Ноль/много дисков — BLOCKED.
+- `erase`: удаляет любую старую файловую систему и ZFS на этом единственном диске, создаёт `<owner>-pool`; не требует старый NTFS label, PARTUUID, serial, WWN или ZFS GUID. Активный multidisk pool/системный диск исключены.
+- `import`: ищет ZFS только на выбранном диске и его разделах с `zpool import -d <device>`; при известном hostid-предупреждении для единственного ONLINE-пула допускает `-f`. Никогда не стирает.
+- `dh-media-zfs-mount.sh.j2`: при старте гостя запускает ZFS reconciler строго с `--action import`.
 
-Живое аппаратное обнаружение на новом Jonsbo и явное утверждение владельца
-охватывают исключительно HDD 4 TB с прежним NTFS. Перед созданием VM/передачей
-PCI выполняется независимый **read-only** preflight на PVE: сравнение serial,
-WWN, размера, GPT partition UUID, NTFS label/type, отсутствие mountpoints,
-привязка к задекларированному SATA controller, отсутствие target VM, и
-противопоставление диску с root filesystem. Префлайт остаётся в public code
-общего назначения, а фактический serial/WWN/partition UUID + одноразовое
-разрешение `first_create_only` находятся в **private site repo**.
+**Все сочетания допустимы:** `create+erase`, `create+import`, `recreate+erase`, `recreate+import`, `keep+erase`, `keep+import`. Для обслуживания без потери данных обычно `keep+import`; явный `erase` повторно уничтожает содержимое даже уже созданного `<owner>-pool`.
 
-При `create + erase` native Ansible создаёт только утверждённую VM
-на NVMe `local-lvm`, не меняя PVE OS и другие VMs/CTs. Сам физический
-data HDD не стирается на PVE: он передаётся в VM через SATA PCI,
-и только гостевой `dh-media-storage` второй раз проверяет identity/NTFS
-PARTUUID/label/отсутствие mount, а затем создаёт `<owner>-pool`. Для
-восстановления прерванного deploy допустим `keep + erase`, но после
-создания canonical ZFS он **никогда повторно не стирается** при действующем
-одноразовом разрешении. После E2E следует зафиксировать новый ZFS GUID в
-private site inventory, убрать approval `destructive_without_backup` и
-следующие штатные запуски делать `keep + import`.
-
-Не выбирать `recreate` в этой первой native реализации: он fail-closed.
-Тестовое подтверждение кода ≠ LIVE PASS. Только журналы фактической
-Semaphore №80 и последующая независимая №81 доказывают полную приёмку.
-№81 в старой версии всё ещё зависит от legacy worker и требует отдельной
-native миграции. Пока user не запускал новую №80, VM и HDD остаются нетронуты.
-
+**Приёмка:** после публикации кода провести живой №80, сверить `MEDIA_SATA_DISKS_FOUND=1`, `MEDIA_DISK_ACTION=ERASE/IMPORT`, `MEDIA_STORAGE_RECONCILED=PASS` и исполнить отдельную №81.
 
 ## Зачем это документировано
 
@@ -101,19 +78,17 @@ native миграции. Пока user не запускал новую №80, V
 
 ## Контракт реализации и диагностика
 
-- `playbooks/plan-pve-media-vm.yml`: одна и та же точка входа UI и прямого запуска; два survey-значения строго обязательны.
-- `roles/site_inventory_prepare`: получение только site-scoped `media_vm.yml`; актуальные данные на runner не следует предполагать без readback.
-- `/var/lib/semaphore/dh-pve-access-audit.request`: nonce-scoped запрос; worker `dh-pve-access-audit.path` — привилегированная граница.
-- `/opt/digitalhouses/bootstrap/pve-access/.media-worker-release.json`: SHA-pinned набор исполняемого кода; разные версии checkout и worker блокируют применение. При смене Git commit требуется отдельная проверенная поставка worker, а не отключение SHA-проверки.
-- `/run/dh-pve-access-audit.status`: `RUNNING:<nonce>`, `PASS:<nonce>`, `FAILED:<nonce>`; **никогда** не принимать статус чужого nonce.
-- `/var/log/dh-pve-access-audit.log`: привилегированный журнал; не публиковать целиком, если могут присутствовать credentials/частные данные.
-- `playbooks/media-acceptance.yml`: самостоятельная задача №81, проверяет фактическое состояние; `PASS` только после прохождения обязательных проверок.
+- Один шаблон Semaphore №80 — `playbooks/plan-pve-media-vm.yml`, два обязательных survey-параметра.
+- PVE: `infrastructure_access`, штатный root SSH, проверенный PCI SATA-controller; без старого привилегированного watcher/worker.
+- Media VM: PCI-контроллер идентифицируется vendor/device, HDD — только из гостя через SATA sysfs. 0,1,2+ дисков распознаются явно.
+- Диск: `erase` уничтожает прошлое содержимое единственного диска, `import` только импортирует. Результат контролируется `MEDIA_STORAGE_RECONCILED=PASS`.
+- №81: самостоятельная read-only приёмка сервисов после развёртывания. Никакие credentials в публичные логи не выводить.
 
 ## Частные ошибки, зафиксированные в E2E
 
 - `ENABLED_BACKUP_TARGET_OFFLINE`: удалённая media VM предоставляла PVE NFS backup storage. Устранять точечным планом обслуживания и не игнорировать наличие активного `vzdump`. Временно отключённый job **обязательно восстановить после NFS acceptance**.
 - `MEDIA_PLEX_PREFERENCES_FORMAT_DRIFT`: реальный корневой элемент Plex `Preferences.xml` называется `Preferences`, не `PlexMediaServer`. Исправлять исходный код и тесты в Git; для уже созданной VM выбирать `keep + import`, а не заново стирать диск.
-- После `erase` новый ZFS-пул имеет **новый GUID**. Перед следующим `keep + import` обновить pinned `import_pool_guid` в private Fleet и проверить его совпадение с live `zpool get guid`.
+- После `erase` у нового ZFS-пула будет новый GUID. **Обновлять pinned `import_pool_guid` для следующего `keep + import` не нужно:** импорт проверяет имя пула и единственный физический SATA-диск.
 
 ## Prowlarr: рабочая служба ещё не означает готовый поиск
 
@@ -129,7 +104,7 @@ Acceptance №81 выводит `prowlarr_indexers_present RESULT=SKIP DETAIL=NO
 - Установка из `media_arr_releases` использует закреплённые архивы с SHA256 для первого деплоя; обновлённый встроенным updater бинарник **не** должен переписываться при повторном `keep + import` (у `unarchive` есть `creates`). Обновление приложения проверять фактической версией, доступностью HTTP, сохранением пользовательских indexers/queues и стабильностью после рестарта, а не только исчезновением предупреждения.
 - Plex: сканирование обнаруживает добавленные файлы и должно запустить matching/metadata для новых объектов. Для **уже добавленных** фильмов без постеров необходимо отдельно выполнить `Refresh Metadata` и проверить агент, сопоставление и сетевые ошибки; бесконечное повторное сканирование или установка нового таймера не решают проблему. Поиск причины начинать с read-only статуса Plex, metadata matching и логов, **не** удалять каталоги/БД/кеш Plex и не менять токены.
 - Acceptance №81 проверяет `native_update_writable_radarr|sonarr|prowlarr` и `plex_movie_posters` (сведения о matching и наличии poster metadata, без чтения/вывода токенов и имён файлов). Полностью загруженные постеры на клиенте, автоматическое восстановление постеров и успешное применение реального обновления **требуют отдельной live-проверки**, поскольку наличие URL метаданных в БД не гарантирует успешную загрузку изображения.
-- После изменения кода обязательно отдельно обновлять закреплённый release protected worker через **штатный разрешённый installer/release workflow**, а не подменой манифеста или отключением проверки SHA. Перед запуском №80 сверить revision Semaphore checkout и version worker release. Если revision расходятся, `BLOCKED`, не обходить. Сначала `keep + import`, затем №81; никакого `recreate`/`erase` ради обновления пользовательских приложений.
+- После изменения №80 синхронизировать код через штатный Git checkout Semaphore и проверять фактический commit в журнале. Старого release protected worker у native №80 нет. Для устранения ошибок приложения не выбирать destructive action; штатный путь — `keep + import` и №81.
 
 ## Filestash: ошибка `unpacking idp - invalid character` (30.10.2026)
 
