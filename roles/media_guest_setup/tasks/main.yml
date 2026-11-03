@@ -194,6 +194,37 @@
     group: root
     mode: '0600'
 
+# On a retained VM, media processes can hold ZFS mounts or NFS exports open.
+# Stop only installed services before an explicit destructive action. Later
+# role tasks start/reconcile them against the newly created pool.
+- name: Inspect installed media services for explicit keep plus erase
+  ansible.builtin.service_facts:
+  when:
+    - media_vm_action | default('') == 'keep'
+    - media_raw_disk_action == 'erase'
+
+- name: Stop installed consumers of the old ZFS pool before keep plus erase
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - plexmediaserver.service
+    - jellyfin.service
+    - radarr.service
+    - sonarr.service
+    - prowlarr.service
+    - qbittorrent.service
+    - filestash.service
+    - docker.service
+    - smbd.service
+    - nmbd.service
+    - nfs-server.service
+    - nginx.service
+  when:
+    - media_vm_action | default('') == 'keep'
+    - media_raw_disk_action == 'erase'
+    - item in ansible_facts.services
+
 - name: Reconcile physical ZFS pool and declared datasets
   ansible.builtin.command:
     argv:
