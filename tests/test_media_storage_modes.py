@@ -100,9 +100,9 @@ def test_only_one_matching_sata_pci_controller_is_allowed(tmp_path, matching_cou
     for idx in range(matching_count):
         node = root / f"0000:00:{idx+1:02x}.0"
         node.mkdir()
-        (node / "class").write_text("0x010601\\n")
-        (node / "vendor").write_text("0x1234\\n")
-        (node / "device").write_text("0xabcd\\n")
+        (node / "class").write_text("0x010601\n")
+        (node / "vendor").write_text("0x1234\n")
+        (node / "device").write_text("0xabcd\n")
     original_path = Path
     with patch.object(m, "Path", side_effect=lambda value: (
             root if str(value) == "/sys/bus/pci/devices"
