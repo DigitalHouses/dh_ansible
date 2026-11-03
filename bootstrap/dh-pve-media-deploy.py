@@ -231,6 +231,9 @@ def ensure_lifecycle(vmid, data):
     current = config(vmid)
     if current.get("onboot", "0") != wanted_boot:
         qm("set", vmid, "--onboot", wanted_boot)
+    # Media VM starts first; the Ansible runner CT1231 follows with order=2.
+    if current.get("startup", "") != "order=1":
+        qm("set", vmid, "--startup", "order=1")
     if current.get("vga", "serial0") != display:
         qm("set", vmid, "--vga", display)
     res = data["resources"]
@@ -486,6 +489,7 @@ def apply(site, vm_action, disk_action):
            "--net0", "virtio,bridge=vmbr0", "--serial0", "socket",
            "--vga", media_display(data),
            "--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0",
+           "--startup", "order=1",
            "--description", MANAGED_MEDIA_DESCRIPTION)
         print("VM_CREATED=YES", flush=True)
     ensure_disk(vmid, image, int(data.get("resources", {}).get("disk_gb", 64)))

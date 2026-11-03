@@ -76,7 +76,7 @@ fi
   --cores 1 --memory 1024 --swap 512 --rootfs local-lvm:16 \
   --unprivileged 1 --features nesting=1 \
   --net0 "name=eth0,bridge=vmbr0,ip=$RUNNER_CIDR,gw=$GATEWAY" \
-  --onboot 0 --protection 1 --start 0)
+  --onboot 1 --startup "order=2" --protection 1 --start 0)
 # The Debian 13 template may ship /etc mode 0700, which breaks guest D-Bus.
 pct mount "$CTID"
 MOUNTED=1
