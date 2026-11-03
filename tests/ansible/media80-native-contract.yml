@@ -1,0 +1,91 @@
+---
+# Native Ansible contract check. No custom Python tests or VM/disk writes.
+- name: Media 80 | Verify separation of VM, disk and guest lifecycles
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    media80_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../playbooks/plan-pve-media-vm.yml') }}"
+    media80_vm_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_vm_provision/tasks/main.yml') }}"
+    media80_zfs_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_guest_setup/tasks/zfs_storage.yml') }}"
+    media80_guest_source: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/media_guest_setup/tasks/main.yml') }}"
+  tasks:
+    - name: Parse native Ansible task definitions
+      ansible.builtin.set_fact:
+        media80_plays: "{{ media80_source | from_yaml }}"
+        media80_vm_tasks: "{{ media80_vm_source | from_yaml }}"
+        media80_zfs_tasks: "{{ media80_zfs_source | from_yaml }}"
+        media80_guest_tasks: "{{ media80_guest_source | from_yaml }}"
+
+    - name: Check the real Task 80 dispatch path
+      ansible.builtin.assert:
+        that:
+          - media80_plays | length == 4
+          - "'dh-pve-media-deploy.py' not in media80_source"
+          - "'dh-media-pve-preflight.py' not in media80_source"
+          - "'ansible.builtin.script' not in media80_source"
+          - "'media80_native: true' in media80_source"
+          - "'ansible.builtin.include_role' in media80_source"
+          - "'name: media_vm_provision' in media80_source"
+          - "'media_vm.approvals' not in media80_source"
+          - "'backup_export is defined' not in media80_source"
+
+    - name: Confirm recreate and create share exactly one VM creation task
+      ansible.builtin.assert:
+        that:
+          - >-
+            media80_vm_tasks | selectattr('name', 'equalto',
+            'Create VM through one shared create/recreate block') | list | length == 1
+          - >-
+            (media80_vm_tasks | selectattr('name', 'equalto',
+            'Create VM through one shared create/recreate block') | first)['when'] ==
+            "media_vm_action in ['create', 'recreate']"
+          - >-
+            (media80_vm_tasks | selectattr('name', 'equalto',
+            'Remove only selected VM and its virtual disks') | first)['when'] ==
+            "media_vm_action == 'recreate'"
+          - >-
+            (media80_vm_tasks | selectattr('name', 'equalto',
+            'Start VM only when stopped') | first)['when'] ==
+            "media_vm_effective_power.stdout == 'status: stopped'"
+
+    - name: Confirm no destructive ZFS tasks run for import
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+            'Destroy only an active single-disk ZFS pool on the selected SATA drive')
+            | first)['when'][0] == "media_raw_disk_action == 'erase'"
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+            'Wipe only the physical SATA disk and its partitions') | first)['when'] ==
+            "media_raw_disk_action == 'erase'"
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+            'Clear obsolete partition table on the explicitly selected SATA disk')
+            | first)['when'] == "media_raw_disk_action == 'erase'"
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+            'Create requested new ZFS pool from the sole SATA disk')
+            | first)['when'] == "media_raw_disk_action == 'erase'"
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+            'Import requested pool only, without mounting during discovery')
+            | first)['when'][0] == "media_raw_disk_action == 'import'"
+
+    - name: Verify legacy worker stays isolated and native import is conditional
+      ansible.builtin.assert:
+        that:
+          - >-
+            (media80_guest_tasks | selectattr('name', 'equalto',
+            'Reconcile physical SATA disk and ZFS using native Ansible')
+            | first)['when'] == "media80_native | default(false) | bool"
+          - >-
+            (media80_guest_tasks | selectattr('name', 'equalto',
+            'Reconcile physical SATA disk and ZFS using native Ansible')
+            | first)['ansible.builtin.include_tasks'] == 'zfs_storage.yml'
+          - >-
+            (media80_guest_tasks | selectattr('name', 'equalto',
+            'Reconcile physical ZFS pool and declared datasets')
+            | first)['when'] == "not (media80_native | default(false) | bool)"
+          - "'dh-media-storage.py' not in media80_zfs_source"
