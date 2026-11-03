@@ -41,7 +41,7 @@ def test_deploy_uses_single_native_80_template_without_one_off_worker():
 
 
 def test_media_vm_autostart_order_precedes_ansible_runner():
-    source = WORKER.read_text()
+    source = (ROOT / "bootstrap/dh-pve-media-deploy.py").read_text()
     assert '"--startup", "order=1",' in source
     assert 'if current.get("startup", "") != "order=1":' in source
     assert 'qm("set", vmid, "--startup", "order=1")' in source
