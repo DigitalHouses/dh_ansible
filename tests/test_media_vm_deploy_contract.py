@@ -38,6 +38,16 @@ def test_deploy_uses_single_native_80_template_without_one_off_worker():
     assert "dh-pve-access-audit.request" not in PLAY.read_text()
 
 
+
+
+def test_media_vm_autostart_order_precedes_ansible_runner():
+    source = WORKER.read_text()
+    assert '"--startup", "order=1",' in source
+    assert 'if current.get("startup", "") != "order=1":' in source
+    assert 'qm("set", vmid, "--startup", "order=1")' in source
+    # Do not override the site's explicit onboot policy.
+    assert '"--onboot", "1" if data.get("lifecycle", {}).get("onboot") else "0"' in source
+
 def test_image_download_and_host_compatibility():
     code = DEPLOY.read_text()
     for term in ("debian-13-generic-amd64.qcow2", "SHA512SUMS",
