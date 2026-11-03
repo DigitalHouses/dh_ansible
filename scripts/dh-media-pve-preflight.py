@@ -73,6 +73,7 @@ def verify_vm(data, vm_action):
     need(state.get("name") == data["name"]
          and state.get("description") == "DigitalHouses managed media guest v2",
          "MANAGED_MEDIA_VM_IDENTITY_MISMATCH")
+    need(state.get("lock") is None, "PARTIAL_MEDIA_VM_LOCKED")
     prefix = "local-lvm:vm-" + str(vmid) + "-disk-"
     fully_configured = (
         state.get("hostpci0") == data["pci"]["gpu"] + ",pcie=1"
