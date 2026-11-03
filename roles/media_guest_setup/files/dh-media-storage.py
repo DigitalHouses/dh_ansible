@@ -48,18 +48,31 @@ def get_pool(name):
     return None
 
 
+def commissioned_controller(ids):
+    """Require one guest PCI SATA function with the PVE-measured IDs."""
+    matches = []
+    for pci in Path("/sys/bus/pci/devices").iterdir():
+        if not pci.is_dir():
+            continue
+        cls = (pci / "class").read_text().strip().lower()
+        vendor = (pci / "vendor").read_text().strip().lower()
+        device = (pci / "device").read_text().strip().lower()
+        if cls.startswith("0x0106") and (vendor, device) == (
+                ids["vendor"], ids["device"]):
+            matches.append(str(pci.resolve()))
+    require(len(matches) == 1, "SATA_CONTROLLER_NOT_UNIQUE_IN_GUEST")
+    return matches[0]
+
+
 def sata_pci_parent(name):
-    """Resolve the REAL ancestor AHCI PCI function, not an sdX/virtio guess."""
-    dev = (Path("/sys/class/block") / name / "device")
+    """Find the actual parent AHCI PCI function of one Linux block device."""
+    dev = Path("/sys/class/block") / name / "device"
     require(dev.is_symlink(), "SATA_DISK_SYSFS_NOT_AVAILABLE")
     node = dev.resolve(strict=True)
     for ancestor in (node, *node.parents):
         class_file = ancestor / "class"
-        if class_file.is_file():
-            cls = class_file.read_text().strip().lower()
-            if cls.startswith("0x0106"):
-                return (ancestor / "vendor").read_text().strip().lower(), (
-                    ancestor / "device").read_text().strip().lower()
+        if class_file.is_file() and class_file.read_text().strip().lower().startswith("0x0106"):
+            return str(ancestor)
     return None
 
 
@@ -71,6 +84,7 @@ def find_disk(data):
             and re.fullmatch(r"0x[0-9a-f]{4}", ids.get("vendor", "")) is not None
             and re.fullmatch(r"0x[0-9a-f]{4}", ids.get("device", "")) is not None,
             "SATA_CONTROLLER_PCI_ID_NOT_COMMISSIONED")
+    sata_controller = commissioned_controller(ids)
     block = json.loads(command("/usr/bin/lsblk", "-J", "-b", "-d",
                                "-o", "NAME,PATH,TYPE,TRAN"))
     require(isinstance(block.get("blockdevices"), list),
@@ -87,7 +101,7 @@ def find_disk(data):
             continue
         # The controller-class ancestor is authoritative; Linux transport
         # alone could also be reported for a disk on a DIFFERENT controller.
-        if sata_pci_parent(name) == (ids["vendor"], ids["device"]):
+        if sata_pci_parent(name) == sata_controller:
             matches.append(path)
     print("MEDIA_SATA_DISKS_FOUND=" + str(len(matches)), flush=True)
     require(matches, "SATA_NO_DISKS")
