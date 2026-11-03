@@ -445,6 +445,48 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     print("MANAGED_VM_IDENTITY=PASS", flush=True)
 
 
+def staged_guest_matches(vmid, data):
+    """Allow continuation of *stopped* partially created Task 80 VM only.
+
+    A failed apply can leave a managed VM with an imported system volume but
+    without cloud-init or PCI assignment. Never interpret a foreign VM or
+    a RUNNING guest missing a controller as a safe partial deployment.
+    """
+    state = config(vmid)
+    need(qm("status", vmid) == "status: stopped",
+         "PARTIAL_MEDIA_VM_MUST_BE_STOPPED")
+    need(state.get("name") == data["name"]
+         and state.get("description") == MANAGED_MEDIA_DESCRIPTION,
+         "PARTIAL_MEDIA_VM_IDENTITY_MISMATCH")
+    need(state.get("ostype") == "l26"
+         and state.get("machine") == "q35"
+         and state.get("bios") == "seabios"
+         and state.get("net0", "").endswith("bridge=vmbr0")
+         and state.get("scsihw") == "virtio-scsi-single",
+         "PARTIAL_MEDIA_VM_HARDWARE_MISMATCH")
+    for n, expected in (("hostpci0", data["pci"]["gpu"] + ",pcie=1"),
+                        ("hostpci1", data["pci"]["sata_controller"] + ",pcie=1")):
+        need(n not in state or state[n] == expected,
+             "PARTIAL_MEDIA_VM_PCI_MISMATCH_" + n)
+    for key in state:
+        if re.fullmatch(r"(?:scsi|sata|virtio|ide|unused|hostpci)[0-9]+", key):
+            need(key in ("scsi0", "ide2", "unused0", "hostpci0", "hostpci1"),
+                 "PARTIAL_MEDIA_VM_UNEXPECTED_DEVICE_" + key)
+    prefix = "local-lvm:vm-" + str(vmid) + "-disk-"
+    if "scsi0" in state:
+        need(state["scsi0"].startswith(prefix), "PARTIAL_MEDIA_VM_FOREIGN_DISK")
+        need("unused0" not in state, "PARTIAL_MEDIA_VM_EXTRA_DISK")
+    if "unused0" in state:
+        need(state["unused0"].startswith(prefix),
+             "PARTIAL_MEDIA_VM_FOREIGN_IMPORTED_DISK")
+    if "ide2" in state:
+        need(state["ide2"].startswith("local-lvm:cloudinit"),
+             "PARTIAL_MEDIA_VM_FOREIGN_CLOUDINIT")
+    need(qga_cicustom(vmid) in (None, qga_cicustom_expected(vmid)),
+         "PARTIAL_MEDIA_VM_FOREIGN_CICUSTOM")
+    print("PARTIAL_MEDIA_VM=VERIFIED_STOPPED_RESUMABLE", flush=True)
+
+
 def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
     """Exactly one VM lifecycle intent. Never implicitly recreate a VM."""
     need(vm_action in ("create", "recreate", "keep"), "VM_ACTION_INVALID")
@@ -467,6 +509,13 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
             need(config(vmid).get("name") == data["name"],
                  "MEDIA_VM_RENAME_UNCONFIRMED")
             print("MEDIA_VM=RENAMED_VERIFIED_LEGACY", flush=True)
+        elif qm("status", vmid) == "status: stopped":
+            # A stopped VM must be fully managed or exactly match the narrow
+            # partially provisioned VM state left by this same task.
+            staged_guest_matches(vmid, data)
+        else:
+            old_guest_matches(vmid, site, data, managed=(
+                state.get("description") == MANAGED_MEDIA_DESCRIPTION))
         print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
     managed = state.get("description") == MANAGED_MEDIA_DESCRIPTION
