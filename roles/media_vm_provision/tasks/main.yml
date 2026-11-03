@@ -1,0 +1,453 @@
+---
+# Task 80 owns a VM lifecycle, not six VM/disk cross-product workflows.
+# The survey selection is the authorization. No second approval markers.
+- name: Observe exact target VM
+  ansible.builtin.stat:
+    path: "/etc/pve/qemu-server/{{ media_vm.vmid }}.conf"
+    follow: false
+  register: media_vm_present
+
+- name: Read existing VM configuration
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_vm_config_before
+  changed_when: false
+  when: media_vm_present.stat.exists
+
+- name: Parse existing VM configuration
+  ansible.builtin.set_fact:
+    media_vm_before: >-
+      {{ dict(media_vm_config_before.stdout_lines | select('search', ': ') | map('split', ': ', 1)) }}
+  when: media_vm_present.stat.exists
+
+- name: Require only the VM existence implied by the selected action
+  ansible.builtin.assert:
+    that:
+      - (media_vm_action == 'create' and not media_vm_present.stat.exists) or (media_vm_action in ['keep', 'recreate'] and media_vm_present.stat.exists)
+    fail_msg: "VM_ACTION_STATE_MISMATCH: create requires absent VM; keep/recreate require existing VM"
+
+- name: Protect any existing VM from foreign ownership
+  ansible.builtin.assert:
+    that:
+      - media_vm_before.name | default('') == media_vm.name
+      - media_vm_before.description | default('') == 'DigitalHouses managed media guest v2'
+      - media_vm_before.lock is not defined
+    fail_msg: MEDIA_VM_FOREIGN_OR_LOCKED
+  when: media_vm_present.stat.exists
+
+- name: List configured QEMU guests to avoid foreign SATA ownership
+  ansible.builtin.find:
+    paths: /etc/pve/qemu-server
+    patterns: '*.conf'
+    file_type: file
+  register: media_qemu_config_files
+
+- name: Inspect PCI assignments of other QEMU guests
+  ansible.builtin.slurp:
+    src: "{{ item.path }}"
+  loop: "{{ media_qemu_config_files.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  register: media_other_qemu_configs
+  when: item.path != '/etc/pve/qemu-server/' ~ (media_vm.vmid | string) ~ '.conf'
+
+- name: Require dedicated SATA PCI function to have no other QEMU owner
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_other_qemu_configs.results
+         | selectattr('content', 'defined')
+         | map(attribute='content') | map('b64decode')
+         | select('search', media_vm.pci.sata_controller | regex_escape)
+         | list | length) == 0
+    fail_msg: MEDIA_SATA_CONTROLLER_ASSIGNED_TO_ANOTHER_VM
+
+# Only recreate removes VM disks. The passed-through SATA HDD is not a VM disk.
+- name: Require recreate to remove only own virtual disks
+  ansible.builtin.assert:
+    that:
+      - >-
+        (media_vm_before.keys() | select('match', '^(?:scsi|virtio|sata|ide|unused)[0-9]+$') | list
+         | difference(['scsi0', 'ide2', 'unused0'])) | length == 0
+      - >-
+        media_vm_before.scsi0 is not defined or
+        media_vm_before.scsi0 is match('^local-lvm:vm-' ~ (media_vm.vmid | string) ~ '-disk-[0-9]+')
+      - >-
+        media_vm_before.unused0 is not defined or
+        media_vm_before.unused0 is match('^local-lvm:vm-' ~ (media_vm.vmid | string) ~ '-disk-[0-9]+')
+    fail_msg: MEDIA_VM_RECREATE_FOREIGN_VOLUME
+  when: media_vm_action == 'recreate'
+
+- name: Read current VM power state for recreate
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_before_status
+  changed_when: false
+  when: media_vm_action == 'recreate'
+
+- name: Shut down selected existing VM before recreate
+  ansible.builtin.command:
+    argv: [qm, shutdown, "{{ media_vm.vmid }}", --timeout, '120']
+  when:
+    - media_vm_action == 'recreate'
+    - "media_vm_before_status.stdout == 'status: running'"
+
+- name: Confirm requested VM is stopped before removal
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_stopped
+  changed_when: false
+  retries: 20
+  delay: 3
+  until: "media_vm_stopped.stdout == 'status: stopped'"
+  when: media_vm_action == 'recreate'
+
+- name: Remove protection from own VM only for recreate
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '0']
+  when:
+    - media_vm_action == 'recreate'
+    - media_vm_before.protection | default('0') == '1'
+
+- name: Remove only selected VM and its virtual disks
+  ansible.builtin.command:
+    argv: [qm, destroy, "{{ media_vm.vmid }}", --purge, '1']
+  when: media_vm_action == 'recreate'
+
+- name: Create VM through one shared create/recreate block
+  ansible.builtin.command:
+    argv:
+      - qm
+      - create
+      - "{{ media_vm.vmid }}"
+      - --name
+      - "{{ media_vm.name }}"
+      - --description
+      - DigitalHouses managed media guest v2
+      - --ostype
+      - l26
+      - --machine
+      - q35
+      - --bios
+      - seabios
+      - --scsihw
+      - virtio-scsi-single
+      - --net0
+      - "virtio,bridge={{ media_vm.network.bridge }}"
+      - --serial0
+      - socket
+  when: media_vm_action in ['create', 'recreate']
+
+- name: Read managed VM after lifecycle choice
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_vm_state
+  changed_when: false
+
+- name: Parse managed VM settings
+  ansible.builtin.set_fact:
+    media_vm_settings: >-
+      {{ dict(media_vm_state.stdout_lines | select('search', ': ') | map('split', ': ', 1)) }}
+
+- name: Converge supported PVE VM settings
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", "--{{ item.key }}", "{{ item.value }}"]
+  loop:
+    - { key: cores, value: "{{ media_vm.resources.cores | string }}" }
+    - { key: memory, value: "{{ media_vm.resources.memory_mb | string }}" }
+    - { key: balloon, value: '0' }
+    - { key: cpulimit, value: "{{ media_vm.resources.cpu_limit | string }}" }
+    - { key: cpuunits, value: "{{ media_vm.resources.cpu_units | string }}" }
+    - { key: onboot, value: "{{ '1' if media_vm.lifecycle.onboot | default(true) else '0' }}" }
+    - { key: startup, value: 'order=1' }
+    - { key: vga, value: "{{ media_vm.lifecycle.display | default('std') }}" }
+    - { key: agent, value: 'enabled=1' }
+    - { key: ciuser, value: debian }
+    - { key: ipconfig0, value: "ip={{ media_vm.network.ipv4 }},gw={{ media_vm.network.gateway }}" }
+    - { key: nameserver, value: "{{ media_vm.network.gateway }}" }
+    - { key: hostpci0, value: "{{ media_vm.pci.gpu }},pcie=1" }
+    - { key: hostpci1, value: "{{ media_vm.pci.sata_controller }},pcie=1" }
+  when: >-
+    media_vm_settings[item.key] | default('') != item.value
+    and not (item.key == 'agent' and media_vm_settings.agent | default('') in ['1', 'enabled=1'])
+
+- name: Ensure image cache exists
+  ansible.builtin.file:
+    path: /var/cache/digitalhouses/media
+    state: directory
+    mode: '0755'
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Fetch official Debian 13 checksums
+  ansible.builtin.get_url:
+    url: https://cloud.debian.org/images/cloud/trixie/latest/SHA512SUMS
+    dest: /var/cache/digitalhouses/media/SHA512SUMS
+    mode: '0644'
+    force: true
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Read official Debian image checksum
+  ansible.builtin.slurp:
+    src: /var/cache/digitalhouses/media/SHA512SUMS
+  register: media_image_checksums
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Extract Debian 13 cloud image SHA512
+  ansible.builtin.set_fact:
+    media_image_sha512: >-
+      {{ (media_image_checksums.content | b64decode
+          | regex_findall('(?m)^([a-f0-9]{128})\s+\*?debian-13-generic-amd64\.qcow2\s*$')) | first | default('') }}
+  when: media_image_checksums is not skipped
+
+- name: Require signed-download checksum format before fetching image
+  ansible.builtin.assert:
+    that:
+      - media_image_sha512 | length == 128
+    fail_msg: MEDIA_DEBIAN_IMAGE_CHECKSUM_MISSING
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Download verified official Debian 13 cloud image
+  ansible.builtin.get_url:
+    url: https://cloud.debian.org/images/cloud/trixie/latest/debian-13-generic-amd64.qcow2
+    dest: /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2
+    checksum: "sha512:{{ media_image_sha512 }}"
+    mode: '0644'
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Import boot disk once when neither boot nor staged disk exists
+  ansible.builtin.command:
+    argv: [qm, importdisk, "{{ media_vm.vmid }}", /var/cache/digitalhouses/media/debian-13-generic-amd64.qcow2, local-lvm]
+  when: media_vm_settings.scsi0 is not defined and media_vm_settings.unused0 is not defined
+
+- name: Read imported or staged disk configuration
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_vm_disks_raw
+  changed_when: false
+
+- name: Parse disk state after import
+  ansible.builtin.set_fact:
+    media_vm_disks: >-
+      {{ dict(media_vm_disks_raw.stdout_lines | select('search', ': ') | map('split', ': ', 1)) }}
+
+- name: Attach only the boot disk created by this managed VM
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --scsi0
+      - "{{ media_vm_disks.unused0.split(',')[0] }},discard=on,iothread=1"
+  when:
+    - media_vm_disks.scsi0 is not defined
+    - media_vm_disks.unused0 is defined
+    - media_vm_disks.unused0 is match('^local-lvm:vm-' ~ (media_vm.vmid | string) ~ '-disk-[0-9]+')
+
+- name: Check that managed boot disk is present
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_boot_disk_config
+  changed_when: false
+
+- name: Read final boot disk configuration
+  ansible.builtin.set_fact:
+    media_boot_disk: >-
+      {{ dict(media_boot_disk_config.stdout_lines | select('search', ': ') | map('split', ': ', 1)) }}
+
+- name: Require boot disk only from managed PVE local-lvm
+  ansible.builtin.assert:
+    that:
+      - media_boot_disk.scsi0 | default('') is match('^local-lvm:vm-' ~ (media_vm.vmid | string) ~ '-disk-[0-9]+')
+    fail_msg: MEDIA_BOOT_DISK_NOT_MANAGED
+
+- name: Set boot order only after the managed boot volume exists
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --boot, 'order=scsi0']
+  when: media_boot_disk.boot | default('') != 'order=scsi0'
+
+- name: Increase boot disk to configured size when smaller
+  ansible.builtin.command:
+    argv: [qm, resize, "{{ media_vm.vmid }}", scsi0, "{{ media_vm.resources.disk_gb }}G"]
+  vars:
+    media_current_disk_gb: "{{ (media_boot_disk.scsi0 | regex_findall('(?:^|,)size=([0-9]+)G')) | first | default('0') | int }}"
+  when: media_current_disk_gb | int > 0 and media_current_disk_gb | int < media_vm.resources.disk_gb | int
+
+- name: Ensure cloud-init drive exists
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --ide2, 'local-lvm:cloudinit']
+  when: media_boot_disk.ide2 is not defined
+
+- name: Read local storage from native Proxmox API
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage, --output-format, json]
+  register: media_pve_storage_list
+  changed_when: false
+
+- name: Select standard local directory storage
+  ansible.builtin.set_fact:
+    media_local_storage: >-
+      {{ (media_pve_storage_list.stdout | from_json
+          | selectattr('storage', 'equalto', 'local') | list)
+          | first | default({}) }}
+
+- name: Require standard PVE local storage before enabling snippets
+  ansible.builtin.assert:
+    that:
+      - media_local_storage.type | default('') == 'dir'
+      - media_local_storage.path | default('') == '/var/lib/vz'
+    fail_msg: MEDIA_LOCAL_STORAGE_NOT_DIRECTORY
+
+- name: Preserve existing local content types
+  ansible.builtin.set_fact:
+    media_local_contents: "{{ media_local_storage.content | default('') }}"
+
+- name: Enable snippets on existing PVE local dir storage
+  ansible.builtin.command:
+    argv:
+      - pvesm
+      - set
+      - local
+      - --content
+      - "{{ (media_local_contents.split(',') + ['snippets']) | unique | join(',') }}"
+  when: "'snippets' not in media_local_contents.split(',')"
+
+- name: Create the PVE cloud-init snippet folder
+  ansible.builtin.file:
+    path: /var/lib/vz/snippets
+    state: directory
+    mode: '0750'
+
+- name: Install native cloud-init vendor-data for first-boot QGA
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml"
+    mode: '0644'
+    content: |
+      #cloud-config
+      package_update: true
+      packages:
+        - qemu-guest-agent
+      runcmd:
+        - [systemctl, enable, --now, qemu-guest-agent.service]
+
+- name: Install native cloud-init meta-data
+  ansible.builtin.copy:
+    dest: "/var/lib/vz/snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+    mode: '0644'
+    content: |
+      instance-id: dh-media-{{ media_vm.vmid }}-qga-v1
+      local-hostname: {{ media_vm.name }}
+
+- name: Inspect current cloud-init setting
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_cloudinit_state
+  changed_when: false
+
+- name: Set vendor/meta cloud-init without overriding default user/network
+  ansible.builtin.command:
+    argv:
+      - qm
+      - set
+      - "{{ media_vm.vmid }}"
+      - --cicustom
+      - "vendor=local:snippets/dh-media-{{ media_vm.vmid }}-qga-v1.yaml,meta=local:snippets/dh-media-{{ media_vm.vmid }}-qga-meta-v1.yaml"
+  when: >-
+    ('vendor=local:snippets/dh-media-' ~ (media_vm.vmid | string) ~ '-qga-v1.yaml')
+    not in media_cloudinit_state.stdout
+
+- name: Write authorized runner public key to temporary PVE file
+  ansible.builtin.copy:
+    dest: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    content: "{{ media_guest_pubkey }}\n"
+    mode: '0600'
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Set SSH public key in cloud-init when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --sshkeys, "/run/dh-media-{{ media_vm.vmid }}-pubkey"]
+  when: "'sshkeys:' not in media_cloudinit_state.stdout"
+
+- name: Remove temporary runner key after setting cloud-init
+  ansible.builtin.file:
+    path: "/run/dh-media-{{ media_vm.vmid }}-pubkey"
+    state: absent
+
+- name: Generate cloud-init ISO
+  ansible.builtin.command:
+    argv: [qm, cloudinit, update, "{{ media_vm.vmid }}"]
+  changed_when: false
+
+- name: Read VM power state
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_power
+  changed_when: false
+
+- name: Check whether kept guest already has QGA
+  ansible.builtin.command:
+    argv: [qm, guest, cmd, "{{ media_vm.vmid }}", ping]
+  register: media_keep_qga_probe
+  changed_when: false
+  failed_when: false
+  when:
+    - media_vm_action == 'keep'
+    - "media_vm_power.stdout == 'status: running'"
+
+- name: Reboot kept managed VM once only if first-boot QGA was missing
+  ansible.builtin.command:
+    argv: [qm, shutdown, "{{ media_vm.vmid }}", --timeout, '120']
+  when:
+    - media_vm_action == 'keep'
+    - "media_vm_power.stdout == 'status: running'"
+    - media_keep_qga_probe.rc | default(0) != 0
+    - media_vm_settings.cicustom is not defined
+
+- name: Confirm controlled shutdown of first-boot QGA recovery
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_qga_recovery_stopped
+  changed_when: false
+  retries: 20
+  delay: 3
+  until: "media_qga_recovery_stopped.stdout == 'status: stopped'"
+  when:
+    - media_vm_action == 'keep'
+    - "media_vm_power.stdout == 'status: running'"
+    - media_keep_qga_probe.rc | default(0) != 0
+    - media_vm_settings.cicustom is not defined
+
+- name: Read effective VM power state before normal start
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_effective_power
+  changed_when: false
+
+- name: Start VM only when stopped
+  ansible.builtin.command:
+    argv: [qm, start, "{{ media_vm.vmid }}"]
+  when: "media_vm_effective_power.stdout == 'status: stopped'"
+
+- name: Inspect protection after provisioning
+  ansible.builtin.command:
+    argv: [qm, config, "{{ media_vm.vmid }}"]
+  register: media_vm_protection_readback
+  changed_when: false
+
+- name: Restore configured VM deletion protection when missing
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --protection, '1']
+  when:
+    - media_vm.lifecycle.protection | default(true) | bool
+    - media_vm_protection_readback.stdout is not search('(?m)^protection: 1$')
+
+- name: Observe result of requested VM action
+  ansible.builtin.command:
+    argv: [qm, status, "{{ media_vm.vmid }}"]
+  register: media_vm_result
+  changed_when: false
+
+- name: Require VM running after normal provisioning
+  ansible.builtin.assert:
+    that:
+      - "media_vm_result.stdout == 'status: running'"
+    fail_msg: MEDIA_VM_NOT_RUNNING

@@ -1,7 +1,6 @@
 ---
 # Task 80 — native Ansible after Tiny Bootstrap, not the legacy root worker.
-# The ONLY destructive disk action is a one-time, exact site-approved NTFS
-# conversion, re-verified first on PVE and again from inside the media VM.
+# Two independent operator selections control lifecycle. Physical safeguards remain.
 - name: Media 80 | Verify private site inventory and prepare commissioned PVE
   hosts: site_runner
   gather_facts: false
@@ -78,27 +77,6 @@
         fail_msg: MEDIA_SITE_REPOSITORY_IDENTITY_MISMATCH
       no_log: true
 
-    - name: Read private site identity marker
-      ansible.builtin.uri:
-        url: "{{ media_github_api }}/contents/.digitalhouses/site.json?ref=main"
-        method: GET
-        headers: "{{ media_github_headers }}"
-        validate_certs: true
-        status_code: 200
-        timeout: 20
-      register: media_site_marker
-      changed_when: false
-      no_log: true
-
-    - name: Validate private repository site marker
-      ansible.builtin.assert:
-        that:
-          - (media_site_marker.json.content | b64decode | from_json).schema == 1
-          - (media_site_marker.json.content | b64decode | from_json).site_id == site.id
-          - (media_site_marker.json.content | b64decode | from_json).purpose == 'digitalhouses_ansible_site'
-        fail_msg: MEDIA_SITE_MARKER_MISMATCH
-      no_log: true
-
     - name: Download only this site's media VM declaration
       ansible.builtin.uri:
         url: "{{ media_github_api }}/contents/inventories/{{ site.id }}/media_vm.yml?ref=main"
@@ -121,56 +99,43 @@
         fail_msg: MEDIA_SITE_FILE_INVALID
       no_log: true
 
-    - name: Parse approved media VM declaration (nonsecret)
+    - name: Parse canonical media VM declaration (nonsecret)
       ansible.builtin.set_fact:
         media_vm: "{{ (media_site_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
-    - name: Require specific declared VM, hardware, pool and network boundaries
+    - name: Require declared VM, hardware, pool and network boundaries
       ansible.builtin.assert:
         that:
           - media_vm.name == 'mediaserver-' ~ site.owner_slug
-          - media_vm.vmid | int >= 2200
-          - media_vm.vmid | int <= 2254
-          - media_vm.vmid | int == 2000 + (media_vm.network.ipv4.split('/')[0].split('.')[-1] | int)
-          - media_vm.network.bridge == 'vmbr0'
-          - media_vm.network.static_ipv4_verified | bool
+          - media_vm.vmid | int >= 100
+          - media_vm.network.bridge is match('^vmbr[0-9]+$')
           - media_vm.storage.pool_name == site.owner_slug ~ '-pool'
           - media_vm.storage.media_dataset == media_vm.storage.pool_name ~ '/media'
           - media_vm.pci.gpu is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
           - media_vm.pci.sata_controller is match('^[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}[.][0-7]$')
-          - media_vm.resources.cores | int == 2
-          - media_vm.resources.memory_mb | int == 4096
-          - media_vm.resources.ballooning == false
-          - media_vm.approvals.provision == true
-          - media_vm.approvals.gpu_cutover == true
-          - media_vm.approvals.sata_cutover == true
-          - media_vm.backup_export.pve_host == pve_observed.ipv4
-        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
 
-    - name: Validate media file and backup account contracts
-      ansible.builtin.import_tasks: media-accounts-preflight.yml
-      vars:
-        pve:
-          host: "{{ pve_observed.ipv4 }}"
-          node: "{{ pve_observed.node }}"
+        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID
 
-    - name: Verify PVE host SSH key and commissioned private key exist
-      ansible.builtin.stat:
-        path: "{{ item }}"
-        follow: false
-      loop:
-        - /var/lib/semaphore/.ssh/dh_pve_known_hosts
-        - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
-      register: media_ssh_credentials
-      changed_when: false
-
-    - name: Require managed SSH trust before PVE actions
+    - name: Require declared media owner and administrator without legacy NFS gate
       ansible.builtin.assert:
         that:
-          - media_ssh_credentials.results | map(attribute='stat.isreg', default=false) | select('equalto', true) | list | length == 2
-          - media_ssh_credentials.results | map(attribute='stat.mode', default='') | select('equalto', '0600') | list | length == 2
-        fail_msg: MEDIA_PVE_SSH_TRUST_MISSING
+          - media_vm.storage.mode == 'readwrite'
+          - media_vm.file_access.accounts is sequence
+          - media_vm.file_access.accounts | length == 2
+          - (media_vm.file_access.accounts | map(attribute='name') | unique | list | length) == 2
+          - (media_vm.file_access.accounts | map(attribute='role') | sort | list) == ['administrator', 'owner']
+          - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'administrator') | map(attribute='name') | first) == site.owner_slug ~ '_admin'
+          - (media_vm.file_access.accounts | selectattr('role', 'equalto', 'owner') | map(attribute='name') | first) == site.owner_slug
+          - (media_vm.file_access.accounts | selectattr('password', 'defined') | list | length) == 0
+        fail_msg: MEDIA_80_ACCOUNTS_INVALID
+      no_log: true
+
+    - name: Read runner key's public half for VM cloud-init
+      ansible.builtin.command:
+        argv: [ssh-keygen, -y, -f, /var/lib/semaphore/.ssh/dh_pve_admin_ed25519]
+      register: media_guest_pubkey_result
+      changed_when: false
 
     - name: Materialize only approved media metadata on the runner
       ansible.builtin.copy:
@@ -209,6 +174,7 @@
         media_vm: "{{ media_vm }}"
         media_vm_action: "{{ media_vm_action }}"
         media_raw_disk_action: "{{ media_raw_disk_action }}"
+        media_guest_pubkey: "{{ media_guest_pubkey_result.stdout }}"
       changed_when: false
       no_log: true
 
@@ -236,21 +202,6 @@
       vars:
         infrastructure_access_capability: host_manage
 
-    - name: Verify PVE/CT/hardware ownership before any VM or disk writes
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/../scripts/dh-media-pve-preflight.py
-        --site {{ site.id }}
-        --vm-action {{ media_vm_action }}
-        --disk-action {{ media_raw_disk_action }}
-      register: media_pve_preflight
-      changed_when: false
-
-    - name: Require completed independent hardware and VM preflight
-      ansible.builtin.assert:
-        that:
-          - "'MEDIA_PVE_PREFLIGHT=PASS' in media_pve_preflight.stdout"
-        fail_msg: MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED
-
     # Host BDF changes after PCI passthrough; identify the exact dedicated
     # SATA controller inside the VM by its PCI vendor/device hardware ID.
     - name: Read approved SATA PCI vendor from the actual PVE controller
@@ -265,33 +216,26 @@
       register: media_sata_pci_device_read
       changed_when: false
 
+    - name: Read SATA controller PCI class on actual PVE
+      ansible.builtin.slurp:
+        src: "/sys/bus/pci/devices/{{ media_vm.pci.sata_controller }}/class"
+      register: media_sata_pci_class_read
+      changed_when: false
+
+    - name: Require selected PCI device to be an AHCI SATA controller
+      ansible.builtin.assert:
+        that:
+          - (media_sata_pci_class_read.content | b64decode | trim | lower) is match('^0x0106[0-9a-f]{2}$')
+        fail_msg: MEDIA_SELECTED_PCI_DEVICE_NOT_AHCI
+
     - name: Record PCI identity for guest-side SATA disk discovery
       ansible.builtin.set_fact:
         media_sata_pci_vendor: "{{ media_sata_pci_vendor_read.content | b64decode | trim | lower }}"
         media_sata_pci_device: "{{ media_sata_pci_device_read.content | b64decode | trim | lower }}"
 
-    - name: Provision only the declared PVE media VM by native Ansible SSH
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/../bootstrap/dh-pve-media-deploy.py
-        --site {{ site.id }}
-        --vm-action {{ media_vm_action }}
-        --raw-disk-action {{ media_raw_disk_action }} --apply
-      register: media_vm_provision
-      changed_when: >-
-        'VM_CREATED=YES' in media_vm_provision.stdout
-        or 'VM_RECREATE=' in media_vm_provision.stdout
-
-    - name: Confirm exact managed VM running before touching guest data disk
-      ansible.builtin.command:
-        argv: [qm, status, "{{ media_vm.vmid }}"]
-      register: media_qm_running
-      changed_when: false
-
-    - name: Refuse to configure an absent, stopped, or foreign VM
-      ansible.builtin.assert:
-        that:
-          - "media_qm_running.stdout == 'status: running'"
-        fail_msg: MEDIA_VM_NOT_RUNNING_AFTER_NATIVE_PROVISION
+    - name: Apply native Ansible VM lifecycle for selected action
+      ansible.builtin.include_role:
+        name: media_vm_provision
 
     # The QGA-to-PVE channel is authenticated using the already pinned PVE
     # SSH key. Do NOT trust ssh-keyscan on its own after a VM recreation.
@@ -400,45 +344,6 @@
         follow: false
       become: true
 
-    - name: Verify SSH trust file owner, group, type, and mode
-      ansible.builtin.stat:
-        path: /var/lib/semaphore/.ssh/dh_media_guest_known_hosts
-        follow: false
-      register: media_ssh_trust_after
-
-    - name: Refuse missing or unreadable guest trust file
-      ansible.builtin.assert:
-        that:
-          - "media_ssh_trust_after.stat.isreg"
-          - "media_ssh_trust_after.stat.pw_name == 'semaphore'"
-          - "media_ssh_trust_after.stat.gr_name == 'semaphore'"
-          - "media_ssh_trust_after.stat.mode == '0600'"
-        fail_msg: MEDIA_SSH_TRUST_WRONG_OWNER_OR_MODE
-
-    - name: Confirm connection as semaphore with strict SSH identity checking
-      ansible.builtin.command:
-        argv:
-          - ssh
-          - -i
-          - /var/lib/semaphore/.ssh/dh_pve_admin_ed25519
-          - -o
-          - BatchMode=yes
-          - -o
-          - IdentitiesOnly=yes
-          - -o
-          - StrictHostKeyChecking=yes
-          - -o
-          - UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
-          - -o
-          - ConnectTimeout=8
-          - "debian@{{ media_vm.network.ipv4.split('/')[0] }}"
-          - /bin/true
-      changed_when: false
-      retries: 24
-      delay: 5
-      register: media_guest_ssh_verified
-      until: media_guest_ssh_verified.rc == 0
-
     - name: Register newly commissioned Debian media VM using pinned runner SSH
       ansible.builtin.add_host:
         name: media_server
@@ -454,6 +359,7 @@
           -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
         media_owner_slug: "{{ site.owner_slug }}"
+        media80_native: true
         media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
         media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
         site: "{{ site }}"

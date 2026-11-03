@@ -1,0 +1,14 @@
+---
+# Static syntax validation of dynamic Task 80 roles.
+# A syntax check on plan-pve-media-vm.yml alone does not load include_role targets.
+- name: Task 80 | Compile native VM and ZFS roles without executing them
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Compile native Proxmox VM lifecycle
+      ansible.builtin.import_role:
+        name: media_vm_provision
+
+    - name: Compile native physical ZFS lifecycle
+      ansible.builtin.import_role:
+        name: media_native_zfs
