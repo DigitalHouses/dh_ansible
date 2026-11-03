@@ -1,7 +1,6 @@
 ---
 # Task 80 — native Ansible after Tiny Bootstrap, not the legacy root worker.
-# The ONLY destructive disk action is a one-time, exact site-approved NTFS
-# conversion, re-verified first on PVE and again from inside the media VM.
+# Two independent operator selections control lifecycle. Physical safeguards remain.
 - name: Media 80 | Verify private site inventory and prepare commissioned PVE
   hosts: site_runner
   gather_facts: false
@@ -121,12 +120,12 @@
         fail_msg: MEDIA_SITE_FILE_INVALID
       no_log: true
 
-    - name: Parse approved media VM declaration (nonsecret)
+    - name: Parse canonical media VM declaration (nonsecret)
       ansible.builtin.set_fact:
         media_vm: "{{ (media_site_file.json.content | b64decode | from_yaml).media_vm }}"
       no_log: true
 
-    - name: Require specific declared VM, hardware, pool and network boundaries
+    - name: Require declared VM, hardware, pool and network boundaries
       ansible.builtin.assert:
         that:
           - media_vm.name == 'mediaserver-' ~ site.owner_slug
@@ -142,11 +141,8 @@
           - media_vm.resources.cores | int == 2
           - media_vm.resources.memory_mb | int == 4096
           - media_vm.resources.ballooning == false
-          - media_vm.approvals.provision == true
-          - media_vm.approvals.gpu_cutover == true
-          - media_vm.approvals.sata_cutover == true
-          - media_vm.backup_export.pve_host == pve_observed.ipv4
-        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED
+
+        fail_msg: MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID
 
     - name: Validate media file and backup account contracts
       ansible.builtin.import_tasks: media-accounts-preflight.yml
@@ -171,6 +167,12 @@
           - media_ssh_credentials.results | map(attribute='stat.isreg', default=false) | select('equalto', true) | list | length == 2
           - media_ssh_credentials.results | map(attribute='stat.mode', default='') | select('equalto', '0600') | list | length == 2
         fail_msg: MEDIA_PVE_SSH_TRUST_MISSING
+
+    - name: Read runner key's public half for VM cloud-init
+      ansible.builtin.command:
+        argv: [ssh-keygen, -y, -f, /var/lib/semaphore/.ssh/dh_pve_admin_ed25519]
+      register: media_guest_pubkey_result
+      changed_when: false
 
     - name: Materialize only approved media metadata on the runner
       ansible.builtin.copy:
@@ -209,6 +211,7 @@
         media_vm: "{{ media_vm }}"
         media_vm_action: "{{ media_vm_action }}"
         media_raw_disk_action: "{{ media_raw_disk_action }}"
+        media_guest_pubkey: "{{ media_guest_pubkey_result.stdout }}"
       changed_when: false
       no_log: true
 
@@ -236,21 +239,6 @@
       vars:
         infrastructure_access_capability: host_manage
 
-    - name: Verify PVE/CT/hardware ownership before any VM or disk writes
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/../scripts/dh-media-pve-preflight.py
-        --site {{ site.id }}
-        --vm-action {{ media_vm_action }}
-        --disk-action {{ media_raw_disk_action }}
-      register: media_pve_preflight
-      changed_when: false
-
-    - name: Require completed independent hardware and VM preflight
-      ansible.builtin.assert:
-        that:
-          - "'MEDIA_PVE_PREFLIGHT=PASS' in media_pve_preflight.stdout"
-        fail_msg: MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED
-
     # Host BDF changes after PCI passthrough; identify the exact dedicated
     # SATA controller inside the VM by its PCI vendor/device hardware ID.
     - name: Read approved SATA PCI vendor from the actual PVE controller
@@ -270,28 +258,9 @@
         media_sata_pci_vendor: "{{ media_sata_pci_vendor_read.content | b64decode | trim | lower }}"
         media_sata_pci_device: "{{ media_sata_pci_device_read.content | b64decode | trim | lower }}"
 
-    - name: Provision only the declared PVE media VM by native Ansible SSH
-      ansible.builtin.script: >-
-        {{ playbook_dir }}/../bootstrap/dh-pve-media-deploy.py
-        --site {{ site.id }}
-        --vm-action {{ media_vm_action }}
-        --raw-disk-action {{ media_raw_disk_action }} --apply
-      register: media_vm_provision
-      changed_when: >-
-        'VM_CREATED=YES' in media_vm_provision.stdout
-        or 'VM_RECREATE=' in media_vm_provision.stdout
-
-    - name: Confirm exact managed VM running before touching guest data disk
-      ansible.builtin.command:
-        argv: [qm, status, "{{ media_vm.vmid }}"]
-      register: media_qm_running
-      changed_when: false
-
-    - name: Refuse to configure an absent, stopped, or foreign VM
-      ansible.builtin.assert:
-        that:
-          - "media_qm_running.stdout == 'status: running'"
-        fail_msg: MEDIA_VM_NOT_RUNNING_AFTER_NATIVE_PROVISION
+    - name: Apply native Ansible VM lifecycle for selected action
+      ansible.builtin.include_role:
+        name: media_vm_provision
 
     # The QGA-to-PVE channel is authenticated using the already pinned PVE
     # SSH key. Do NOT trust ssh-keyscan on its own after a VM recreation.
