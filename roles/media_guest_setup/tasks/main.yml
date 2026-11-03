@@ -143,12 +143,13 @@
   register: media_plex_groups
 
 # Legacy worker path remains temporarily available to non-80 callers.
-- name: Create site storage configuration directory
+- name: Create shared DigitalHouses configuration directory for native and legacy media apps
   ansible.builtin.file:
     path: /etc/digitalhouses
     state: directory
+    owner: root
+    group: root
     mode: '0750'
-  when: not (media80_native | default(false) | bool)
 
 - name: Install generic ZFS create/import reconciler
   ansible.builtin.copy:
