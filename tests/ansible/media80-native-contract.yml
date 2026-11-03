@@ -48,11 +48,24 @@
             (media80_zfs_tasks | selectattr('name', 'equalto',
              'Read partitions of the selected physical disk only') | first)
             ['ansible.builtin.command'].argv[:4] ==
-            ['lsblk', '-J', '-o', 'PATH,TYPE']
+            ['lsblk', '-J', '-o', 'NAME,PATH,TYPE']
           - >-
             (media80_zfs_tasks | selectattr('name', 'equalto',
              'Read partitions of the selected physical disk only') | first)
             ['ansible.builtin.command'].argv | length == 5
+
+    - name: Require partition enumeration to enable lsblk JSON children
+      ansible.builtin.assert:
+        that:
+          - >-
+            'NAME' in
+            ((media80_zfs_tasks | selectattr('name', 'equalto',
+             'Read partitions of the selected physical disk only') | first)
+             ['ansible.builtin.command'].argv[3]).split(',')
+          - >-
+            (media80_zfs_tasks | selectattr('name', 'equalto',
+             'Assemble explicit scan of selected disk and its partitions') | first)
+             ['loop'] == '{{ [media_sata_disk] + media_sata_partitions }}'
 
     - name: Check the real Task 80 dispatch path
       ansible.builtin.assert:
