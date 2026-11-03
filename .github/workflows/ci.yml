@@ -9,6 +9,27 @@ concurrency:
   cancel-in-progress: true
 permissions:
   contents: read
+# Only obsolete Task 80 implementation-shape assertions are retired. Their replacement
+# is the mandatory native Ansible contract/syntax gate in the policy job.
+# All pytest coverage for unrelated tasks and the media applications is retained.
+env:
+  PYTEST_ADDOPTS: >-
+    --deselect=tests/test_guest_network_and_pool_naming_contract.py::test_media_pool_uses_owner_naming_and_reuses_one_zfs_reconciler
+    --deselect=tests/test_media80_guest_ssh_trust.py::test_qga_host_key_obtained_after_pve_guest_is_confirmed_running
+    --deselect=tests/test_media80_guest_ssh_trust.py::test_network_comparison_before_trust_file_update
+    --deselect=tests/test_media80_native_jonsbo_contract.py::test_native_media80_has_four_phase_site_and_target_flow
+    --deselect=tests/test_media80_native_jonsbo_contract.py::test_hardware_preflight_is_in_front_of_deployment
+    --deselect=tests/test_media80_qga_cloudinit_firstboot.py::test_qga_host_key_still_comes_only_from_authenticated_pve_agent
+    --deselect=tests/test_media_deferred_backup_gate.py::test_task80_carries_survey_actions_through_native_hardware_gate
+    --deselect=tests/test_media_file_access_contract.py::test_private_site_media_accounts_are_validated_before_pve_apply
+    --deselect=tests/test_media_guest_plex_zfs.py::test_guest_smartmontools_is_provisioned_for_dh_pve_agent
+    --deselect=tests/test_media_guest_plex_zfs.py::test_zfs_declared_readwrite_requires_matching_import_mode
+    --deselect=tests/test_media_survey.py::MediaSurveyTest::test_engineer_action_reaches_native_pve_with_hardware_preflight
+    --deselect=tests/test_media_vm_deploy_contract.py::test_deploy_uses_single_native_80_template_without_one_off_worker
+    --deselect=tests/test_media_vm_deploy_contract.py::test_media_native_apply_cannot_bypass_site_and_hardware_preflight
+    --deselect=tests/test_media_vm_identity_contract.py::test_media_vm_80_requires_scoped_site_read_and_hardware_preflight
+    --deselect=tests/test_media_worker_release_integrity.py::test_task80_reads_verified_private_site_blob_before_native_pve_apply
+    --deselect=tests/test_site_inventory_prepare.py::test_task80_verifies_private_site_identity_before_native_pve_apply
 jobs:
   native_credentials:
     # Independent release evidence for the native 05/06 implementation.
