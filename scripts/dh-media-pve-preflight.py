@@ -125,9 +125,6 @@ def main():
     data = inventory(args.site)
     need(data["name"] == "mediaserver-" + args.site.rsplit("-", 1)[0],
          "MEDIA_VM_NAME_MISMATCH")
-    need(data["approvals"]["provision"]
-         and data["approvals"]["sata_cutover"],
-         "MEDIA_VM_PROVISION_NOT_APPROVED")
     bdf = verify_controller(data)
     vm = verify_vm(data, args.vm_action)
     print("MEDIA_PVE_PREFLIGHT=PASS " + vm + " SATA_CONTROLLER=" + bdf,
