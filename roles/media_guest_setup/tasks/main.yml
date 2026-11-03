@@ -142,8 +142,135 @@
     append: true
   register: media_plex_groups
 
+# Legacy worker path remains temporarily available to non-80 callers.
+- name: Create site storage configuration directory
+  ansible.builtin.file:
+    path: /etc/digitalhouses
+    state: directory
+    mode: '0750'
+  when: not (media80_native | default(false) | bool)
+
+- name: Install generic ZFS create/import reconciler
+  ansible.builtin.copy:
+    src: dh-media-storage.py
+    dest: /usr/local/sbin/dh-media-storage
+    owner: root
+    group: root
+    mode: '0700'
+  when: not (media80_native | default(false) | bool)
+
+- name: Render exact declarative ZFS configuration
+  ansible.builtin.copy:
+    content: >-
+      {{
+        media_vm.storage
+        | combine({
+            'sata_controller': {
+              'vendor': media_sata_pci_vendor,
+              'device': media_sata_pci_device
+            }
+          }, recursive=True)
+        | to_nice_json
+      }}
+    dest: /etc/digitalhouses/media-storage.json
+    owner: root
+    group: root
+    mode: '0600'
+
+# On a retained VM, media processes can hold ZFS mounts or NFS exports open.
+# Stop only installed services before an explicit destructive action. Later
+# role tasks start/reconcile them against the newly created pool.
+  when: not (media80_native | default(false) | bool)
+
+- name: Inspect installed media services for explicit keep plus erase
+  ansible.builtin.service_facts:
+  when:
+    - media_vm_action | default('') == 'keep'
+    - media_raw_disk_action == 'erase'
+    - not (media80_native | default(false) | bool)
+
+- name: Stop installed consumers of the old ZFS pool before keep plus erase
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+  loop:
+    - plexmediaserver.service
+    - jellyfin.service
+    - radarr.service
+    - sonarr.service
+    - prowlarr.service
+    - qbittorrent.service
+    - filestash.service
+    - docker.service
+    - smbd.service
+    - nmbd.service
+    - nfs-server.service
+    - nginx.service
+  when:
+    - media_vm_action | default('') == 'keep'
+    - media_raw_disk_action == 'erase'
+    - item in ansible_facts.services
+    - not (media80_native | default(false) | bool)
+
+- name: Reconcile physical ZFS pool and declared datasets
+  ansible.builtin.command:
+    argv:
+      - /usr/local/sbin/dh-media-storage
+      - --config
+      - /etc/digitalhouses/media-storage.json
+      - --action
+      - "{{ media_raw_disk_action }}"
+      - --owner
+      - "{{ media_owner_slug }}"
+  register: media_zfs_reconcile
+  changed_when: "'POOL=CREATED' in media_zfs_reconcile.stdout or 'LAYOUT=CREATED' in media_zfs_reconcile.stdout"
+  when: not (media80_native | default(false) | bool)
+
+- name: Verify site ZFS reconciler succeeded
+  ansible.builtin.assert:
+    that:
+      - "'MEDIA_STORAGE_RECONCILED=PASS' in media_zfs_reconcile.stdout_lines"
+  when: not (media80_native | default(false) | bool)
+
+- name: Disable generic ZFS auto-import and auto-mount for this dedicated guest
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+  loop:
+    - zfs-import-cache.service
+    - zfs-mount.service
+  when: not (media80_native | default(false) | bool)
+
+- name: Install persistent declarative ZFS media importer
+  ansible.builtin.template:
+    src: dh-media-zfs-mount.sh.j2
+    dest: /usr/local/sbin/dh-media-zfs-mount
+    owner: root
+    group: root
+    mode: '0755'
+  when: not (media80_native | default(false) | bool)
+
+- name: Install systemd unit to mount only media dataset
+  ansible.builtin.copy:
+    src: dh-media-zfs.service
+    dest: /etc/systemd/system/dh-media-zfs.service
+    owner: root
+    group: root
+    mode: '0644'
+  when: not (media80_native | default(false) | bool)
+
+- name: Enable and start existing media dataset mount
+  ansible.builtin.systemd_service:
+    name: dh-media-zfs.service
+    daemon_reload: true
+    enabled: true
+    state: started
+  when: not (media80_native | default(false) | bool)
+
+# Task 80 uses only native Ansible disk operations.
 - name: Reconcile physical SATA disk and ZFS using native Ansible
-  ansible.builtin.import_tasks: zfs_storage.yml
+  ansible.builtin.include_tasks: zfs_storage.yml
+  when: media80_native | default(false) | bool
 
 - name: Refuse ordinary Ansible apply during unfinished customer password rotation
   ansible.builtin.stat:
