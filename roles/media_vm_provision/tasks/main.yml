@@ -167,7 +167,6 @@
     - { key: nameserver, value: "{{ media_vm.network.gateway }}" }
     - { key: hostpci0, value: "{{ media_vm.pci.gpu }},pcie=1" }
     - { key: hostpci1, value: "{{ media_vm.pci.sata_controller }},pcie=1" }
-    - { key: boot, value: 'order=scsi0' }
   when: >-
     media_vm_settings[item.key] | default('') != item.value
     and not (item.key == 'agent' and media_vm_settings.agent | default('') in ['1', 'enabled=1'])
@@ -260,6 +259,11 @@
     that:
       - media_boot_disk.scsi0 | default('') is match('^local-lvm:vm-' ~ (media_vm.vmid | string) ~ '-disk-[0-9]+')
     fail_msg: MEDIA_BOOT_DISK_NOT_MANAGED
+
+- name: Set boot order only after the managed boot volume exists
+  ansible.builtin.command:
+    argv: [qm, set, "{{ media_vm.vmid }}", --boot, 'order=scsi0']
+  when: media_boot_disk.boot | default('') != 'order=scsi0'
 
 - name: Increase boot disk to configured size when smaller
   ansible.builtin.command:
