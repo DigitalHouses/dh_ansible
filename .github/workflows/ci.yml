@@ -22,34 +22,10 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install pinned runner dependencies
-        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
-      - name: Validate native Semaphore 05/06 and bootstrap compatibility
-        run: |
-          python -m pytest -q \
-            tests/test_semaphore_native_obtain_pilot.py \
-            tests/test_semaphore_native_catalog_migration.py \
-            tests/test_fleet_credentials_tasks.py \
-            tests/test_secret_survey_normalization.py \
-            tests/test_site_credentials_inventory.py \
-            tests/test_dh_task_runner.py \
-            tests/test_semaphore_beta_fresh_bootstrap.py \
-            tests/test_tiny_bootstrap_contract.py \
-            tests/test_semaphore_guest_install.py \
-            tests/test_semaphore_local_site_inventory.py \
-            tests/test_semaphore_native_ansible_runtime.py \
-            tests/test_pve_legacy_ca_credential_runtime.py \
-            tests/test_task06_pve_native_enrollment.py \
-            tests/test_task05_mqtt_broker_endpoint.py \
-            tests/test_task06_external_credentials.py \
-            tests/test_cloudflare_read_scope.py \
-            tests/test_cloudflare_cutover_contract.py \
-            tests/test_runner_remote_commander_request.py \
-            tests/test_media_plex_libraries_readback.py \
-            tests/test_media_arr_import_naming.py \
-            tests/test_media_guest_plex_zfs.py \
-            tests/test_media_one_time_ntfs_erase.py \
-            tests/test_media80_native_jonsbo_contract.py \
-            tests/test_task07_site_repo.py
+        run: python -m pip install -r requirements/runner.txt
+      - name: Validate native credential, private-site and media contracts with Ansible
+        run: ansible-playbook -i localhost, -c local tests/ansible/native-ci-contract.yml
+
       - name: Validate Task 05/06 Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
@@ -80,7 +56,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
+        run: python -m pip install -r requirements/runner.txt
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements/collections.yml
@@ -92,11 +68,9 @@ jobs:
       - name: Verify native Media 80 actions and no unintended Python executor
         run: ansible-playbook -i localhost, -c local tests/ansible/media80-native-contract.yml
 
-      - name: Validate repository policies
-        # These integration fixtures exercise root-owned 0600 files and root-only
-        # helper entrypoints. Run in the disposable CI VM as root; the separate
-        # native_credentials job remains unprivileged.
-        run: sudo -H env PATH="$PATH" PYTHONPYCACHEPREFIX=/tmp/dh-ci-policy-pycache "$(command -v python)" -m pytest -p no:cacheprovider -q -m "not private_fleet" tests/
+      - name: Validate site, credential and Task 80 contracts as Ansible tasks
+        run: ansible-playbook -i localhost, -c local tests/ansible/native-ci-contract.yml
+
       - name: Validate Cloudflare root worker Python syntax
         run: |
           python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
