@@ -22,10 +22,34 @@ jobs:
         with:
           python-version: '3.13'
       - name: Install pinned runner dependencies
-        run: python -m pip install -r requirements/runner.txt
-      - name: Validate native credential, private-site and media contracts with Ansible
-        run: ansible-playbook -i localhost, -c local tests/ansible/native-ci-contract.yml
-
+        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
+      - name: Validate native Semaphore 05/06 and bootstrap compatibility
+        run: |
+          python -m pytest -q \
+            tests/test_semaphore_native_obtain_pilot.py \
+            tests/test_semaphore_native_catalog_migration.py \
+            tests/test_fleet_credentials_tasks.py \
+            tests/test_secret_survey_normalization.py \
+            tests/test_site_credentials_inventory.py \
+            tests/test_dh_task_runner.py \
+            tests/test_semaphore_beta_fresh_bootstrap.py \
+            tests/test_tiny_bootstrap_contract.py \
+            tests/test_semaphore_guest_install.py \
+            tests/test_semaphore_local_site_inventory.py \
+            tests/test_semaphore_native_ansible_runtime.py \
+            tests/test_pve_legacy_ca_credential_runtime.py \
+            tests/test_task06_pve_native_enrollment.py \
+            tests/test_task05_mqtt_broker_endpoint.py \
+            tests/test_task06_external_credentials.py \
+            tests/test_cloudflare_read_scope.py \
+            tests/test_cloudflare_cutover_contract.py \
+            tests/test_runner_remote_commander_request.py \
+            tests/test_media_plex_libraries_readback.py \
+            tests/test_media_arr_import_naming.py \
+            tests/test_media_guest_plex_zfs.py \
+            tests/test_media_one_time_ntfs_erase.py \
+            tests/test_media80_native_jonsbo_contract.py \
+            tests/test_task07_site_repo.py
       - name: Validate Task 05/06 Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/obtain-site-credentials.yml
@@ -56,25 +80,21 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install test dependencies
-        run: python -m pip install -r requirements/runner.txt
+        run: python -m pip install 'pytest>=8,<10' -r requirements/runner.txt
 
       - name: Install Ansible collections
         run: ansible-galaxy collection install -r requirements/collections.yml
 
-      - name: Validate Media 80 Ansible syntax before legacy regression tests
-        run: ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
-      - name: Validate standalone Task 80 native role syntax
+      - name: Validate Media 80 native roles syntax
         run: ansible-playbook --syntax-check -i localhost, tests/ansible/media80-role-syntax.yml
-      - name: Verify native Media 80 actions and no unintended Python executor
+      - name: Validate Media 80 native behavior contract
         run: ansible-playbook -i localhost, -c local tests/ansible/media80-native-contract.yml
 
-      - name: Validate site, credential and Task 80 contracts as Ansible tasks
-        run: ansible-playbook -i localhost, -c local tests/ansible/native-ci-contract.yml
-
-      - name: Validate Semaphore installer release safety contracts with native Ansible
-        run: ansible-playbook -i localhost, -c local tests/ansible/installer-ci-contract.yml
-      - name: Syntax-check native Semaphore live API acceptance
-        run: ansible-playbook --syntax-check -i localhost, tests/ansible/semaphore-live-api.yml
+      - name: Validate repository policies
+        # These integration fixtures exercise root-owned 0600 files and root-only
+        # helper entrypoints. Run in the disposable CI VM as root; the separate
+        # native_credentials job remains unprivileged.
+        run: sudo -H env PATH="$PATH" PYTHONPYCACHEPREFIX=/tmp/dh-ci-policy-pycache "$(command -v python)" -m pytest -p no:cacheprovider -q -m "not private_fleet" tests/
       - name: Validate Cloudflare root worker Python syntax
         run: |
           python3 -m py_compile bootstrap/cloudflare-pve-cutover.py bootstrap/cloudflare-runner-cutover.py bootstrap/cloudflare-commission.py bootstrap/cloudflare-task10-upgrade.py
@@ -108,21 +128,15 @@ jobs:
           printf '%s  %s\n' 7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a "$WORK/semaphore.deb" | sha256sum -c -
           sudo dpkg -i "$WORK/semaphore.deb"
           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -subj "/CN=semaphore-ci" -addext "subjectAltName=IP:127.0.0.1"
-          mkdir -p "$WORK/tasks"
-          COOKIE_HASH=$(openssl rand -base64 32 | tr -d '\n')
-          COOKIE_ENCRYPTION=$(openssl rand -base64 32 | tr -d '\n')
-          ACCESS_ENCRYPTION=$(openssl rand -base64 32 | tr -d '\n')
-          jq -n --arg db "$WORK/database.sqlite" --arg tmp "$WORK/tasks" \
-            --arg cookie_hash "$COOKIE_HASH" --arg cookie_enc "$COOKIE_ENCRYPTION" \
-            --arg access_enc "$ACCESS_ENCRYPTION" \
-            --arg cert "$WORK/tls.crt" --arg key "$WORK/tls.key" \
-            '{"dialect":"sqlite","sqlite":{"host":$db},"port":":3000",
-              "interface":"127.0.0.1","web_host":"https://127.0.0.1:3000",
-              "tmp_path":$tmp,"cookie_hash":$cookie_hash,
-              "cookie_encryption":$cookie_enc,"access_key_encryption":$access_enc,
-              "tls":{"enabled":true,"cert_file":$cert,"key_file":$key}}' > "$WORK/config.json"
-          printf '%s' 'ci-temporary-password' > "$WORK/admin-password"
-          chmod 0600 "$WORK/config.json" "$WORK/admin-password"
+          python3 - "$WORK" <<'PY'
+          import base64,json,os,sys,pathlib
+          p=pathlib.Path(sys.argv[1])
+          key=lambda:base64.b64encode(os.urandom(32)).decode()
+          config={"dialect":"sqlite","sqlite":{"host":str(p/"database.sqlite")},"port":":3000","interface":"127.0.0.1","web_host":"https://127.0.0.1:3000","tmp_path":str(p/"tasks"),"cookie_hash":key(),"cookie_encryption":key(),"access_key_encryption":key(),"tls":{"enabled":True,"cert_file":str(p/"tls.crt"),"key_file":str(p/"tls.key")}}
+          (p/"tasks").mkdir()
+          (p/"config.json").write_text(json.dumps(config))
+          (p/"admin-password").write_text("ci-temporary-password")
+          PY
           semaphore migrate --config "$WORK/config.json"
           semaphore users add --config "$WORK/config.json" --admin --login admin --email ci@localhost --name "CI Admin" --password ci-temporary-password
           semaphore server --config "$WORK/config.json" > "$WORK/server.log" 2>&1 &
@@ -133,7 +147,7 @@ jobs:
           done
           export CI_SEMAPHORE_CERT="$WORK/tls.crt"
           export CI_SEMAPHORE_PASSWORD_FILE="$WORK/admin-password"
-          ansible-playbook -i localhost, -c local tests/ansible/semaphore-live-api.yml
+          python3 .ci/semaphore_api_live.py
       - name: Validate Ansible syntax
         run: |
           ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/audit.yml
