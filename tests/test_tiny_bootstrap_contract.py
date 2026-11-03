@@ -26,6 +26,13 @@ def test_pve_is_only_used_for_fresh_container_creation():
     assert "--resume" not in INSTALLER
 
 
+
+
+def test_runner_autostarts_after_media_server():
+    # CT startup order is host-level PVE metadata, not a Semaphore task.
+    assert '--onboot 1 --startup "order=2"' in INSTALLER
+    assert '--start 0' in INSTALLER
+
 def test_bootstrap_never_handles_private_fleet_or_media_workers():
     forbidden = ("gh auth", "GH_CONFIG_DIR", "FLEET_RELEASE",
                  "fleet.vault", "pve-identities", "stage_pve_access_audit",
