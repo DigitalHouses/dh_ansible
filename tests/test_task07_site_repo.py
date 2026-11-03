@@ -306,7 +306,10 @@ def test_task07_uses_native_semaphore_git_ls_remote_and_clone_before_success():
     assert ts.index(ts[-1]) > ts.index(clone_check)
     assert ts[-1]["ansible.builtin.set_fact"]["dh_site_repository_access_status"] == "VERIFIED_NATIVE_SSH_CLONE"
     # GitHub source and private site files are left untouched on every repeat.
-    assert "method: DELETE" not in RO.read_text()
+    # Only the precisely verified previous deploy key may be revoked after a
+    # fresh runner reset. Repository and unrelated-key deletion stay forbidden.
+    assert RO.read_text().count("method: DELETE") == 1
+    assert 'url: "{{ dh_git_api }}/keys/{{ dh_site_named_deploy_keys[0].id }}"' in RO.read_text()
     assert "GIT_SSH_COMMAND" not in RO.read_text()
 
 
