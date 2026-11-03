@@ -274,6 +274,50 @@ def qga_cicustom_expected(vmid):
     }
 
 
+def ensure_local_snippets_storage(allow_update=True):
+    """Read PVE's real pmxcfs storage config, never invoke nonexistent pvesm config.
+
+    Preserve every already-enabled local content type when adding snippets.
+    No VM/disk object is altered by this operation.
+    """
+    path = Path("/etc/pve/storage.cfg")
+    need(path.is_file() and not path.is_symlink(),
+         "QGA_CLOUDINIT_STORAGE_CONFIG_MISSING")
+    content = path.read_text()
+    sections = list(re.finditer(
+        r"(?m)^([a-z][a-z0-9]*):[ \t]+([A-Za-z0-9_.-]+)[ \t]*$",
+        content))
+    matches = []
+    for i, section in enumerate(sections):
+        if section.group(2) != "local":
+            continue
+        end = sections[i + 1].start() if i + 1 < len(sections) else len(content)
+        matches.append((section.group(1), content[section.end():end]))
+    need(len(matches) == 1 and matches[0][0] == "dir",
+         "QGA_CLOUDINIT_LOCAL_STORAGE_NOT_DIRECTORY")
+    attrs = {}
+    for line in matches[0][1].splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        fields = line.split(None, 1)
+        need(len(fields) == 2 and fields[0] not in attrs,
+             "QGA_CLOUDINIT_LOCAL_STORAGE_MALFORMED")
+        attrs[fields[0]] = fields[1]
+    need(attrs.get("path") == "/var/lib/vz",
+         "QGA_CLOUDINIT_LOCAL_STORAGE_PATH_UNEXPECTED")
+    types = attrs.get("content", "")
+    need(re.fullmatch(r"[a-z][a-z0-9]*(?:,[a-z][a-z0-9]*)*", types)
+         is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
+    enabled = set(types.split(","))
+    if "snippets" not in enabled:
+        need(allow_update, "QGA_CLOUDINIT_SNIPPETS_NOT_PERSISTED")
+        run("/usr/sbin/pvesm", "set", "local", "--content",
+            ",".join(sorted(enabled | {"snippets"})))
+        return ensure_local_snippets_storage(False)
+    print("MEDIA_QGA_SNIPPETS_STORAGE=READY", flush=True)
+
+
 def ensure_qga_cloud_init(vmid, data):
     """Vendor-data installs QGA BEFORE native Ansible ever needs QGA.
 
@@ -281,19 +325,7 @@ def ensure_qga_cloud_init(vmid, data):
     which was previously booted without vendor-data. No VM/disk recreation,
     passwords, SSH private keys, or access-control changes are involved.
     """
-    local = run("/usr/sbin/pvesm", "config", "local")
-    need(re.search(r"(?m)^dir:\s+local\s*$", local) is not None,
-         "QGA_CLOUDINIT_LOCAL_STORAGE_NOT_DIRECTORY")
-    need(re.search(r"(?m)^\s*path\s+/var/lib/vz\s*$", local) is not None,
-         "QGA_CLOUDINIT_LOCAL_STORAGE_PATH_UNEXPECTED")
-    found = re.search(r"(?m)^\s*content\s+([a-z,]+)\s*$", local)
-    need(found is not None, "QGA_CLOUDINIT_LOCAL_CONTENT_UNKNOWN")
-    permitted = set(found[1].split(","))
-    need(permitted.issubset({"backup", "iso", "vztmpl", "images", "rootdir", "snippets"}),
-         "QGA_CLOUDINIT_LOCAL_CONTENT_UNEXPECTED")
-    if "snippets" not in permitted:
-        run("/usr/sbin/pvesm", "set", "local", "--content",
-            ",".join(sorted(permitted | {"snippets"})))
+    ensure_local_snippets_storage()
     root = Path("/var/lib/vz/snippets")
     need(not root.is_symlink(), "QGA_CLOUDINIT_SNIPPET_DIR_UNSAFE")
     root.mkdir(mode=0o750, exist_ok=True)
@@ -413,6 +445,49 @@ def old_guest_matches(vmid, site, data, *, managed=False):
     print("MANAGED_VM_IDENTITY=PASS", flush=True)
 
 
+def staged_guest_matches(vmid, data):
+    """Allow continuation of *stopped* partially created Task 80 VM only.
+
+    A failed apply can leave a managed VM with an imported system volume but
+    without cloud-init or PCI assignment. Never interpret a foreign VM or
+    a RUNNING guest missing a controller as a safe partial deployment.
+    """
+    state = config(vmid)
+    need(qm("status", vmid) == "status: stopped",
+         "PARTIAL_MEDIA_VM_MUST_BE_STOPPED")
+    need(state.get("name") == data["name"]
+         and state.get("description") == MANAGED_MEDIA_DESCRIPTION,
+         "PARTIAL_MEDIA_VM_IDENTITY_MISMATCH")
+    need(state.get("lock") is None, "PARTIAL_MEDIA_VM_LOCKED")
+    need(state.get("ostype") == "l26"
+         and state.get("machine") == "q35"
+         and state.get("bios", "seabios") == "seabios"
+         and state.get("net0", "").endswith("bridge=vmbr0")
+         and state.get("scsihw") == "virtio-scsi-single",
+         "PARTIAL_MEDIA_VM_HARDWARE_MISMATCH")
+    for n, expected in (("hostpci0", data["pci"]["gpu"] + ",pcie=1"),
+                        ("hostpci1", data["pci"]["sata_controller"] + ",pcie=1")):
+        need(n not in state or state[n] == expected,
+             "PARTIAL_MEDIA_VM_PCI_MISMATCH_" + n)
+    for key in state:
+        if re.fullmatch(r"(?:scsi|sata|virtio|ide|unused|hostpci)[0-9]+", key):
+            need(key in ("scsi0", "ide2", "unused0", "hostpci0", "hostpci1"),
+                 "PARTIAL_MEDIA_VM_UNEXPECTED_DEVICE_" + key)
+    prefix = "local-lvm:vm-" + str(vmid) + "-disk-"
+    if "scsi0" in state:
+        need(state["scsi0"].startswith(prefix), "PARTIAL_MEDIA_VM_FOREIGN_DISK")
+        need("unused0" not in state, "PARTIAL_MEDIA_VM_EXTRA_DISK")
+    if "unused0" in state:
+        need(state["unused0"].startswith(prefix),
+             "PARTIAL_MEDIA_VM_FOREIGN_IMPORTED_DISK")
+    if "ide2" in state:
+        need(state["ide2"].startswith("local-lvm:cloudinit"),
+             "PARTIAL_MEDIA_VM_FOREIGN_CLOUDINIT")
+    need(qga_cicustom(vmid) in (None, qga_cicustom_expected(vmid)),
+         "PARTIAL_MEDIA_VM_FOREIGN_CICUSTOM")
+    print("PARTIAL_MEDIA_VM=VERIFIED_STOPPED_RESUMABLE", flush=True)
+
+
 def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
     """Exactly one VM lifecycle intent. Never implicitly recreate a VM."""
     need(vm_action in ("create", "recreate", "keep"), "VM_ACTION_INVALID")
@@ -435,6 +510,13 @@ def reconcile_media_vm_lifecycle(vmid, site, data, vm_action, disk_action):
             need(config(vmid).get("name") == data["name"],
                  "MEDIA_VM_RENAME_UNCONFIRMED")
             print("MEDIA_VM=RENAMED_VERIFIED_LEGACY", flush=True)
+        elif qm("status", vmid) == "status: stopped":
+            # A stopped VM must be fully managed or exactly match the narrow
+            # partially provisioned VM state left by this same task.
+            staged_guest_matches(vmid, data)
+        else:
+            old_guest_matches(vmid, site, data, managed=(
+                state.get("description") == MANAGED_MEDIA_DESCRIPTION))
         print("MEDIA_VM=EXISTS_PRESERVED", flush=True)
         return
     managed = state.get("description") == MANAGED_MEDIA_DESCRIPTION

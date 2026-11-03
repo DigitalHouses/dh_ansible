@@ -144,7 +144,10 @@ class GuestLifecycle(unittest.TestCase):
         for raw_action in ("erase", "import"):
             with (patch.object(m.Path, "exists", return_value=True),
                   patch.object(m, "config", return_value={"name": "mediaserver-demo-home"}),
-                  patch.object(m, "qm", side_effect=AssertionError("VM changed"))):
+                  patch.object(m, "qm", side_effect=lambda action, *args: (
+                      "status: running" if action == "status"
+                      else (_ for _ in ()).throw(AssertionError("VM changed")))),
+                  patch.object(m, "old_guest_matches")):
                 with redirect_stdout(io.StringIO()) as output:
                     m.reconcile_media_vm_lifecycle(
                         2238, "demo-home", {"name": "mediaserver-demo-home"}, "keep", raw_action)

@@ -35,10 +35,14 @@ def test_cloudinit_agent_packages_are_commissioned_before_first_vm_start():
         "def qga_running(", 1)[0]
     for required in ("#cloud-config", "qemu-guest-agent", "systemctl",
                      "enable, --now", "instance-id:", "--cicustom",
-                     '"cloudinit", "update"', "pvesm", "snippets"):
+                     '"cloudinit", "update"', "snippets"):
         assert required in vendor
     assert "user=local:snippets" not in vendor
     assert 'Path("/var/lib/vz/snippets")' in vendor
+    helper = script.split("def ensure_local_snippets_storage(", 1)[1].split(
+        "def ensure_qga_cloud_init(", 1)[0]
+    assert '"/usr/sbin/pvesm", "set", "local", "--content"' in helper
+    assert '"config", "local"' not in helper
 
 
 def test_qga_host_key_still_comes_only_from_authenticated_pve_agent():

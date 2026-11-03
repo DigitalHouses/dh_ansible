@@ -14,6 +14,35 @@
 **Правила:** [AGENTS.md](../../AGENTS.md), [стандарт Semaphore](../standards/semaphore-task-design.md), [инженерные принципы](../engineering-principles.md).
 **Статус:** новая controller-scoped реализация, live E2E ожидает проверки.
 
+## №80 · Task #12 · PVE storage config regression (03.11.2026)
+
+**LIVE:** повторная №80 Task #12 (`create + erase`) дошла до
+`MEDIA_VM=ABSENT_CREATE_FRESH`, `VM_CREATED=YES`,
+`IMPORTING_DEBIAN_DISK=START`, затем `MEDIA_DEPLOY=BLOCKED:
+COMMAND_FAILED: pvesm rc=255`. Первопричина — ошибка из PR #154:
+несуществующая команда `pvesm config local`. Корректная конфигурация
+Proxmox находится в `/etc/pve/storage.cfg`; изменения выполняются
+`pvesm set local --content ...`. Новый helper сначала независимо
+читает/проверяет local dir storage и сохраняет все действующие
+типы содержимого, добавляя только `snippets` по необходимости.
+
+При сбое может остаться **остановленная, частично созданная VM2232**
+с `scsi0` или `unused0`, но без законченной настройки Cloud-Init/PCI.
+Режим `keep` допускает возобновление **только** этого управляемого
+состояния: проверяются VMID, имя, DigitalHouses description, состояние
+`stopped`, отсутствие lock, тип аппаратной VM, единственный system
+volume `local-lvm:vm-<vmid>-disk-*`, заданные PCI devices и отсутствие
+посторонних томов. Ветка `create` по-прежнему требует отсутствия VM.
+
+**Без live readback нельзя утверждать**, что VM2232 присутствует,
+каково состояние системного тома и какие сервисы Proxmox работают.
+Стирание SATA HDD в Task #12 не наступило. Перед следующим запуском
+всегда read-only `qm status/config` и общий PVE health audit;
+не удалять VM или USB/SATA данные для «лечения» падения PVE helper.
+После подтверждения наличия управляемой VM применять `keep`;
+выбор `erase` уничтожит содержимое единственного HDD на SATA
+контроллере при достижении guest storage этапа.
+
 ## QEMU Guest Agent · Fresh Bootstrap recovery · 03.11.2026
 
 Реальный №80 Task #11: `create + erase` успешно создала/запустила
