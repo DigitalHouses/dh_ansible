@@ -122,6 +122,24 @@
          | length == 1)
     fail_msg: MEDIA_SATA_DISK_PART_OF_MULTI_VDEV_POOL
 
+- name: Verify direct partition or disk is not mounted outside ZFS
+  ansible.builtin.command:
+    argv: [findmnt, -rn, --source, "{{ item }}"]
+  loop: "{{ media_sata_partitions + [media_sata_disk] }}"
+  register: media_sata_mount_checks
+  changed_when: false
+  failed_when: false
+  when: media_raw_disk_action == 'erase'
+
+- name: Do not erase disks with other active filesystem mounts
+  ansible.builtin.assert:
+    that:
+      - >-
+        media_sata_mount_checks.results
+        | selectattr('rc', 'equalto', 0) | list | length == 0
+    fail_msg: MEDIA_SATA_HAS_ACTIVE_MOUNTS
+  when: media_raw_disk_action == 'erase'
+
 # ERASE ONLY: no old-file-system identification and no second approval.
 - name: Read media service states before explicit erase
   ansible.builtin.service_facts:
@@ -154,24 +172,6 @@
   when:
     - media_raw_disk_action == 'erase'
     - media_sata_active_pools | length == 1
-
-- name: Verify direct partition or disk is not mounted outside ZFS
-  ansible.builtin.command:
-    argv: [findmnt, -rn, --source, "{{ item }}"]
-  loop: "{{ media_sata_partitions + [media_sata_disk] }}"
-  register: media_sata_mount_checks
-  changed_when: false
-  failed_when: false
-  when: media_raw_disk_action == 'erase'
-
-- name: Do not erase disks with other active filesystem mounts
-  ansible.builtin.assert:
-    that:
-      - >-
-        media_sata_mount_checks.results
-        | selectattr('rc', 'equalto', 0) | list | length == 0
-    fail_msg: MEDIA_SATA_HAS_ACTIVE_MOUNTS
-  when: media_raw_disk_action == 'erase'
 
 - name: Wipe only the physical SATA disk and its partitions
   ansible.builtin.command:
