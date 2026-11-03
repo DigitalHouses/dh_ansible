@@ -77,7 +77,6 @@ fi
   --unprivileged 1 --features nesting=1 \
   --net0 "name=eth0,bridge=vmbr0,ip=$RUNNER_CIDR,gw=$GATEWAY" \
   --onboot 1 --startup "order=2" --protection 1 --start 0)
-# Fail the fresh Bootstrap if PVE did not accept the required autostart order.
 pct config "$CTID" | grep -Fxq 'onboot: 1'
 pct config "$CTID" | grep -Fxq 'startup: order=2'
 echo "RUNNER_PVE_BOOT_ORDER=PASS order=2 onboot=1"
