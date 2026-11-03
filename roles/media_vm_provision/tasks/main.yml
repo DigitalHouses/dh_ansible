@@ -90,7 +90,7 @@
     argv: [qm, shutdown, "{{ media_vm.vmid }}", --timeout, '120']
   when:
     - media_vm_action == 'recreate'
-    - media_vm_before_status.stdout == 'status: running'
+    - "media_vm_before_status.stdout == 'status: running'"
 
 - name: Confirm requested VM is stopped before removal
   ansible.builtin.command:
@@ -99,7 +99,7 @@
   changed_when: false
   retries: 20
   delay: 3
-  until: media_vm_stopped.stdout == 'status: stopped'
+  until: "media_vm_stopped.stdout == 'status: stopped'"
   when: media_vm_action == 'recreate'
 
 - name: Remove protection from own VM only for recreate
@@ -391,14 +391,14 @@
   failed_when: false
   when:
     - media_vm_action == 'keep'
-    - media_vm_power.stdout == 'status: running'
+    - "media_vm_power.stdout == 'status: running'"
 
 - name: Reboot kept managed VM once only if first-boot QGA was missing
   ansible.builtin.command:
     argv: [qm, shutdown, "{{ media_vm.vmid }}", --timeout, '120']
   when:
     - media_vm_action == 'keep'
-    - media_vm_power.stdout == 'status: running'
+    - "media_vm_power.stdout == 'status: running'"
     - media_keep_qga_probe.rc | default(0) != 0
     - media_vm_settings.cicustom is not defined
 
@@ -409,10 +409,10 @@
   changed_when: false
   retries: 20
   delay: 3
-  until: media_qga_recovery_stopped.stdout == 'status: stopped'
+  until: "media_qga_recovery_stopped.stdout == 'status: stopped'"
   when:
     - media_vm_action == 'keep'
-    - media_vm_power.stdout == 'status: running'
+    - "media_vm_power.stdout == 'status: running'"
     - media_keep_qga_probe.rc | default(0) != 0
     - media_vm_settings.cicustom is not defined
 
@@ -425,7 +425,7 @@
 - name: Start VM only when stopped
   ansible.builtin.command:
     argv: [qm, start, "{{ media_vm.vmid }}"]
-  when: media_vm_effective_power.stdout == 'status: stopped'
+  when: "media_vm_effective_power.stdout == 'status: stopped'"
 
 - name: Inspect protection after provisioning
   ansible.builtin.command:
@@ -449,5 +449,5 @@
 - name: Require VM running after normal provisioning
   ansible.builtin.assert:
     that:
-      - media_vm_result.stdout == 'status: running'
+      - "media_vm_result.stdout == 'status: running'"
     fail_msg: MEDIA_VM_NOT_RUNNING
