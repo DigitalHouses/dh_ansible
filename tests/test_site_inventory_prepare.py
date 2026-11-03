@@ -15,7 +15,7 @@ def test_task80_verifies_private_site_identity_before_native_pve_apply():
     assert "media_site_repo.json.name == 'site-' ~ site.id" in text
     assert "MEDIA_SITE_MARKER_MISMATCH" in text
     assert "media_site_file.json.sha is match('^[0-9a-f]{40}$')" in text
-    assert "MEDIA_NATIVE_VM_DISK_IDENTITY_OR_APPROVAL_BLOCKED" in text
+    assert "MEDIA_NATIVE_VM_DISK_IDENTITY_INVALID" in text
     assert "MEDIA_PVE_HARDWARE_PREFLIGHT_BLOCKED" in str(plays[1])
 
 
