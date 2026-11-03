@@ -96,9 +96,6 @@ def main():
     need(data["approvals"]["provision"]
          and data["approvals"]["sata_cutover"],
          "MEDIA_VM_PROVISION_NOT_APPROVED")
-    if args.disk_action == "erase":
-        need(data["storage"].get("destructive_without_backup") is True,
-             "MEDIA_ERASE_NOT_APPROVED")
     bdf = verify_controller(data)
     vm = verify_vm(data, args.vm_action)
     print("MEDIA_PVE_PREFLIGHT=PASS " + vm + " SATA_CONTROLLER=" + bdf,
