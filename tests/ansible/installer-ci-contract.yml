@@ -1,0 +1,38 @@
+---
+# Static release-gate checks, executed via stock Ansible, no custom Python test runner.
+- name: Release | Verify pinned Semaphore bootstrap contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir }}/../.."
+    launcher: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/semaphore-launch.sh') }}"
+    builder: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/build-semaphore-launcher.py') }}"
+    installer: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/semaphore-host-install.py') }}"
+    guest: "{{ lookup('ansible.builtin.file', root ~ '/bootstrap/semaphore-guest-install.py') }}"
+    runtime: "{{ lookup('ansible.builtin.file', root ~ '/scripts/dh-task-runner.py') }}"
+  tasks:
+    - name: Require immutable code and private Fleet release pins
+      ansible.builtin.assert:
+        that:
+          - "'__RELEASE_COMMIT__' in launcher"
+          - "'__FLEET_COMMIT__' in launcher"
+          - "'sha256sum -c -' in launcher"
+          - "'--expected-commit' in launcher"
+          - "'--expected-fleet-commit' in launcher"
+          - "'40-character immutable git SHA' in builder"
+          - "'0o700' in builder"
+
+    - name: Verify runtime release checks and service baselines remain intact
+      ansible.builtin.assert:
+        that:
+          - "'CODE_FILES' in installer"
+          - "'fetch_immutable_file' in installer"
+          - "'verify_site_identity' in installer"
+          - "'SEMAPHORE_DEB_SHA256' in guest"
+          - "'Fresh-only installer cannot adopt or overwrite Semaphore' in guest"
+          - "'--expected-commit' in installer"
+          - "'CHECKOUT_SHA_MISMATCH' in runtime"
+          - "'CHECKOUT_DIRTY' in runtime"
+          - "'ANSIBLE_ROLES_PATH' in runtime"
+          - "'StrictHostKeyChecking=yes' not in runtime or 'ANSIBLE_ROLES_PATH' in runtime"
