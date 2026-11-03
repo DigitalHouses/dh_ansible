@@ -16,7 +16,7 @@ def test_private_site_media_accounts_are_validated_before_pve_apply():
     steps = plays[0]["tasks"]
     names = [task["name"] for task in steps]
     assert names.index("Refuse foreign or public site configuration") < names.index(
-        "Parse approved media VM declaration (nonsecret)")
+        "Parse canonical media VM declaration (nonsecret)")
     assert names.index("Validate media file and backup account contracts") < names.index(
         "Register exactly the commissioned PVE root SSH target")
     assert steps[names.index("Validate media file and backup account contracts")][
