@@ -32,7 +32,9 @@ class SiteCredentialsInventoryTest(unittest.TestCase):
         self.assertEqual(
             {x["id"] for x in manual},
             {"github_provision_token", "mqtt_broker_host", "mqtt_username", "mqtt_password",
-             "pve_root_password", "cloudflare_api_token"})
+             "pve_root_password", "pbs_admin_password",
+             "backblaze_b2_key_id", "backblaze_b2_application_key",
+             "cloudflare_api_token"})
         self.assertTrue(all(x["store"] in {
             "variable_group_secret", "variable_group_nonsecret",
             "key_store_login_password"} for x in manual))
