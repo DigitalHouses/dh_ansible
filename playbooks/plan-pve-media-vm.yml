@@ -340,6 +340,7 @@
           -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/dh_media_guest_known_hosts
         media_owner_slug: "{{ site.owner_slug }}"
+        media80_native: true
         media_sata_pci_vendor: "{{ hostvars['media_pve'].media_sata_pci_vendor }}"
         media_sata_pci_device: "{{ hostvars['media_pve'].media_sata_pci_device }}"
         site: "{{ site }}"
