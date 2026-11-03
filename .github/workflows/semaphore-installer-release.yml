@@ -41,15 +41,21 @@ jobs:
           printf '%s  %s\n' 56c4ac99b712b3fde11a7d600a0789870a3b945bab0c12f41d91864e0aeb85b8 "$WORK/semaphore.deb" | sha256sum -c -
           sudo dpkg -i "$WORK/semaphore.deb"
           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 1 -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -subj "/CN=semaphore-ci" -addext "subjectAltName=IP:127.0.0.1"
-          python3 - "$WORK" <<'PY'
-          import base64,json,os,sys,pathlib
-          p=pathlib.Path(sys.argv[1])
-          key=lambda:base64.b64encode(os.urandom(32)).decode()
-          config={"dialect":"sqlite","sqlite":{"host":str(p/"database.sqlite")},"port":":3000","interface":"127.0.0.1","web_host":"https://127.0.0.1:3000","tmp_path":str(p/"tasks"),"cookie_hash":key(),"cookie_encryption":key(),"access_key_encryption":key(),"tls":{"enabled":True,"cert_file":str(p/"tls.crt"),"key_file":str(p/"tls.key")}}
-          (p/"tasks").mkdir()
-          (p/"config.json").write_text(json.dumps(config))
-          (p/"admin-password").write_text("ci-temporary-password")
-          PY
+          mkdir -p "$WORK/tasks"
+          COOKIE_HASH=$(openssl rand -base64 32 | tr -d '\n')
+          COOKIE_ENCRYPTION=$(openssl rand -base64 32 | tr -d '\n')
+          ACCESS_ENCRYPTION=$(openssl rand -base64 32 | tr -d '\n')
+          jq -n --arg db "$WORK/database.sqlite" --arg tmp "$WORK/tasks" \
+            --arg cookie_hash "$COOKIE_HASH" --arg cookie_enc "$COOKIE_ENCRYPTION" \
+            --arg access_enc "$ACCESS_ENCRYPTION" \
+            --arg cert "$WORK/tls.crt" --arg key "$WORK/tls.key" \
+            '{"dialect":"sqlite","sqlite":{"host":$db},"port":":3000",
+              "interface":"127.0.0.1","web_host":"https://127.0.0.1:3000",
+              "tmp_path":$tmp,"cookie_hash":$cookie_hash,
+              "cookie_encryption":$cookie_enc,"access_key_encryption":$access_enc,
+              "tls":{"enabled":true,"cert_file":$cert,"key_file":$key}}' > "$WORK/config.json"
+          printf '%s' 'ci-temporary-password' > "$WORK/admin-password"
+          chmod 0600 "$WORK/config.json" "$WORK/admin-password"
           semaphore migrate --config "$WORK/config.json"
           semaphore users add --config "$WORK/config.json" --admin --login admin --email ci@localhost --name "CI Admin" --password ci-temporary-password
           semaphore server --config "$WORK/config.json" > "$WORK/server.log" 2>&1 &
