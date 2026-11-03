@@ -51,7 +51,7 @@ def test_hardware_preflight_is_in_front_of_deployment():
     ast.parse(source)
     for required in ("SATA_CONTROLLER_NOT_ATTACHED",
                      "SATA_CONTROLLER_NOT_AHCI",
-                     "MEDIA_VM_PROVISION_NOT_APPROVED",
+                     "MEDIA_VM_NOT_FOUND",
                      "TARGET_VMID_OCCUPIED",
                      "MANAGED_MEDIA_VM_IDENTITY_MISMATCH"):
         assert required in source
@@ -64,3 +64,23 @@ def test_media_deploy_uses_commissioned_native_runner_key():
     assert '"/var/lib/semaphore/.ssh/dh_pve_admin_ed25519"' in code
     assert 'pct("ssh-keygen", "-y"' in code
     assert '"--apply"' in code
+
+
+def test_task80_operator_selection_needs_no_second_approval_or_legacy_nfs():
+    """Survey is the authorization; technical resource checks remain active."""
+    play = PLAY.read_text(encoding="utf-8")
+    preflight = PREFLIGHT.read_text(encoding="utf-8")
+    deploy = DEPLOY.read_text(encoding="utf-8")
+    accounts = (ROOT / "playbooks/media-accounts-preflight.yml").read_text(encoding="utf-8")
+    guest = (ROOT / "roles/media_guest_setup/tasks/main.yml").read_text(encoding="utf-8")
+    catalog = (ROOT / "catalog/semaphore-tasks.json").read_text(encoding="utf-8")
+    for source in (play, preflight, deploy):
+        assert "data[\\\"approvals\\\"]" not in source
+        assert "media_vm.approvals" not in source
+    assert "MEDIA_PVE_PREFLIGHT=PASS" in preflight
+    assert "SATA_CONTROLLER_NOT_AHCI" in preflight
+    assert "SATA_MULTIPLE_DISKS" in (ROOT / "roles/media_guest_setup/files/dh-media-storage.py").read_text()
+    assert "media_vm.backup_export" not in accounts
+    assert "when: media_vm.backup_export is defined" in guest
+    assert "после строгой проверки WWN" not in catalog
+    assert "site.owner_slug ~ '_admin'" in accounts
