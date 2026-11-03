@@ -161,6 +161,20 @@
           - "'media_site_repo.json.private == true' in media80_source"
           - "'media_site_file.json.sha is match' in media80_source"
 
+    - name: Require native guest configuration directory before application credential bootstrap
+      ansible.builtin.assert:
+        that:
+          - >-
+            'when' not in (media80_guest_tasks | selectattr('name', 'equalto',
+            'Create site storage configuration directory') | first)
+          - >-
+            (media80_guest_tasks | selectattr('name', 'equalto',
+            'Create site storage configuration directory') | first)
+            ['ansible.builtin.file'].path == '/etc/digitalhouses'
+          - >-
+            (media80_guest_tasks | map(attribute='name') | list).index('Create site storage configuration directory') <
+            (media80_guest_tasks | map(attribute='name') | list).index('Commission persistent media application administrator passwords')
+
     - name: Verify guest packages, pool mode, and Plex validation remain present
       ansible.builtin.assert:
         that:
