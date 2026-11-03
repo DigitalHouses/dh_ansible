@@ -881,9 +881,11 @@
 - name: Publish local media portal and LAN discovery
   ansible.builtin.import_tasks: discovery_portal.yml
 
-- name: Keep legacy NFS export only for an explicitly configured site
+- name: Preserve legacy NFS export only for non-80 callers
   ansible.builtin.import_tasks: nfs_backups.yml
-  when: media_vm.backup_export is defined
+  when:
+    - media_vm.backup_export is defined
+    - not (media80_native | default(false) | bool)
 
 - name: Stage local root-only customer password recovery tools
   ansible.builtin.import_tasks: password_rotation.yml
