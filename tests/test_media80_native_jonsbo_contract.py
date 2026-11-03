@@ -33,7 +33,7 @@ def test_native_media80_has_four_phase_site_and_target_flow():
                      "StrictHostKeyChecking=yes", "site-" + "{{ site.id }}",
                      "/contents/.digitalhouses/site.json",
                      "DH_GITHUB_PROVISION_TOKEN", "DH_MQTT_PASSWORD",
-                     "media_sata_pci_vendor", "destructive_without_backup",
+                     "media_sata_pci_vendor", "media_sata_pci_device",
                      "ansible.builtin.script", "ansible.builtin.wait_for_connection"):
         assert required in source
 
