@@ -2,8 +2,8 @@
 # Task 07 companion: native Semaphore Key Store and repository registration.
 # Preconditions: the exact private GitHub repository and site identity marker
 # have already passed the readback checks in provision-site-repository.yml.
-# Private material is generated in process memory, then imported to native
-# Semaphore Key Store; never written to Git or a local file.
+# Ed25519 private material is generated in Ansible process memory, then
+# imported into the native Semaphore Key Store; never persisted in Git.
 - name: Read site-local Semaphore API credential
   ansible.builtin.slurp:
     src: /root/dh-semaphore-catalog-api-token
@@ -72,9 +72,9 @@
   changed_when: false
   no_log: true
 
-# Clean runner: Semaphore has no key, private site Git may have the former
-# public key. Before rotating, verify the exact site-owned read-only deploy key.
-- name: Inspect GitHub deploy keys before permitting fresh runner recovery
+# A fresh runner has no Semaphore key, but the verified private site repo
+# may still hold the old public key. Re-enroll only exactly-owned read-only keys.
+- name: Inspect existing deploy keys before permitting fresh runner recovery
   ansible.builtin.uri:
     url: "{{ dh_git_api }}/keys?per_page=100"
     method: GET
@@ -83,20 +83,24 @@
   changed_when: false
   no_log: true
 
-- name: Classify previous public key and designated read-only deploy key
+- name: Classify prior site public and deploy key
   ansible.builtin.set_fact:
     dh_site_old_public_key: "{{ (dh_site_pub_before.json.content | b64decode | trim) if dh_site_pub_before.status == 200 else '' }}"
     dh_site_old_deploy_keys: "{{ dh_site_keys_at_recovery.json | selectattr('title', 'equalto', dh_site_deploy_title) | list }}"
     dh_site_recover_fresh_runner: "{{ dh_site_named_keys | length == 0 and dh_site_pub_before.status == 200 }}"
   no_log: true
 
-- name: Refuse unverified or ambiguous previous deploy-key ownership
+- name: Refuse unverified, foreign or ambiguous earlier deploy keys
   ansible.builtin.assert:
     that:
       - dh_site_keys_at_recovery.json | length < 100
       - dh_site_old_deploy_keys | length <= 1
       - (dh_site_named_keys | length == 0) or dh_site_pub_before.status == 200
-      - dh_site_pub_before.status == 404 or dh_site_old_public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+
+      - dh_site_pub_before.status == 404 or dh_site_old_public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+$')
+      - (dh_site_old_deploy_keys | length == 0) or dh_site_old_deploy_keys[0].read_only == true
+      - (dh_site_old_deploy_keys | length == 0) or dh_site_old_deploy_keys[0].key.split()[:2] == dh_site_old_public_key.split()[:2]
+    fail_msg: GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION
+  no_log: true
 
 - name: Generate a fresh Ed25519 private key in Ansible process memory only
   ansible.builtin.command:
@@ -218,8 +222,20 @@
       - dh_site_github_keys_before.json | length < 100
       - dh_site_named_deploy_keys | length <= 1
       - (dh_site_named_deploy_keys | length == 0) or dh_site_named_deploy_keys[0].read_only == true
-      - (dh_site_named_deploy_keys | length == 0) or dh_site_named_deploy_keys[0].key.split()[:2] == dh_site_public_key.split()[:2]
+      - (dh_site_named_deploy_keys | length == 0) or dh_site_named_deploy_keys[0].key.split()[:2] == (dh_site_old_public_key if dh_site_recover_fresh_runner else dh_site_public_key).split()[:2]
     fail_msg: GITHUB_SITE_DEPLOY_KEY_DRIFT
+  no_log: true
+
+# GitHub deploy keys are immutable. Retire only this exact verified prior
+# site key after the new Semaphore/private-public pair has been persisted.
+- name: Revoke only the verified former read-only deploy key
+  ansible.builtin.uri:
+    url: "{{ dh_git_api }}/keys/{{ dh_site_named_deploy_keys[0].id }}"
+    method: DELETE
+    status_code: 204
+  when:
+    - dh_site_recover_fresh_runner
+    - dh_site_named_deploy_keys | length == 1
   no_log: true
 
 - name: Register one read-only deploy key without repository write access
@@ -233,7 +249,7 @@
       read_only: true
     status_code: [201, 403, 422]
   register: dh_site_deploy_key_create
-  when: dh_site_named_deploy_keys | length == 0
+  when: dh_site_named_deploy_keys | length == 0 or dh_site_recover_fresh_runner
   no_log: true
 
 # GitHub response may contain public-key material. Never print its message
@@ -263,341 +279,7 @@
           | intersect(['key', 'title', 'read_only'])
         ) | join(',')
       }}.
-  when: dh_site_named_deploy_keys | length == 0
-
-- name: Read back registered GitHub deploy key
-  ansible.builtin.uri:
-    url: "{{ dh_git_api }}/keys?per_page=100"
-    method: GET
-    status_code: 200
-  register: dh_site_github_keys_after
-  changed_when: false
-  no_log: true
-
-- name: Select registered deploy key for verification
-  ansible.builtin.set_fact:
-    dh_site_registered_deploy_keys: "{{ dh_site_github_keys_after.json | selectattr('title', 'equalto', dh_site_deploy_title) | list }}"
-  no_log: true
-
-- name: Require exactly one matching read-only deploy key
-  ansible.builtin.assert:
-    that:
-      - dh_site_registered_deploy_keys | length == 1
-      - dh_site_registered_deploy_keys[0].read_only == true
-      - dh_site_registered_deploy_keys[0].key.split()[:2] == dh_site_public_key.split()[:2]
-    fail_msg: GITHUB_SITE_READ_ONLY_DEPLOY_KEY_NOT_VERIFIED
-  no_log: true
-
-- name: Read Semaphore repositories already owned by this site project
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories?sort=name&order=asc"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 200
-  register: dh_site_semaphore_repos_before
-  changed_when: false
-  no_log: true
-
-- name: Find existing site data repository and all claims on the SSH URL
-  ansible.builtin.set_fact:
-    dh_site_named_semaphore_repos: "{{ dh_site_semaphore_repos_before.json | selectattr('name', 'equalto', dh_site_semaphore_repo_name) | list }}"
-    dh_site_url_semaphore_repos: "{{ dh_site_semaphore_repos_before.json | selectattr('git_url', 'equalto', dh_site_git_ssh_url) | list }}"
-  no_log: true
-
-- name: Reject foreign, duplicate or modified Semaphore repository bindings
-  ansible.builtin.assert:
-    that:
-      - dh_site_named_semaphore_repos | length <= 1
-      - dh_site_url_semaphore_repos | length <= 1
-      - (dh_site_named_semaphore_repos | length == 0) == (dh_site_url_semaphore_repos | length == 0)
-      - (dh_site_named_semaphore_repos | length == 0) or (dh_site_named_semaphore_repos[0].id | int == dh_site_url_semaphore_repos[0].id | int)
-      - (dh_site_named_semaphore_repos | length == 0) or (dh_site_named_semaphore_repos[0].git_url == dh_site_git_ssh_url)
-      - (dh_site_named_semaphore_repos | length == 0) or (dh_site_named_semaphore_repos[0].git_branch == 'main')
-      - (dh_site_named_semaphore_repos | length == 0) or (dh_site_named_semaphore_repos[0].ssh_key_id | int == dh_site_ssh_key_id | int)
-      - (dh_site_named_semaphore_repos | length == 0) or (dh_site_named_semaphore_repos[0].project_id | int == dh_site_matching_projects[0].id | int)
-    fail_msg: SEMAPHORE_SITE_REPOSITORY_BINDING_DRIFT
-  no_log: true
-
-- name: Register private site repository in Semaphore with its read-only SSH key
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    body_format: json
-    body:
-      project_id: "{{ dh_site_matching_projects[0].id }}"
-      name: "{{ dh_site_semaphore_repo_name }}"
-      git_url: "{{ dh_site_git_ssh_url }}"
-      git_branch: main
-      ssh_key_id: "{{ dh_site_ssh_key_id }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 201
-  when: dh_site_named_semaphore_repos | length == 0
-  no_log: true
-
-- name: Read back Semaphore repository binding
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories?sort=name&order=asc"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 200
-  register: dh_site_semaphore_repos_after
-  changed_when: false
-  no_log: true
-
-- name: Select private repository binding after registration
-  ansible.builtin.set_fact:
-    dh_site_registered_semaphore_repos: "{{ dh_site_semaphore_repos_after.json | selectattr('name', 'equalto', dh_site_semaphore_repo_name) | list }}"
-  no_log: true
-
-- name: Verify exactly one private site repository binding with correct read-only identity
-  ansible.builtin.assert:
-    that:
-      - dh_site_registered_semaphore_repos | length == 1
-      - dh_site_registered_semaphore_repos[0].project_id | int == dh_site_matching_projects[0].id | int
-      - dh_site_registered_semaphore_repos[0].git_url == dh_site_git_ssh_url
-      - dh_site_registered_semaphore_repos[0].git_branch == 'main'
-      - dh_site_registered_semaphore_repos[0].ssh_key_id | int == dh_site_ssh_key_id | int
-    fail_msg: SEMAPHORE_SITE_REPOSITORY_READBACK_FAILED
-  no_log: true
-
-# These are official Semaphore repository endpoints, not custom git
-# subprocesses. /branches uses git ls-remote via the saved SSH Key Store
-# identity. /playbooks executes CloneOrPull in Semaphore's scratch checkout.
-# A 200 + a valid response from both proves the exact bound repository can
-# be read by Semaphore itself. On failure, emit only HTTP status.
-- name: Probe private site SSH remote branches using Semaphore native Git client
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories/{{ dh_site_registered_semaphore_repos[0].id }}/branches"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 200
-    timeout: 45
-  register: dh_site_native_branches
-  changed_when: false
-  failed_when: false
-  no_log: true
-
-- name: Require authenticated SSH ls-remote from Semaphore
-  ansible.builtin.assert:
-    that:
-      - dh_site_native_branches.status | default(0) == 200
-      - dh_site_native_branches.json is sequence
-      - dh_site_native_branches.json is not string
-      - "'main' in dh_site_native_branches.json"
-    fail_msg: >-
-      SEMAPHORE_PRIVATE_SITE_GIT_LS_REMOTE_BLOCKED:
-      HTTP {{ dh_site_native_branches.status | default(0) | int }};
-      inspect native Semaphore Git SSH host-key trust/connectivity.
-  no_log: false
-
-- name: Probe actual private site SSH checkout using Semaphore native clone
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/repositories/{{ dh_site_registered_semaphore_repos[0].id }}/playbooks?branch=main&app=ansible"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 200
-    timeout: 90
-  register: dh_site_native_clone
-  changed_when: false
-  failed_when: false
-  no_log: true
-
-- name: Require successful Semaphore Git CloneOrPull using the site deploy key
-  ansible.builtin.assert:
-    that:
-      - dh_site_native_clone.status | default(0) == 200
-      - dh_site_native_clone.json is sequence
-      - dh_site_native_clone.json is not string
-    fail_msg: >-
-      SEMAPHORE_PRIVATE_SITE_GIT_CLONE_BLOCKED:
-      HTTP {{ dh_site_native_clone.status | default(0) | int }};
-      check the registered SSH key and pinned github.com host identity.
-  no_log: false
-
-- name: Confirm read-only private repository access and native Git checkout
-  ansible.builtin.set_fact:
-    dh_site_repository_access_status: VERIFIED_NATIVE_SSH_CLONE
-)
-      - (dh_site_old_deploy_keys | length == 0) or dh_site_old_deploy_keys[0].read_only == true
-      - (dh_site_old_deploy_keys | length == 0) or dh_site_old_deploy_keys[0].key.split()[:2] == dh_site_old_public_key.split()[:2]
-    fail_msg: GITHUB_SITE_ED25519_KEY_PAIR_INCOMPLETE_REFUSE_ROTATION
-  no_log: true
-
-- name: Generate a fresh Ed25519 private key in Ansible process memory only
-  ansible.builtin.command:
-    argv:
-      - "{{ ansible_playbook_python }}"
-      - "{{ playbook_dir }}/../scripts/generate-site-git-ed25519.py"
-  register: dh_site_key_material
-  changed_when: true
-  when: dh_site_named_keys | length == 0
-  no_log: true
-
-- name: Confirm generated key material is Ed25519 before storing it
-  ansible.builtin.assert:
-    that:
-      - (dh_site_key_material.stdout | from_json).private_key is search('BEGIN OPENSSH PRIVATE KEY')
-      - (dh_site_key_material.stdout | from_json).public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+$')
-    fail_msg: GITHUB_SITE_ED25519_KEYGEN_INVALID
-  when: dh_site_named_keys | length == 0
-  no_log: true
-
-- name: Store Ed25519 SSH private key inside native Semaphore Key Store
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/keys"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    body_format: json
-    body:
-      name: "{{ dh_site_key_name }}"
-      type: ssh
-      project_id: "{{ dh_site_matching_projects[0].id }}"
-      ssh:
-        login: git
-        passphrase: ""
-        private_key: "{{ (dh_site_key_material.stdout | from_json).private_key }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 201
-  register: dh_site_key_created
-  when: dh_site_named_keys | length == 0
-  no_log: true
-
-- name: Commit only the nonsecret public key as site configuration
-  ansible.builtin.uri:
-    url: "{{ dh_git_api }}/contents/{{ dh_site_public_file }}"
-    method: PUT
-    body_format: json
-    body:
-      message: "Record site-scoped read-only deploy public key"
-      branch: "{{ dh_git_repo.json.default_branch }}"
-      content: "{{ ((dh_site_key_material.stdout | from_json).public_key ~ '\n') | b64encode }}"
-    status_code: 201
-  when: dh_site_pub_before.status == 404
-  no_log: true
-
-- name: Select immutable native Semaphore Ed25519 Key Store identity
-  ansible.builtin.set_fact:
-    dh_site_ssh_key_id: >-
-      {{
-        (dh_site_key_created.json.id if (dh_site_named_keys | length == 0)
-         else dh_site_named_keys[0].id) | int
-      }}
-  no_log: true
-
-- name: Read saved SSH key metadata without exposing its private part
-  ansible.builtin.uri:
-    url: "{{ dh_site_semaphore_api }}/project/{{ dh_site_matching_projects[0].id }}/keys/{{ dh_site_ssh_key_id }}"
-    method: GET
-    headers:
-      Authorization: "Bearer {{ dh_site_semaphore_token.content | b64decode | trim }}"
-    ca_path: /etc/semaphore/tls.crt
-    status_code: 200
-  register: dh_site_key_readback
-  changed_when: false
-  no_log: true
-
-- name: Read back site-owned public key from the exact private GitHub repository
-  ansible.builtin.uri:
-    url: "{{ dh_git_api }}/contents/{{ dh_site_public_file }}"
-    method: GET
-    status_code: 200
-  register: dh_site_pub_after
-  changed_when: false
-  no_log: true
-
-- name: Resolve nonsecret public SSH key and validate persisted identity
-  ansible.builtin.set_fact:
-    dh_site_public_key: "{{ dh_site_pub_after.json.content | b64decode | trim }}"
-  no_log: true
-
-- name: Verify native Semaphore SSH identity and valid Ed25519 public key
-  ansible.builtin.assert:
-    that:
-      - dh_site_key_readback.json.name == dh_site_key_name
-      - dh_site_key_readback.json.type == 'ssh'
-      - dh_site_key_readback.json.project_id | int == dh_site_matching_projects[0].id | int
-      - dh_site_public_key is match('^ssh-ed25519 [A-Za-z0-9+/=]+$')
-      - (dh_site_named_keys | length > 0) or dh_site_public_key == (dh_site_key_material.stdout | from_json).public_key
-    fail_msg: GITHUB_SITE_ED25519_PUBLIC_KEY_NOT_VERIFIED
-  no_log: true
-
-- name: Read current deploy keys of the exact private GitHub repository
-  ansible.builtin.uri:
-    url: "{{ dh_git_api }}/keys?per_page=100"
-    method: GET
-    status_code: 200
-  register: dh_site_github_keys_before
-  changed_when: false
-  no_log: true
-
-- name: Select the designated read-only GitHub deploy key
-  ansible.builtin.set_fact:
-    dh_site_named_deploy_keys: "{{ dh_site_github_keys_before.json | selectattr('title', 'equalto', dh_site_deploy_title) | list }}"
-  no_log: true
-
-- name: Refuse an ambiguous or mismatched existing GitHub deploy key
-  ansible.builtin.assert:
-    that:
-      - dh_site_github_keys_before.json | length < 100
-      - dh_site_named_deploy_keys | length <= 1
-      - (dh_site_named_deploy_keys | length == 0) or dh_site_named_deploy_keys[0].read_only == true
-      - (dh_site_named_deploy_keys | length == 0) or dh_site_named_deploy_keys[0].key.split()[:2] == dh_site_public_key.split()[:2]
-    fail_msg: GITHUB_SITE_DEPLOY_KEY_DRIFT
-  no_log: true
-
-- name: Register one read-only deploy key without repository write access
-  ansible.builtin.uri:
-    url: "{{ dh_git_api }}/keys"
-    method: POST
-    body_format: json
-    body:
-      title: "{{ dh_site_deploy_title }}"
-      key: "{{ dh_site_public_key }}"
-      read_only: true
-    status_code: [201, 403, 422]
-  register: dh_site_deploy_key_create
-  when: dh_site_named_deploy_keys | length == 0
-  no_log: true
-
-# GitHub response may contain public-key material. Never print its message
-# or original response; report only predefined HTTP statuses and safe codes.
-- name: Report sanitized GitHub deploy-key registration failure
-  ansible.builtin.assert:
-    that:
-      - dh_site_deploy_key_create.status | default(0) == 201
-    fail_msg: >-
-      GITHUB_DEPLOY_KEY_CREATION_BLOCKED:
-      HTTP {{ dh_site_deploy_key_create.status | default(0) | int }};
-      codes={{
-        (
-          (dh_site_deploy_key_create.json.errors | default([]))
-          | selectattr('code', 'defined')
-          | map(attribute='code')
-          | list
-          | intersect(['missing', 'missing_field', 'invalid', 'already_exists', 'unprocessable', 'custom'])
-        ) | join(',')
-      }};
-      fields={{
-        (
-          (dh_site_deploy_key_create.json.errors | default([]))
-          | selectattr('field', 'defined')
-          | map(attribute='field')
-          | list
-          | intersect(['key', 'title', 'read_only'])
-        ) | join(',')
-      }}.
-  when: dh_site_named_deploy_keys | length == 0
+  when: dh_site_named_deploy_keys | length == 0 or dh_site_recover_fresh_runner
 
 - name: Read back registered GitHub deploy key
   ansible.builtin.uri:
