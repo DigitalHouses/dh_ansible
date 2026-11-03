@@ -11,7 +11,7 @@
     media_guest_sata_controllers: >-
       {{ media_guest_pci.stdout | lower
          | regex_findall('(?m)^([0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7])\s+0106:\s+'
-           ~ media_sata_pci_vendor[2:] ~ ':' ~ media_sata_pci_device[2:] ~ '\b') }}
+           ~ media_sata_pci_vendor[2:] ~ ':' ~ media_sata_pci_device[2:] ~ '(?:\s|$)') }}
 
 - name: Require exactly one matching AHCI controller
   ansible.builtin.assert:
@@ -108,7 +108,7 @@
       {{ media_active_pool_statuses.results | default([])
          | selectattr('stdout', 'search',
              '(?m)^\s+' ~ (media_sata_disk | regex_escape)
-             ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+             ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)(?:\s|$)')
          | list }}
 
 - name: Require no multi-vdev or competing active pool on target
@@ -118,7 +118,7 @@
       - >-
         media_sata_active_pools | length == 0 or
         (media_sata_active_pools[0].stdout
-         | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+         | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)(?:\s|$)')
          | length == 1)
     fail_msg: MEDIA_SATA_DISK_PART_OF_MULTI_VDEV_POOL
 
@@ -249,11 +249,11 @@
       - >-
         media_target_zpool_status.stdout
         | regex_findall('(?m)^\s+' ~ (media_sata_disk | regex_escape)
-                         ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+                         ~ '(?:[0-9]+)?\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)(?:\s|$)')
         | length == 1
       - >-
         media_target_zpool_status.stdout
-        | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)\b')
+        | regex_findall('(?m)^\s+/dev/\S+\s+(?:ONLINE|DEGRADED|OFFLINE|FAULTED|UNAVAIL|REMOVED)(?:\s|$)')
         | length == 1
     fail_msg: MEDIA_ZFS_POOL_ON_WRONG_DISK
 
