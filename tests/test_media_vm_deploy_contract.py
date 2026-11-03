@@ -222,7 +222,7 @@ def test_media_native_apply_cannot_bypass_site_and_hardware_preflight():
     first = plays[0]["tasks"]
     names = [step["name"] for step in first]
     assert names.index("Refuse foreign or public site configuration") < names.index(
-        "Require specific declared VM, hardware, pool and network boundaries")
+        "Require declared VM, hardware, pool and network boundaries")
     assert "media_vm.network.static_ipv4_verified | bool" in str(first)
     steps = plays[1]["tasks"]
     names = [step["name"] for step in steps]
