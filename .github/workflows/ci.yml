@@ -87,6 +87,8 @@ jobs:
 
       - name: Validate Media 80 Ansible syntax before legacy regression tests
         run: ansible-playbook --syntax-check -i tests/fixtures/syntax_inventory.yml playbooks/plan-pve-media-vm.yml
+      - name: Verify native Media 80 actions and no unintended Python executor
+        run: ansible-playbook -i localhost, -c local tests/ansible/media80-native-contract.yml
 
       - name: Validate repository policies
         # These integration fixtures exercise root-owned 0600 files and root-only
