@@ -109,15 +109,17 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         sync(api, PATH, target, apply=True)
         self.assertEqual(len(api.writes), 1)
 
-    def test_live_five_field_survey_upgrades_to_six_without_losing_history(self):
+    def test_live_six_field_survey_upgrades_to_nine_without_losing_history(self):
         api = FakeTemplates()
         desired = desired_from(api)
         api.current["name"] = TASK05["title"]
         api.current["playbook"] = TASK05["playbook"]
         original = [field for field in TASK05["survey_vars"]
-                    if field["name"] != "DH_INPUT_MQTT_BROKER_HOST"]
-        self.assertEqual(len(original), 5)
-        self.assertEqual(len(desired["survey_vars"]), 6)
+                    if field["name"] not in {"DH_INPUT_PBS_ADMIN_PASSWORD",
+                                             "DH_INPUT_B2_KEY_ID",
+                                             "DH_INPUT_B2_APPLICATION_KEY"}]
+        self.assertEqual(len(original), 6)
+        self.assertEqual(len(desired["survey_vars"]), 9)
         api.current["survey_vars"] = original
         sync = SEEDER["sync_existing_template"]
         sync(api, PATH, desired, apply=False)
@@ -130,7 +132,7 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         sync(api, PATH, desired, apply=True)
         self.assertEqual(len(api.writes), 1)
 
-    def test_normalized_api_post_write_proves_six_fields_and_keeps_history(self):
+    def test_normalized_api_post_write_proves_nine_fields_and_keeps_history(self):
         api = NormalizingTemplateAPI()
         desired = desired_from(api)
         api.current["name"] = TASK05["title"]
@@ -138,12 +140,14 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         api.current["survey_vars"] = [
             {**f, "values": None, "default": None}
             for f in TASK05["survey_vars"]
-            if f["name"] != "DH_INPUT_MQTT_BROKER_HOST"
+            if f["name"] not in {"DH_INPUT_PBS_ADMIN_PASSWORD",
+                                 "DH_INPUT_B2_KEY_ID",
+                                 "DH_INPUT_B2_APPLICATION_KEY"}
         ]
         sync = SEEDER["sync_existing_template"]
         sync(api, PATH, desired, apply=True)
         self.assertEqual(len(api.writes), 1)
-        self.assertEqual(len(api.current["survey_vars"]), 6)
+        self.assertEqual(len(api.current["survey_vars"]), 9)
         self.assertEqual(api.current["id"], 41)
         self.assertEqual(api.current["task_id"], 123456)
         self.assertTrue(SEEDER["equivalent_task05_survey"](
@@ -167,18 +171,35 @@ class NativeCatalogMigrationTest(unittest.TestCase):
         self.assertEqual(api.current["id"], 41)
         self.assertEqual(api.current["task_id"], 123456)
 
-    def test_five_field_survey_drift_blocks_mqtt_host_append(self):
+    def test_existing_survey_drift_blocks_new_credentials(self):
         api = FakeTemplates()
         desired = desired_from(api)
         api.current["name"] = TASK05["title"]
         api.current["playbook"] = TASK05["playbook"]
         original = [field.copy() for field in TASK05["survey_vars"]
-                    if field["name"] != "DH_INPUT_MQTT_BROKER_HOST"]
-        original[2]["type"] = "text"  # password must remain hidden
+                    if field["name"] not in {"DH_INPUT_PBS_ADMIN_PASSWORD",
+                                              "DH_INPUT_B2_KEY_ID",
+                                              "DH_INPUT_B2_APPLICATION_KEY"}]
+        original[3]["type"] = "text"  # MQTT password must remain hidden
         api.current["survey_vars"] = original
         with self.assertRaisesRegex(SEEDER["Blocked"], "survey"):
             SEEDER["sync_existing_template"](api, PATH, desired, apply=True)
         self.assertEqual(api.writes, [])
+
+    def test_seven_field_intermediate_pbs_admin_survey_upgrades_to_nine(self):
+        api = FakeTemplates()
+        desired = desired_from(api)
+        api.current["name"] = TASK05["title"]
+        api.current["playbook"] = TASK05["playbook"]
+        api.current["survey_vars"] = [
+            field for field in TASK05["survey_vars"]
+            if field["name"] not in {"DH_INPUT_B2_KEY_ID", "DH_INPUT_B2_APPLICATION_KEY"}
+        ]
+        SEEDER["sync_existing_template"](api, PATH, desired, apply=True)
+        self.assertEqual(len(api.current["survey_vars"]), 9)
+        self.assertEqual(api.current["id"], 41)
+        self.assertEqual(api.current["task_id"], 123456)
+        self.assertEqual(len(api.writes), 1)
 
     def test_existing_old_and_new_names_fail_closed(self):
         api = FakeTemplates()
