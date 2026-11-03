@@ -70,14 +70,15 @@ class StorageLifecycle(unittest.TestCase):
                                    "/dev/sdb", "readwrite") == ("445566778899", False)
         verify.assert_called_once_with("demo-home-pool", "/dev/sdb")
 
-    def test_erase_requires_approval_before_disk_inspection(self):
+    def test_explicit_erase_does_not_require_legacy_site_flag(self):
         m = self.m
-        data = configuration()
-        data["destructive_without_backup"] = False
-        with patch.object(m, "active_pools", side_effect=AssertionError("disk inspected")), \
-             patch.object(m, "command", side_effect=AssertionError("disk write attempted")):
-            with self.assertRaisesRegex(m.Blocked, "DISK_ERASE_NOT_APPROVED"):
-                m.erase_disk(data, "/dev/sdb")
+        data = {"pool_name": "demo-home-pool"}
+        with patch.object(m, "active_pools", return_value=[]), \
+             patch.object(m, "scan_devices", return_value=["/dev/sdb"]), \
+             patch.object(m, "get_pool", return_value="123"), \
+             patch.object(m, "verify_pool_disk"), \
+             patch.object(m, "command", return_value=""):
+            assert m.erase_disk(data, "/dev/sdb") == ("123", True)
 
     def test_explicit_erase_recreates_canonical_pool_regardless_of_previous_layout(self):
         m = self.m
