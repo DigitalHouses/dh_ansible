@@ -32,17 +32,20 @@ def test_native_survey_has_no_default_or_choices():
     item05 = next(x for x in tasks if x["title"] == "05-Ввести credentials объекта")
     item06 = next(x for x in tasks if x["title"] == "06-Проверить credentials объекта")
     fields = item05["survey_vars"]
-    assert len(fields) == 6
+    assert len(fields) == 9
     assert [f["name"] for f in fields] == [
         "DH_INPUT_GITHUB_PROVISION_TOKEN",
         "DH_INPUT_MQTT_BROKER_HOST",
         "DH_INPUT_MQTT_USERNAME",
         "DH_INPUT_MQTT_PASSWORD",
         "DH_INPUT_PVE_ROOT_PASSWORD",
+        "DH_INPUT_PBS_ADMIN_PASSWORD",
+        "DH_INPUT_B2_KEY_ID",
+        "DH_INPUT_B2_APPLICATION_KEY",
         "DH_INPUT_CLOUDFLARE_API_TOKEN",
     ]
     assert [f["type"] for f in fields] == [
-        "secret", "text", "text", "secret", "secret", "secret",
+        "secret", "text", "text", "secret", "secret", "secret", "secret", "secret", "secret",
     ]
     assert all(f["target"] == "env" and f["required"] is False and f["values"] == []
                and "default" not in f and "default_value" not in f

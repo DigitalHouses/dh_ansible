@@ -12,7 +12,7 @@ REGISTRY = json.loads((ROOT / "catalog/site-credentials.json").read_text())
 
 def test_mqtt_endpoint_is_optional_text_and_next_to_broker_credentials():
     fields = next(t for t in CATALOG["tasks"] if t["title"] == "05-Ввести credentials объекта")["survey_vars"]
-    assert len(fields) == 6
+    assert len(fields) == 9
     names = [f["name"] for f in fields]
     j = names.index("DH_INPUT_MQTT_BROKER_HOST")
     assert names[j:j+3] == [
