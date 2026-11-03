@@ -886,8 +886,9 @@
 - name: Publish local media portal and LAN discovery
   ansible.builtin.import_tasks: discovery_portal.yml
 
-- name: Export backup dataset to the approved PVE host over NFS
+- name: Preserve legacy PVE NFS export only when explicitly configured
   ansible.builtin.import_tasks: nfs_backups.yml
+  when: media_vm.backup_export is defined
 
 - name: Stage local root-only customer password recovery tools
   ansible.builtin.import_tasks: password_rotation.yml
