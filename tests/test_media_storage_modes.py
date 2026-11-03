@@ -30,7 +30,10 @@ def discover(disks, *, parents=None, root="vda1\nvda"):
         raise AssertionError("Unexpected command: " + str(args))
     with patch.object(m.Path, "exists", return_value=False), \
          patch.object(m.Path, "is_block_device", return_value=True), \
-         patch.object(m, "sata_pci_parent", side_effect=lambda name: parents[name]), \
+         patch.object(m, "commissioned_controller", return_value="/guest/pci/approved"), \
+         patch.object(m, "sata_pci_parent", side_effect=lambda name: (
+             "/guest/pci/approved" if parents[name] == ("0x1234", "0xabcd")
+             else "/guest/pci/other")), \
          patch.object(m, "command", side_effect=command):
         return m.find_disk(CONFIG)
 
