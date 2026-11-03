@@ -95,7 +95,7 @@ def fake_apply(*, qga=False, cicustom=None):
             return status["value"]
         return ""
     with patch.object(m, "site_data", return_value=(data, {})), \
-         patch.object(m, "check", return_value=(2232, name, "192.168.11.232/24")), \
+         patch.object(m, "check", return_value=(2232, name, "198.51.100.232/24")), \
          patch.object(m, "reconcile_media_vm_lifecycle"), \
          patch.object(m.Path, "exists", return_value=True), \
          patch.object(m, "config", return_value={
